@@ -5,11 +5,9 @@ import {
   type CoexistenceOperation,
 } from "../_shared/whatsapp-coexistence.ts";
 import { jsonResponse, safeErrorMessage } from "../_shared/http.ts";
+import { authorizeProcessorRequest } from "../_shared/recovery-auth.ts";
 import { createServiceClient, getServiceKey } from "../_shared/supabase.ts";
-import {
-  constantTimeEqual,
-  type MetaValue,
-} from "../_shared/whatsapp-webhook.ts";
+import { type MetaValue } from "../_shared/whatsapp-webhook.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 interface QueuedCoexistenceEvent {
@@ -455,7 +453,7 @@ async function failEvent(
 
 async function scheduleAnotherRun(secret: string): Promise<void> {
   const url = Deno.env.get("SUPABASE_URL")?.trim();
-  if (!url) return;
+  if (!url || !secret) return;
   const task = fetch(`${url}/functions/v1/process-whatsapp-coexistence`, {
     method: "POST",
     headers: {
@@ -485,11 +483,17 @@ Deno.serve(async (request) => {
     return jsonResponse(request, { error: "METHOD_NOT_ALLOWED" }, 405);
   }
 
-  const expectedSecret = Deno.env
-    .get("WHATSAPP_COEXISTENCE_INTERNAL_SECRET")
-    ?.trim();
-  const providedSecret = request.headers.get("x-internal-secret")?.trim() ?? "";
-  if (!expectedSecret || !constantTimeEqual(providedSecret, expectedSecret)) {
+  const expectedInternalSecret =
+    Deno.env.get("WHATSAPP_COEXISTENCE_INTERNAL_SECRET")?.trim() ?? "";
+  const expectedRecoverySecret =
+    Deno.env.get("WHATSAPP_COEXISTENCE_RECOVERY_SECRET")?.trim() ?? "";
+  if (
+    !(await authorizeProcessorRequest(
+      request,
+      expectedInternalSecret,
+      expectedRecoverySecret,
+    ))
+  ) {
     return jsonResponse(request, { error: "UNAUTHORIZED" }, 401);
   }
 
@@ -543,7 +547,7 @@ Deno.serve(async (request) => {
   // order. Any non-empty claim therefore schedules an empty-check pass so a
   // second account cannot wait for the recovery cron.
   if (events.length > 0) {
-    await scheduleAnotherRun(expectedSecret);
+    await scheduleAnotherRun(expectedInternalSecret);
   }
 
   return jsonResponse(request, {

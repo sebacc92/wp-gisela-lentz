@@ -161,10 +161,12 @@ Además de las variables normales de WhatsApp, el backend requiere:
 
 ```env
 WHATSAPP_COEXISTENCE_INTERNAL_SECRET=
+WHATSAPP_COEXISTENCE_RECOVERY_SECRET=
 WHATSAPP_COEXISTENCE_CLAIM_LIMIT=5
 WHATSAPP_COEXISTENCE_ITEMS_PER_RUN=100
 WHATSAPP_WEBHOOK_MAX_BYTES=3145728
 AUTOMATION_INTERNAL_SECRET=
+WHATSAPP_AUTOMATION_OUTBOX_RECOVERY_SECRET=
 WHATSAPP_AUTOMATION_OUTBOX_CLAIM_LIMIT=10
 ```
 
@@ -175,9 +177,14 @@ El límite del webhook se aplica incrementalmente mientras llega el body; evita
 bufferizar una solicitud no autenticada de tamaño arbitrario. El valor por
 defecto acompaña el máximo actual documentado por Meta.
 
-`AUTOMATION_INTERNAL_SECRET` ya protege `whatsapp-automation`; el processor del
-outbox reutiliza ese mismo secreto backend. No se necesita ni se debe crear un
-segundo secreto para esa cola.
+`AUTOMATION_INTERNAL_SECRET` sigue protegiendo `whatsapp-automation` y las
+continuaciones internas existentes. Recovery usa dos credenciales nuevas,
+independientes entre sí y de las internas:
+`WHATSAPP_COEXISTENCE_RECOVERY_SECRET` y
+`WHATSAPP_AUTOMATION_OUTBOX_RECOVERY_SECRET`. Cada una debe tener su copia del
+mismo valor en Vault; consultar el procedimiento completo en
+[`whatsapp-recovery.md`](./whatsapp-recovery.md). El cron las envía únicamente
+como `x-recovery-secret`.
 
 Cuando se autorice el despliegue, el orden seguro es:
 
@@ -185,22 +192,27 @@ Cuando se autorice el despliegue, el orden seguro es:
    `20260826120000_whatsapp_coexistence.sql`,
    `20260826130000_whatsapp_automation_idempotency.sql` y
    `20260826140000_whatsapp_bsuid_and_live_promotion.sql`, seguida por
-   `20260826150000_whatsapp_automation_causal_pause.sql`; después ejecutar el
-   lint de base de datos y las pruebas SQL.
-2. Configurar el secreto interno en Supabase.
+   `20260826150000_whatsapp_automation_causal_pause.sql`. Aplicar después
+   `20260826160000_whatsapp_recovery_schedule.sql`, que instala infraestructura
+   inerte pero no crea jobs ni tráfico; finalmente ejecutar el lint de base de
+   datos y las pruebas SQL.
+2. Configurar los secretos internos y los dos pares dedicados de recovery en
+   Edge Secrets/Vault, sin imprimir sus valores.
 3. Desplegar `whatsapp-automation`, `process-whatsapp-automation-outbox`,
    `process-whatsapp-coexistence` y, al final, `whatsapp-webhook`. El orden evita
    que el webhook nuevo libere trabajo a una versión vieja de sus consumidores.
-4. Crear invocaciones de recuperación cada minuto hacia
-   `process-whatsapp-coexistence` y `process-whatsapp-automation-outbox`, cada
-   una autenticada con su `x-internal-secret`. El disparo inmediato del webhook
-   reduce latencia; el cron recupera una invocación perdida.
+4. Activar explícitamente los dos jobs postgres-only según
+   [`whatsapp-recovery.md`](./whatsapp-recovery.md). Cada uno invoca su processor
+   una vez por minuto con `x-recovery-secret`; el disparo inmediato del webhook
+   reduce latencia y el cron recupera una invocación perdida.
 5. Confirmar que el callback continúa siendo
    `/functions/v1/whatsapp-webhook` y suscribir los cuatro campos.
 6. Probar los cuatro fixtures con credenciales/números de prueba y mantener las
    automatizaciones apagadas.
 
-Este repositorio no ejecutó ninguno de esos pasos remotos.
+La presencia de código o migraciones no demuestra que recovery esté activo. El
+estado autoritativo se consulta con
+`private.whatsapp_recovery_schedule_status()`.
 
 ## Después de Embedded Signup
 
@@ -243,8 +255,10 @@ Antes de usar el número real:
   alterar ejecuciones exitosas. No insertar una segunda fila ni volver a
   simular el webhook.
 - Si el processor queda inactivo, no se pierden eventos: permanecen `pending` o
-  recuperan un lease vencido. Restaurar el cron o invocarlo manualmente con el
-  secreto interno.
+  recuperan un lease vencido. Restaurar exclusivamente los jobs mediante el
+  procedimiento postgres-only de
+  [`whatsapp-recovery.md`](./whatsapp-recovery.md); no copiar credenciales en una
+  invocación manual.
 - Ante comportamiento inesperado, apagar automatizaciones, pausar la cuenta de
   Coexistence y retirar las tres suscripciones nuevas desde Meta. Mantener
   `messages` si el flujo Cloud API normal sigue siendo válido.

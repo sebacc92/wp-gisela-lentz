@@ -118,8 +118,10 @@ META_APP_SECRET=
 META_WEBHOOK_VERIFY_TOKEN=
 WHATSAPP_WEBHOOK_MAX_BYTES=3145728
 AUTOMATION_INTERNAL_SECRET=
+WHATSAPP_AUTOMATION_OUTBOX_RECOVERY_SECRET=
 WHATSAPP_AUTOMATION_OUTBOX_CLAIM_LIMIT=10
 WHATSAPP_COEXISTENCE_INTERNAL_SECRET=
+WHATSAPP_COEXISTENCE_RECOVERY_SECRET=
 WHATSAPP_COEXISTENCE_CLAIM_LIMIT=5
 WHATSAPP_COEXISTENCE_ITEMS_PER_RUN=100
 REMINDER_CRON_SECRET=
@@ -157,7 +159,10 @@ Para Coexistence, aplicar antes y en orden las migraciones
 `20260826120000_whatsapp_coexistence.sql`,
 `20260826130000_whatsapp_automation_idempotency.sql` y
 `20260826140000_whatsapp_bsuid_and_live_promotion.sql`, seguida por
-`20260826150000_whatsapp_automation_causal_pause.sql`. Desplegar las funciones
+`20260826150000_whatsapp_automation_causal_pause.sql`. La migración posterior
+`20260826160000_whatsapp_recovery_schedule.sql` instala recovery inerte; sus dos
+jobs se habilitan sólo mediante el procedimiento explícito y postgres-only de
+[docs/whatsapp-recovery.md](docs/whatsapp-recovery.md). Desplegar las funciones
 solamente en el proyecto nuevo; `whatsapp-automation` debe preceder al outbox y
 `whatsapp-webhook` debe quedar después de ambos processors:
 
@@ -288,6 +293,8 @@ ejecuta Embedded Signup ni conecta un número real. Arquitectura, orden de
 migración/despliegue, cierre de generaciones fallidas, recuperación y rollback
 de las cuatro funciones están en
 [docs/whatsapp-coexistence.md](docs/whatsapp-coexistence.md).
+El scheduler durable, sus credenciales dedicadas y su rollback operativo están
+en [docs/whatsapp-recovery.md](docs/whatsapp-recovery.md).
 
 ## Validación
 
@@ -308,6 +315,7 @@ git diff --check
 - [Base de datos](docs/database.md)
 - [Conexión de WhatsApp](docs/whatsapp-setup.md)
 - [WhatsApp Coexistence](docs/whatsapp-coexistence.md)
+- [Recovery de WhatsApp](docs/whatsapp-recovery.md)
 - [Flujo de automatización](docs/automation-flow.md)
 - [Demo controlada](docs/demo-whatsapp-real.md)
 - [Cumplimiento y protección del número](docs/whatsapp-compliance.md)
