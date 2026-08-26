@@ -7,6 +7,8 @@
 # Development
 node_modules
 .env
+.env.supabase-secrets
+.env.google-calendar
 .planning
 *.local
 
@@ -15,6 +17,9 @@ node_modules
 .mf
 .rollup.cache
 tsconfig.tsbuildinfo
+
+# Generated review evidence (screenshots, videos, and rendered HTML)
+/artifacts/
 
 # Logs
 logs
@@ -41,3 +46,8 @@ lerna-debug.log*
 # Yarn
 .yarn/*
 !.yarn/releases
+
+# Vercel
+.vercel
+.env*
+!.env.example

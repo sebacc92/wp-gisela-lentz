@@ -1,0 +1,86 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { BUSINESS_CONFIG } from "../config/business.ts";
+
+function formatPart(startsAt: string, options: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat("es-AR", {
+    ...options,
+    timeZone: BUSINESS_CONFIG.timezone,
+  }).format(new Date(startsAt));
+}
+
+export async function confirmDepositAndNotify(
+  client: SupabaseClient,
+  input: {
+    appointmentId: string;
+    contactId: string;
+    startsAt: string;
+    conversationId?: string;
+  },
+): Promise<{ confirmed: boolean; notified: boolean }> {
+  const { error } = await client.rpc("confirm_appointment_deposit", {
+    p_appointment_id: input.appointmentId,
+  });
+  if (error) return { confirmed: false, notified: false };
+
+  // Todo lo que sigue es best-effort: la confirmación ya está auditada y un
+  // problema de WhatsApp no debe deshacerla ni informarla como fallida.
+  try {
+    let conversationId = input.conversationId;
+    if (!conversationId) {
+      const { data: conversation } = await client
+        .from("conversations")
+        .select("id")
+        .eq("contact_id", input.contactId)
+        .eq("status", "open")
+        .maybeSingle();
+      conversationId = conversation?.id as string | undefined;
+    }
+    if (!conversationId) return { confirmed: true, notified: false };
+
+    const { data: settings } = await client
+      .from("app_settings")
+      .select("deposit_confirmed_message_template")
+      .eq("id", true)
+      .single();
+    const template = String(
+      settings?.deposit_confirmed_message_template ?? "",
+    ).trim();
+    if (!template) return { confirmed: true, notified: false };
+
+    const body = template
+      .replaceAll(
+        "{date}",
+        formatPart(input.startsAt, {
+          weekday: "long",
+          day: "numeric",
+          month: "long",
+        }),
+      )
+      .replaceAll(
+        "{time}",
+        formatPart(input.startsAt, {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }),
+      );
+    const { data, error: sendError } = await client.functions.invoke(
+      "whatsapp-send",
+      {
+        body: {
+          conversationId,
+          body,
+          idempotencyKey: `deposit-confirm-${input.appointmentId}`,
+          purpose: "operator_deposit_confirmation",
+          appointmentId: input.appointmentId,
+        },
+      },
+    );
+    return {
+      confirmed: true,
+      notified: !sendError && !data?.error,
+    };
+  } catch {
+    return { confirmed: true, notified: false };
+  }
+}

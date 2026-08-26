@@ -1,6 +1,6 @@
 {
-  "name": "my-qwik-empty-starter",
-  "description": "Blank project with routing included",
+  "name": "gisela-lentz-whatsapp",
+  "description": "Agenda, pacientes y WhatsApp para Gisela Lentz Odontología",
   "engines": {
     "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
   },
@@ -11,8 +11,9 @@
     "build": "qwik build",
     "build.client": "vite build",
     "build.preview": "vite build --ssr src/entry.preview.tsx",
+    "build.server": "qwik check-client src dist && vite build -c adapters/vercel-edge/vite.config.ts",
     "build.types": "tsc --incremental --noEmit",
-    "deploy": "echo 'Run \"npm run qwik add\" to install a server adapter'",
+    "deploy": "node scripts/assert-deployment-target.mjs && vercel deploy",
     "dev": "vite --mode ssr",
     "dev.debug": "node --inspect-brk ./node_modules/vite/bin/vite.js --mode ssr --force",
     "fmt": "prettier --write .",
@@ -20,21 +21,34 @@
     "lint": "eslint \"src/**/*.ts*\"",
     "preview": "qwik build preview && vite preview --open",
     "start": "vite --open --mode ssr",
+    "test:automation": "node --test supabase/functions/_shared/*.test.ts supabase/functions/process-calendar-sync/*.test.ts supabase/functions/process-reminders/*.test.ts src/lib/*.test.ts",
     "qwik": "qwik"
   },
   "devDependencies": {
     "@eslint/js": "latest",
     "@qwik.dev/core": "^2.0.0-beta.38",
     "@qwik.dev/router": "^2.0.0-beta.38",
+    "@tailwindcss/vite": "^4.1.4",
     "@types/node": "24.10.0",
+    "autoprefixer": "^10.4.14",
     "eslint": "10.0.3",
     "eslint-plugin-qwik": "^2.0.0-beta.38",
     "globals": "17.0.0",
+    "postcss": "^8.4.31",
+    "postcss-preset-env": "^9.1.0",
     "prettier": "3.7.4",
+    "prettier-plugin-tailwindcss": "^0.6.11",
+    "supabase": "^2.113.0",
+    "tailwindcss": "^4.1.4",
     "typescript": "5.9.3",
     "typescript-eslint": "8.56.1",
     "typescript-plugin-css-modules": "latest",
+    "vercel": "58.1.0",
     "vite": "7.3.1",
     "vite-tsconfig-paths": "^4.2.1"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.2",
+    "cssnano": "^8.0.4"
   }
 }

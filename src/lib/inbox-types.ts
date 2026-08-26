@@ -1,0 +1,112 @@
+export type MessageStatus =
+  | "pending"
+  | "sent"
+  | "delivered"
+  | "read"
+  | "failed";
+
+export type WhatsAppConsentStatus = "unknown" | "opted_in" | "opted_out";
+export type PatientCoverage = "ioma" | "particular";
+export type DepositStatus =
+  | "not_required"
+  | "pending"
+  | "proof_received"
+  | "confirmed"
+  | "expired";
+
+export interface Message {
+  id: string;
+  body: string;
+  direction: "inbound" | "outbound" | "system";
+  time: string;
+  status?: MessageStatus;
+  label?: string;
+  createdAt?: string;
+  ingestSequence?: number;
+  type?: "text" | "template" | "interactive" | "image" | "document" | "system";
+  filename?: string;
+  mimeType?: string;
+  hasMedia?: boolean;
+  depositProofLate?: boolean;
+}
+
+export interface AppointmentSummary {
+  id: string;
+  dateLabel: string;
+  time: string;
+  professional: string;
+  status:
+    | "Esperando seña"
+    | "Comprobante recibido"
+    | "Confirmado"
+    | "Atendido"
+    | "Cancelado"
+    | "No asistió";
+  startsAt?: string;
+  professionalId?: string;
+  service?: string;
+  serviceId?: string;
+  coverage?: PatientCoverage;
+  durationMinutes?: number;
+  depositStatus?: DepositStatus;
+  holdExpiresAt?: string;
+  depositProofMessageId?: string;
+}
+
+export interface Conversation {
+  id: string;
+  contactId: string;
+  name: string;
+  phone: string;
+  initials: string;
+  avatarTone: "teal" | "blue" | "violet" | "amber" | "rose";
+  lastMessage: string;
+  time: string;
+  unreadCount: number;
+  needsHuman: boolean;
+  priority: boolean;
+  automationMode: "auto" | "manual";
+  status: "open" | "closed";
+  messages: Message[];
+  hasOlderMessages: boolean;
+  upcomingAppointment?: AppointmentSummary;
+  previousAppointments: AppointmentSummary[];
+  lastInboundMessageAt?: string;
+  whatsappConsentStatus?: WhatsAppConsentStatus;
+  whatsappOptInAt?: string;
+  whatsappOptOutAt?: string;
+  coverage?: PatientCoverage;
+  isExistingPatient?: boolean;
+  currentFlow?: string;
+}
+
+export interface QuickReply {
+  id?: string;
+  shortcut: string;
+  title: string;
+  body: string;
+}
+
+export interface ProfessionalOption {
+  id: string;
+  name: string;
+  appointmentDurationMinutes: number;
+}
+
+export interface BookingDurationSettings {
+  iomaMinutes: number;
+  privateMinutes: number;
+}
+
+export interface ServiceOption {
+  id: string;
+  name: string;
+  description?: string;
+  durationMinutes: number;
+}
+
+export interface AppointmentSlot {
+  startsAt: string;
+  endsAt: string;
+  label: string;
+}

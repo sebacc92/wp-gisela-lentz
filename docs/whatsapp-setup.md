@@ -1,0 +1,255 @@
+# Conectar WhatsApp Cloud API
+
+Esta guía conecta manualmente un número de prueba a la instalación nueva de
+Gisela. El código no crea WABA, no registra números, no cambia callbacks remotos
+y no realiza onboarding de Meta.
+
+## 1. Preflight de aislamiento
+
+Antes de usar una CLI vinculada:
+
+```bash
+node scripts/assert-deployment-target.mjs
+pnpm exec supabase projects list
+```
+
+Confirmar visualmente que el project ref vinculado es el **nuevo**. No continuar
+si aparece el proyecto anterior o si existe alguna duda sobre el destino.
+
+En Meta, comprobar que el token, App Secret, WABA y Phone Number ID pertenecen al
+entorno de prueba elegido por el usuario. No reutilizar ni modificar una
+configuración productiva ajena.
+
+## 2. Variables backend
+
+Configurar en Supabase Edge Functions:
+
+```env
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_BUSINESS_ACCOUNT_ID=
+WHATSAPP_GRAPH_API_VERSION=
+WHATSAPP_MEDIA_MAX_BYTES=10485760
+META_APP_SECRET=
+META_WEBHOOK_VERIFY_TOKEN=
+WHATSAPP_WEBHOOK_MAX_BYTES=3145728
+AUTOMATION_INTERNAL_SECRET=
+WHATSAPP_AUTOMATION_OUTBOX_CLAIM_LIMIT=10
+WHATSAPP_COEXISTENCE_INTERNAL_SECRET=
+WHATSAPP_COEXISTENCE_CLAIM_LIMIT=5
+WHATSAPP_COEXISTENCE_ITEMS_PER_RUN=100
+REMINDER_CRON_SECRET=
+APP_ALLOWED_ORIGINS=https://URL_NUEVA_DE_VERCEL
+WHATSAPP_AUTOMATIONS_ENABLED=false
+WHATSAPP_TEST_MODE=true
+WHATSAPP_TEST_ALLOWED_NUMBERS=NUMERO_PROPIO_E164
+```
+
+Reglas:
+
+- no guardar valores reales en `.env.example`, README, issues o logs;
+- no copiar tokens a Vercel ni a variables `PUBLIC_*`;
+- usar IDs numéricos y una versión vigente de Graph con formato `vN.N`;
+- generar secretos internos aleatorios; el secreto nuevo de Coexistence debe
+  ser distinto del existente de automatización y de los secretos de cron;
+- usar orígenes HTTPS exactos, separados por coma, sin wildcard;
+- mantener test mode activo y una allowlist mínima durante toda la integración.
+- `WHATSAPP_MEDIA_MAX_BYTES` limita también el stream descargado para revisar
+  comprobantes (10 MiB recomendado; máximo admitido por la función: 20 MiB).
+- `WHATSAPP_WEBHOOK_MAX_BYTES` limita el body mientras se lee el stream, antes
+  de reservar el payload completo. El default de 3 MiB refleja el máximo actual
+  documentado por Meta; el código sólo acepta configuraciones entre 64 KiB y
+  16 MiB para permitir una futura actualización controlada.
+
+La función `whatsapp-media` recibe `GET ?messageId=UUID` con el bearer de un
+usuario activo. Sólo proxifica imágenes JPEG/PNG y PDF entrantes: vuelve a pedir
+a Meta una URL efímera, valida host, MIME y tamaño, y entrega los bytes sin
+exponer el token ni la URL de Meta. La respuesta usa `Cache-Control: no-store`.
+
+La carga recomendada es el Dashboard de Supabase. Como alternativa, usar un
+archivo temporal ignorado:
+
+```bash
+chmod 600 .env.supabase-secrets
+pnpm exec supabase secrets set --env-file .env.supabase-secrets --project-ref NUEVO_PROJECT_REF
+```
+
+Borrar ese archivo después de comprobar la carga. No pasar secretos inline porque
+pueden quedar en historial o argumentos del proceso.
+
+## 3. Desplegar funciones
+
+Sólo después del preflight, aplicar y validar las migraciones en este orden:
+
+1. `20260826120000_whatsapp_coexistence.sql`
+2. `20260826130000_whatsapp_automation_idempotency.sql`
+3. `20260826140000_whatsapp_bsuid_and_live_promotion.sql`
+4. `20260826150000_whatsapp_automation_causal_pause.sql`
+
+Después desplegar las funciones consumidoras en este orden. Es importante que
+`whatsapp-automation` quede actualizado antes del outbox y que el webhook sea
+el último:
+
+```bash
+pnpm exec supabase functions deploy whatsapp-send
+pnpm exec supabase functions deploy whatsapp-media
+pnpm exec supabase functions deploy whatsapp-automation
+pnpm exec supabase functions deploy process-whatsapp-automation-outbox
+pnpm exec supabase functions deploy process-whatsapp-coexistence
+pnpm exec supabase functions deploy whatsapp-webhook
+pnpm exec supabase functions deploy process-reminders
+pnpm exec supabase functions deploy whatsapp-health
+```
+
+El callback será:
+
+```text
+https://NUEVO_PROJECT_REF.supabase.co/functions/v1/whatsapp-webhook
+```
+
+## 4. Configurar el webhook en Meta
+
+1. Pegar la URL nueva como Callback URL.
+2. Pegar exactamente el valor de `META_WEBHOOK_VERIFY_TOKEN` como Verify token.
+3. Suscribir `messages`. Para un número habilitado mediante Coexistence,
+   suscribir además `history`, `smb_app_state_sync` y `smb_message_echoes`.
+4. Para salud y cortes preventivos, suscribir también, cuando estén disponibles:
+   `phone_number_quality_update`, `account_update`, `account_review_update`,
+   `message_template_status_update`, `message_template_quality_update` y
+   `business_capability_update`.
+5. Completar **Verify and save**.
+
+El GET de verificación sólo responde con el token correcto. Cada POST requiere
+`X-Hub-Signature-256` válido. Aun con una firma válida, una entrada cuyo WABA o
+Phone Number ID no coincida se ignora para aislar este tenant.
+
+Los payloads actuales pueden identificar al usuario únicamente mediante un
+Business-Scoped User ID: `contacts[].user_id`, `from_user_id`, `to_user_id` o
+`threads[].context.user_id`. El backend lo guarda opacamente en
+`contacts.whatsapp_user_id`; `phone_e164` puede quedar `null` y nunca se inventa
+un teléfono desde el BSUID. Ver la
+[referencia de BSUID de Meta](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-scoped-user-ids)
+y el detalle local en
+[WhatsApp Business App Coexistence](./whatsapp-coexistence.md).
+
+## 5. Prueba de recepción sin bot
+
+Mantener:
+
+```env
+WHATSAPP_AUTOMATIONS_ENABLED=false
+WHATSAPP_TEST_MODE=true
+```
+
+Enviar desde el teléfono permitido al número Cloud API. Verificar que se crean
+un solo paciente, una sola conversación y un solo mensaje. Ejecutar además el
+fixture local BSUID-only para comprobar la ingesta sin inventar un teléfono; la
+allowlist del modo de prueba continúa siendo deliberadamente telefónica y
+bloquea envíos a un identificador opaco. El webhook sigue guardando entradas
+aunque el kill switch esté apagado.
+
+Desde la bandeja se puede responder manualmente al número permitido. Cualquier
+destino fuera de la allowlist se bloquea antes de Graph y genera auditoría
+sanitizada.
+
+## 6. Habilitar el flujo controlado
+
+### Automatizaciones reales
+
+Antes de cambiar el flag:
+
+- cargar horarios reales o de prueba desde **Configuración → Horarios**;
+- revisar los servicios como motivos del turno y, en **WhatsApp y reservas**,
+  confirmar las duraciones por cobertura;
+- confirmar buffer y anticipación mínima;
+- completar mensaje fuera de horario, urgencias e información general sólo con
+  datos verificados;
+- comprobar que el único número autorizado es propio.
+
+Luego establecer:
+
+```env
+WHATSAPP_AUTOMATIONS_ENABLED=true
+```
+
+Probar reserva, reprogramación, cancelación, urgencia y handoff. Volver a `false`
+ante cualquier destinatario inesperado, duplicado o problema de calidad.
+
+## 7. Plantillas y recordatorios
+
+Crear y aprobar en Meta, con nombres iguales a `message_templates.meta_name`:
+
+- `appointment_created`
+- `appointment_reminder_24h`
+- `appointment_reminder_2h`
+- `appointment_cancelled`
+- `appointment_rescheduled`
+
+El recordatorio actual usa cuatro parámetros de cuerpo, en orden: paciente,
+fecha, hora y profesional. Agregar tres botones de respuesta rápida en orden:
+confirmar, reprogramar y cancelar.
+
+En **Configuración → WhatsApp → Verificar conexión**, la función sincroniza
+estado, categoría y calidad. El backend sólo permite mensajes proactivos con
+plantilla `APPROVED`, categoría `UTILITY`, calidad aceptable, contexto de turno y
+consentimiento demostrable.
+
+Los recordatorios permanecen apagados hasta completar el checklist de
+[cumplimiento](./whatsapp-compliance.md). Recién entonces crear un Supabase Cron
+que haga POST a `process-reminders` con `x-cron-secret`; guardar URL y secreto en
+Supabase Vault, no en SQL plano.
+
+Programar ese cron cada cinco minutos. El backend sólo abre la cola del
+recordatorio `appointment_24h` desde `app_settings.reminder_day_before_time`
+(21:00 por defecto) en `app_settings.timezone`, y selecciona turnos activos del
+día siguiente cuyo estado ya sea **Confirmado**. Las pre-reservas que esperan
+seña o revisión de comprobante quedan excluidas. Esta frecuencia permite
+recuperarse de una ejecución caída o de
+un turno creado después de las 21:00 sin duplicar mensajes: la base deduplica por
+turno/tipo y el envío conserva una clave de idempotencia inmutable. Mantener la
+URL del endpoint y `REMINDER_CRON_SECRET` exclusivamente en Vault; no escribir
+valores reales en la migración ni en esta guía.
+
+## 8. Health y resolución simple
+
+En **Configuración → WhatsApp → Verificar conexión**:
+
+- **WhatsApp no configurado:** faltan variables de Meta; agenda e inbox continúan
+  operativos.
+- **Problema de conexión:** revisar pertenencia Phone Number ID/WABA, token,
+  calidad y logs backend sanitizados.
+- **Conectado:** confirma configuración básica, pero no habilita por sí solo
+  automatizaciones, test mode ni recordatorios.
+
+La pantalla nunca devuelve access token, App Secret, verify token, claves de
+Supabase ni secretos internos.
+
+## Coexistence
+
+La recepción, cola durable e importación están implementadas, pero esta guía no
+autoriza ejecutar Embedded Signup, registrar ni migrar el número real. Antes de
+esa operación seguir el checklist, cron de recuperación, monitoreo y rollback de
+[WhatsApp Business App Coexistence](./whatsapp-coexistence.md).
+
+La implementación acepta identidad dual BSUID/teléfono, follow-ups de medios de
+history (`messages[]` inbound y `message_echoes[]` outbound), promoción atómica
+history→live y pre-pausa sincrónica de ecos de la app. El worker drena cuentas
+por pasadas encadenadas y el outbound automático vuelve a validar el modo de la
+conversación antes de Graph. La pausa conserva una marca causal y una barrera
+transaccional impide que una automatización ya reclamada confirme efectos de
+dominio después de que un eco manual u operador haya ganado la conversación.
+
+Después del onboarding, cada solicitud de `history` o `smb_app_state_sync` debe
+usar una generación abierta por
+`start_whatsapp_coexistence_sync_generation(...)`. Si Graph responde bien, se
+registra el `request_id` con
+`record_whatsapp_coexistence_sync_request(...)`; si falla antes de devolverlo,
+se debe cerrar esa misma generación con
+`fail_whatsapp_coexistence_sync_generation(account_id, sync_type, generation_id, error, ...)`.
+No iniciar una generación nueva mientras la anterior siga `pending` o
+`in_progress`.
+
+Un rollback de código debe revertir juntas `whatsapp-automation`,
+`process-whatsapp-automation-outbox`, `process-whatsapp-coexistence` y
+`whatsapp-webhook`; no borrar tablas ni mensajes importados como parte del
+rollback operativo.
