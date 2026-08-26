@@ -85,6 +85,20 @@ parametrizado aprobado. `supabase secrets list` sólo permite verificar nombres
 y digests; no permite recuperar un valor existente. Si el valor original ya no
 está disponible, hay que rotar el par de manera controlada.
 
+La creación, lectura y verificación de `vault.decrypted_secrets` en producción
+debe ejecutarse mediante una conexión PostgreSQL directa que haya asumido
+`current_user = 'postgres'` y demuestre capacidad real de descifrado, o
+manualmente desde SQL Editor con permisos equivalentes. No usar el endpoint de
+consultas de Management API para `vault.decrypted_secrets`: esa vía no posee el
+permiso interno de descifrado aunque reporte identidad `postgres`. Los valores
+se envían como parámetros o datos de `COPY`, nunca como literales SQL. La
+verificación devuelve sólo nombre, UUID, longitud y `match = true`.
+
+Las funciones privadas de instalación, captura y desinstalación validan
+separadamente `session_user = 'postgres'`. Antes de llamarlas hay que comprobar
+esa identidad en la misma vía elegida. Esta comprobación no autoriza a usar esa
+vía para leer `vault.decrypted_secrets`.
+
 ## Preflight de activación
 
 Antes de activar:
@@ -96,8 +110,10 @@ Antes de activar:
    cualquiera aparece, detenerse antes de cargar credenciales o activar jobs.
 3. Confirmar que las versiones nuevas de ambos processors estén desplegadas y
    acepten `x-recovery-secret` sin haber eliminado el flujo interno existente.
-4. Confirmar por nombre que existen los dos Edge secrets y los tres registros
-   de Vault. No consultar ni imprimir sus valores.
+4. Confirmar por nombre que existen los dos Edge secrets y, mediante PostgreSQL
+   directo como `postgres`, que hay exactamente un registro por cada nombre de
+   Vault, `decrypted_secret` no está vacío y su SHA-256 coincide con el valor
+   generado localmente. No consultar ni imprimir los valores.
 5. Verificar que no existan jobs activos y que la configuración siga inerte:
 
    ```sql
@@ -109,11 +125,15 @@ Antes de activar:
      'whatsapp-coexistence-recovery',
      'whatsapp-automation-outbox-recovery'
    );
+
+   select count(*) as total_cron_jobs
+   from cron.job;
    ```
 
    El estado esperado antes de la primera activación es `enabled = false`,
    `configuredJobs = 0`, `activeJobs = 0`, `matchingJobs = 0` y
-   `configurationConsistent = true`.
+   `configurationConsistent = true`; en este proyecto el conteo total debe ser
+   cero. Si aparece cualquier job no esperado, detenerse.
 
 6. Medir el backlog sin modificarlo:
 
@@ -181,11 +201,15 @@ where jobname in (
   'whatsapp-automation-outbox-recovery'
 )
 order by jobname;
+
+select count(*) as total_cron_jobs
+from cron.job;
 ```
 
 El resultado esperado es `enabled = true`, `configuredJobs = 2`,
 `activeJobs = 2`, `matchingJobs = 2` y `configurationConsistent = true`, ambos
 jobs con frecuencia `* * * * *`.
+El proyecto debe contener exactamente dos jobs totales después de activar.
 
 ## Observabilidad
 
@@ -270,9 +294,22 @@ with activation as (
 select
   attempt.processor,
   count(*) filter (where attempt.outcome <> 'pending') as completed_cycles,
-  count(*) filter (where attempt.outcome = 'success') as successful_cycles,
   count(*) filter (
-    where attempt.outcome not in ('pending', 'success')
+    where attempt.outcome = 'success'
+      and attempt.status_code = 200
+      and attempt.sanitized_summary -> 'processed' = 'true'::jsonb
+      and (attempt.sanitized_summary ->> 'claimed')::numeric = 0
+      and (attempt.sanitized_summary ->> 'failed')::numeric = 0
+  ) as accepted_cycles,
+  count(*) filter (
+    where attempt.outcome <> 'pending'
+      and not (
+        attempt.outcome = 'success'
+        and attempt.status_code = 200
+        and attempt.sanitized_summary -> 'processed' = 'true'::jsonb
+        and (attempt.sanitized_summary ->> 'claimed')::numeric = 0
+        and (attempt.sanitized_summary ->> 'failed')::numeric = 0
+      )
   ) as failed_cycles,
   max(attempt.requested_at) as last_requested_at,
   max(attempt.response_observed_at) as last_observed_at
@@ -285,16 +322,18 @@ order by attempt.processor;
 
 Los criterios de aceptación son, para ambos processors:
 
-1. Ciclo 1: autenticación y conectividad correctas, con `outcome = success`.
+1. Ciclo 1: autenticación y conectividad correctas, con HTTP 200,
+   `processed = true`, `claimed = 0`, `failed = 0` y `outcome = success`.
 2. Ciclo 2: un nuevo request ID, sin duplicar el anterior y sin fallos del
-   processor.
-3. Ciclo 3: otro resultado exitoso; trabajo futuro o con backoff no fue
-   adelantado y no aparecieron leases inesperados.
+   processor; nuevamente `claimed = 0` y `failed = 0`.
+3. Ciclo 3: otro resultado con el mismo contrato vacío; trabajo futuro o con
+   backoff no fue adelantado y no aparecieron leases inesperados.
 
 En la consulta agregada deben verse al menos tres ciclos completos, todos
-exitosos y cero fallidos por processor. `claimed = 0` es un resultado válido si
-no había backlog. Si un ciclo falla, no esperar indefinidamente al siguiente:
-aplicar el rollback, conservar la evidencia sanitizada y diagnosticar.
+aceptados y cero fallidos por processor. Para esta activación con todas las
+colas vacías, cualquier `claimed <> 0` es un fallo aunque `outcome` sea
+`success`. Si un ciclo falla, no esperar indefinidamente al siguiente: aplicar
+el rollback, conservar la evidencia sanitizada y diagnosticar.
 
 Durante estos tres ciclos no ejecutar Embedded Signup, no cambiar Meta, no
 conectar el número real y no lanzar pruebas que llamen a Graph.
@@ -346,11 +385,21 @@ where outcome = 'pending'
 group by processor;
 ```
 
-No borrar las credenciales durante el rollback inicial: preservarlas permite
-diagnóstico y reactivación controlada. Si se autoriza retirar recovery de forma
-definitiva, eliminar exclusivamente los dos Edge secrets y sus dos entradas
-dedicadas de Vault sólo después de confirmar cero jobs y cero requests
-pendientes. La eliminación estructural debe hacerse con una migración nueva.
+Ante cualquier error de esta activación controlada, después de confirmar cero
+jobs y esperar/capturar requests ya enviados, eliminar exclusivamente:
+
+- `WHATSAPP_COEXISTENCE_RECOVERY_SECRET`;
+- `WHATSAPP_AUTOMATION_OUTBOX_RECOVERY_SECRET`;
+- `whatsapp_coexistence_recovery_secret`;
+- `whatsapp_automation_outbox_recovery_secret`;
+- `whatsapp_recovery_project_url`.
+
+La eliminación de Vault debe identificar los UUID y hashes creados por esta
+ejecución y no borrar valores homónimos ambiguos. Restaurar además ambos
+processors desde el backup aprobado y verificar sus SHA remotos. No tocar los
+secretos internos existentes, no ejecutar `migration repair` y no retirar del
+historial una migración ya registrada. Cualquier corrección de esquema posterior
+requiere una migración nueva.
 
 ## Prohibiciones
 
@@ -367,6 +416,8 @@ pendientes. La eliminación estructural debe hacerse con una migración nueva.
 - No poner secretos en SQL literal, argumentos de CLI, shell history, logs,
   documentación, fixtures o archivos versionados.
 - No consultar o exportar headers/bodies crudos de `pg_net`.
+- No consultar ni verificar `vault.decrypted_secrets` mediante Management API;
+  usar PostgreSQL directo como `postgres` o SQL Editor autorizado.
 - No agregar `net`, `cron`, `private` o `vault` a los schemas expuestos por
   PostgREST y no tratar las ACL administradas de extensiones como barrera de
   seguridad.
