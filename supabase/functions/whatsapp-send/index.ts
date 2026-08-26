@@ -16,6 +16,7 @@ import {
   type WhatsAppConversation,
   validIdempotencyKey,
 } from "../_shared/whatsapp.ts";
+import { isWhatsAppCredentialResolutionError } from "../_shared/whatsapp-account-credentials.ts";
 
 interface SendRequest {
   conversationId?: string;
@@ -127,7 +128,7 @@ Deno.serve(async (request) => {
     const { data: conversation, error: conversationError } = await client
       .from("conversations")
       .select(
-        "id,contact_id,last_inbound_message_at,automation_mode,needs_human",
+        "id,contact_id,coexistence_account_id,last_inbound_message_at,automation_mode,needs_human",
       )
       .eq("id", conversationId)
       .single();
@@ -333,7 +334,10 @@ Deno.serve(async (request) => {
     if (message === "UNAUTHORIZED") {
       return jsonResponse(request, { error: "UNAUTHORIZED" }, 401);
     }
-    if (message.startsWith("CONFIGURATION_INCOMPLETE")) {
+    if (
+      message.startsWith("CONFIGURATION_INCOMPLETE") ||
+      isWhatsAppCredentialResolutionError(error)
+    ) {
       return jsonResponse(
         request,
         {

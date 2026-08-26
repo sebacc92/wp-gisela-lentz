@@ -391,6 +391,10 @@ deno_version = 2
 [functions.whatsapp-webhook]
 verify_jwt = false
 
+# Valida el JWT y el rol ADMIN manualmente; el código OAuth viaja por POST.
+[functions.whatsapp-embedded-signup]
+verify_jwt = false
+
 # Sólo acepta el secreto interno dedicado y usa service_role desde el runtime.
 [functions.process-whatsapp-coexistence]
 verify_jwt = false

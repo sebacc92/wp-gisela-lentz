@@ -5119,6 +5119,136 @@ button {
   grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
 }
 
+.whatsapp-embedded-signup {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.whatsapp-embedded-signup-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+}
+
+.whatsapp-embedded-signup-heading h3 {
+  margin: 0;
+  color: var(--ink-800);
+  font-size: 13px;
+}
+
+.whatsapp-embedded-signup-heading p {
+  margin-top: 3px;
+}
+
+.whatsapp-embedded-signup-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--brand-700);
+}
+
+.whatsapp-embedded-signup-icon svg,
+.whatsapp-signup-automation-lock svg {
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.whatsapp-signup-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.whatsapp-signup-status-grid > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.whatsapp-signup-status-grid dt {
+  color: var(--ink-400);
+  font-size: 9px;
+}
+
+.whatsapp-signup-status-grid dd {
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  color: var(--ink-700);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.whatsapp-signup-loading,
+.whatsapp-signup-automation-lock,
+.whatsapp-signup-last-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid #d8e5e3;
+  border-radius: 8px;
+  background: #f5faf9;
+  color: var(--ink-700);
+  font-size: 10px;
+}
+
+.whatsapp-signup-automation-lock.danger,
+.whatsapp-signup-last-error {
+  border-color: #efcbce;
+  background: #fff5f5;
+  color: var(--danger);
+}
+
+.whatsapp-signup-automation-lock > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.whatsapp-signup-automation-lock small,
+.whatsapp-signup-history-choice small {
+  color: var(--ink-500);
+  font-weight: 400;
+}
+
+.whatsapp-signup-last-error code {
+  overflow-wrap: anywhere;
+}
+
+.whatsapp-signup-history-choice > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.whatsapp-signup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .whatsapp-embedded-signup-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .whatsapp-signup-refresh {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+}
+
 @media (min-width: 681px) {
   .settings-menu {
     position: sticky;

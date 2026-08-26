@@ -32,10 +32,10 @@ import {
   formatAppointmentDate,
   formatAppointmentTime,
   isWhatsAppTestRecipientAllowed,
+  isRetryableWhatsAppAutomationFailure,
   isWhatsAppPolicyError,
   listPayload,
   sendAndRecordMessage,
-  WhatsAppDispatchError,
   WhatsAppPolicyError,
   textPayload,
   type WhatsAppContact,
@@ -53,6 +53,7 @@ interface InboundSnapshot {
   id: string;
   conversation_id: string;
   contact_id: string;
+  coexistence_account_id: string | null;
   body: string | null;
   direction: "inbound";
   metadata: Record<string, unknown> | null;
@@ -61,6 +62,7 @@ interface InboundSnapshot {
 interface ConversationSnapshot {
   id: string;
   contact_id: string;
+  coexistence_account_id?: string | null;
   last_inbound_message_at: string | null;
   automation_mode: "auto" | "manual";
   needs_human: boolean;
@@ -114,15 +116,6 @@ interface AutomationExecutionLease {
   leaseToken: string;
 }
 
-function isRetryableAutomationFailure(error: unknown): boolean {
-  if (error instanceof WhatsAppDispatchError) return error.retryable;
-
-  const message = safeErrorMessage(error).toUpperCase();
-  return !["_INVALID", "_CONFLICT", "_NOT_FOUND", "_UNSUPPORTED"].some(
-    (marker) => message.includes(marker),
-  );
-}
-
 interface CommittedAutomationDomainEffect {
   conversationId: string;
   appointmentId: string;
@@ -155,7 +148,7 @@ async function failExecution(
     p_message_id: lease.messageId,
     p_lease_token: lease.leaseToken,
     p_error: safeErrorMessage(error),
-    p_retryable: isRetryableAutomationFailure(error),
+    p_retryable: isRetryableWhatsAppAutomationFailure(error),
   });
   if (result.error || result.data !== true) {
     console.error("whatsapp-automation execution failure not persisted", {
@@ -318,7 +311,9 @@ Deno.serve(async (request) => {
 
     const { data: inboundLookup, error: messageError } = await client
       .from("messages")
-      .select("id,conversation_id,contact_id,body,direction,metadata")
+      .select(
+        "id,conversation_id,contact_id,coexistence_account_id,body,direction,metadata",
+      )
       .eq("id", input.messageId)
       .single();
     if (messageError && messageError.code !== "PGRST116") {
@@ -561,6 +556,7 @@ Deno.serve(async (request) => {
         payload,
         bodyPreview,
         idempotencyKey: `automation:${inbound.id}:${sequence}`,
+        coexistenceAccountId: inbound.coexistence_account_id,
         metadata: {
           ...extraMetadata,
           source,
@@ -1699,6 +1695,7 @@ Deno.serve(async (request) => {
                   bodyPreview: message,
                   idempotencyKey: `automation:${inbound.id}:${depositSendSequence}`,
                   appointmentId,
+                  coexistenceAccountId: inbound.coexistence_account_id,
                   metadata: {
                     source: "deposit_request",
                     inbound_message_id: inbound.id,

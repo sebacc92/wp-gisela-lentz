@@ -6,13 +6,8 @@ import {
 import { createServiceClient } from "../_shared/supabase.ts";
 import {
   DEFAULT_BUSINESS_TIMEZONE,
-  formatAppointmentDate,
-  formatAppointmentTime,
   hasActiveWhatsAppConsent,
-  isWhatsAppPolicyError,
   sendAndRecordMessage,
-  shouldRetryWhatsAppError,
-  templatePayload,
   textPayload,
   WhatsAppPolicyError,
   whatsappAutomationsEnabled,
@@ -26,12 +21,18 @@ import {
   reminderTemplateKey,
   type ReminderType,
 } from "./reminder-schedule.ts";
+import {
+  classifyReminderWhatsAppFailure,
+  deliverAppointmentReminder,
+  updateClaimedReminder,
+} from "./reminder-delivery.ts";
 
 interface ReminderRow {
   id: string;
   appointment_id: string;
   type: ReminderType;
   attempts: number;
+  processing_started_at: string;
 }
 
 interface QueueResult {
@@ -182,21 +183,28 @@ Deno.serve(async (request) => {
         if (completed === true) expiredNotificationsSent += 1;
         else expiredNotificationsCancelled += 1;
       } catch (error) {
-        const policyBlocked = isWhatsAppPolicyError(error);
+        const failure = classifyReminderWhatsAppFailure(error, {
+          retryUnknown: true,
+        });
         // Las fallas locales/DB también pueden ser transitorias. El RPC limita
-        // los intentos a tres; las políticas de seguridad sí quedan terminales.
-        const retryable = !policyBlocked;
-        const errorCode = policyBlocked
-          ? `WHATSAPP_POLICY:${error.code}`
-          : retryable
-            ? "SEND_RETRYABLE"
-            : "SEND_FAILED";
+        // los intentos a tres; políticas y estados de cuenta son terminales.
+        const errorCode = failure.policyBlocked
+          ? `WHATSAPP_POLICY:${
+              error instanceof WhatsAppPolicyError
+                ? error.code
+                : "POLICY_BLOCKED"
+            }`
+          : failure.credentialTerminal
+            ? "WHATSAPP_CREDENTIAL_TERMINAL"
+            : failure.retryable
+              ? "SEND_RETRYABLE"
+              : "SEND_FAILED";
         await client.rpc("fail_expired_booking_hold_notification", {
           p_appointment_id: claim.appointment_id,
           p_error_code: errorCode,
-          p_retryable: retryable,
+          p_retryable: failure.retryable,
         });
-        if (policyBlocked) expiredNotificationsCancelled += 1;
+        if (failure.policyBlocked) expiredNotificationsCancelled += 1;
         else expiredNotificationsFailed += 1;
         console.error("process-reminders", claim.appointment_id, errorCode);
       }
@@ -248,15 +256,19 @@ Deno.serve(async (request) => {
           appointment.starts_at as string,
         )
       ) {
-        await client
-          .from("reminders")
-          .update({
+        const updated = await updateClaimedReminder(
+          client,
+          {
+            id: reminder.id,
+            processingStartedAt: reminder.processing_started_at,
+          },
+          {
             status: "cancelled",
             processing_started_at: null,
             last_error: "APPOINTMENT_NOT_ACTIVE",
-          })
-          .eq("id", reminder.id);
-        cancelled += 1;
+          },
+        );
+        if (updated) cancelled += 1;
         continue;
       }
 
@@ -265,15 +277,19 @@ Deno.serve(async (request) => {
         reminder.type === "appointment_24h" &&
         !isAppointmentTomorrow(startsAt, new Date(), businessTimezone)
       ) {
-        await client
-          .from("reminders")
-          .update({
+        const updated = await updateClaimedReminder(
+          client,
+          {
+            id: reminder.id,
+            processingStartedAt: reminder.processing_started_at,
+          },
+          {
             status: "cancelled",
             processing_started_at: null,
             last_error: "REMINDER_WINDOW_EXPIRED",
-          })
-          .eq("id", reminder.id);
-        cancelled += 1;
+          },
+        );
+        if (updated) cancelled += 1;
         continue;
       }
 
@@ -326,108 +342,70 @@ Deno.serve(async (request) => {
       const conversation = Array.isArray(conversationResult)
         ? conversationResult[0]
         : conversationResult;
-      const params = [
-        contact.name,
-        formatAppointmentDate(startsAt, businessTimezone),
-        formatAppointmentTime(startsAt, businessTimezone),
-        professional?.name ?? "Gisela Lentz",
-      ];
-      const payload = templatePayload(
-        template.meta_name as string,
-        template.language_code as string,
-        params,
-      ) as {
-        type: string;
-        template: { components?: Array<Record<string, unknown>> };
-      };
-      payload.template.components = [
-        ...(payload.template.components ?? []),
-        {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "0",
-          parameters: [
-            { type: "payload", payload: `reminder:confirm:${appointment.id}` },
-          ],
-        },
-        {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "1",
-          parameters: [
-            {
-              type: "payload",
-              payload: `reminder:reschedule:${appointment.id}`,
-            },
-          ],
-        },
-        {
-          type: "button",
-          sub_type: "quick_reply",
-          index: "2",
-          parameters: [
-            { type: "payload", payload: `reminder:cancel:${appointment.id}` },
-          ],
-        },
-      ];
-
-      const message = await sendAndRecordMessage({
+      const message = await deliverAppointmentReminder({
         client,
         conversation: conversation as WhatsAppConversation,
         contact,
-        payload: payload as unknown as Record<string, unknown>,
-        bodyPreview: template.body_preview as string,
-        idempotencyKey: `reminder:${reminder.id}`,
-        templateName: template.meta_name as string,
-        templateKey,
-        appointmentId: appointment.id as string,
-        metadata: {
-          source: "reminder",
-          reminder_id: reminder.id,
-          appointment_id: appointment.id,
-          template_key: templateKey,
-          schedule:
-            reminder.type === "appointment_24h"
-              ? "day_before_local_time"
-              : "relative_offset",
-          business_timezone: businessTimezone,
+        reminder,
+        appointment: {
+          id: appointment.id as string,
+          starts_at: startsAt,
         },
+        professionalName: professional?.name ?? "Gisela Lentz",
+        template: {
+          key: templateKey,
+          meta_name: template.meta_name as string,
+          language_code: template.language_code as string,
+          body_preview: template.body_preview as string,
+        },
+        businessTimezone,
       });
 
       if (!["sent", "delivered", "read"].includes(message.status)) {
         throw new Error(`REMINDER_MESSAGE_${message.status.toUpperCase()}`);
       }
 
-      await client
-        .from("reminders")
-        .update({
+      const updated = await updateClaimedReminder(
+        client,
+        {
+          id: reminder.id,
+          processingStartedAt: reminder.processing_started_at,
+        },
+        {
           status: "sent",
           message_id: message.id,
           sent_at: new Date().toISOString(),
           processing_started_at: null,
           last_error: null,
-        })
-        .eq("id", reminder.id);
-      sent += 1;
+        },
+      );
+      if (updated) sent += 1;
     } catch (error) {
       const message = safeErrorMessage(error);
-      const policyBlocked = isWhatsAppPolicyError(error);
-      const retryable = shouldRetryWhatsAppError(error);
-      await client
-        .from("reminders")
-        .update({
-          status: policyBlocked
+      const failure = classifyReminderWhatsAppFailure(error, {
+        retryUnknown: false,
+      });
+      const updated = await updateClaimedReminder(
+        client,
+        {
+          id: reminder.id,
+          processingStartedAt: reminder.processing_started_at,
+        },
+        {
+          status: failure.policyBlocked
             ? "cancelled"
-            : retryable && reminder.attempts < 3
+            : failure.retryable && reminder.attempts < 3
               ? "pending"
               : "failed",
           processing_started_at: null,
           last_error: message,
-        })
-        .eq("id", reminder.id);
+        },
+      );
       console.error("process-reminders", reminder.id, message);
-      if (policyBlocked) cancelled += 1;
-      else failed += 1;
+      if (updated) {
+        if (failure.policyBlocked) cancelled += 1;
+        else failed += 1;
+      }
     }
   }
 

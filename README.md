@@ -114,6 +114,8 @@ WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_BUSINESS_ACCOUNT_ID=
 WHATSAPP_GRAPH_API_VERSION=
 WHATSAPP_MEDIA_MAX_BYTES=10485760
+META_APP_ID=
+META_EMBEDDED_SIGNUP_CONFIG_ID=
 META_APP_SECRET=
 META_WEBHOOK_VERIFY_TOKEN=
 WHATSAPP_WEBHOOK_MAX_BYTES=3145728
@@ -132,6 +134,7 @@ GOOGLE_CALENDAR_REDIRECT_URI=
 GOOGLE_CALENDAR_CRON_SECRET=
 APP_ALLOWED_ORIGINS=
 WHATSAPP_AUTOMATIONS_ENABLED=false
+WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false
 WHATSAPP_TEST_MODE=true
 WHATSAPP_TEST_ALLOWED_NUMBERS=
 ```
@@ -147,6 +150,13 @@ WHATSAPP_TEST_ALLOWED_NUMBERS=
 - Los flags solo aceptan `true` o `false`. Si faltan o están mal escritos, el
   sistema asume automatizaciones apagadas y mantiene activo el modo general de
   prueba.
+- `WHATSAPP_EMBEDDED_SIGNUP_ENABLED` es un kill switch backend y queda en
+  `false` por defecto. Sólo el literal `true` permite crear un intento; el
+  frontend consume únicamente el booleano sanitizado de `status`.
+- `/debug_token` usa un App Access Token efímero generado server-side con
+  `META_APP_ID` y `META_APP_SECRET`. No se configura un token global del
+  proveedor. Las operaciones sobre una WABA usan exclusivamente el business
+  token individual obtenido para ese cliente mediante Embedded Signup.
 
 Se pueden cargar desde el Dashboard de Supabase. Si se usa la CLI, hacerlo con
 un archivo temporal ignorado y borrarlo después:
@@ -162,7 +172,10 @@ Para Coexistence, aplicar antes y en orden las migraciones
 `20260826150000_whatsapp_automation_causal_pause.sql`. La migración posterior
 `20260826160000_whatsapp_recovery_schedule.sql` instala recovery inerte; sus dos
 jobs se habilitan sólo mediante el procedimiento explícito y postgres-only de
-[docs/whatsapp-recovery.md](docs/whatsapp-recovery.md). Desplegar las funciones
+[docs/whatsapp-recovery.md](docs/whatsapp-recovery.md). La migración local
+`20260826170000_whatsapp_embedded_signup.sql` agrega Embedded Signup, Vault y su
+outbox durable; debe revisarse y autorizarse separadamente antes de aplicarla.
+Desplegar las funciones
 solamente en el proyecto nuevo; `whatsapp-automation` debe preceder al outbox y
 `whatsapp-webhook` debe quedar después de ambos processors:
 
@@ -171,6 +184,7 @@ pnpm exec supabase functions deploy whatsapp-send
 pnpm exec supabase functions deploy whatsapp-media
 pnpm exec supabase functions deploy whatsapp-automation
 pnpm exec supabase functions deploy process-whatsapp-automation-outbox
+pnpm exec supabase functions deploy whatsapp-embedded-signup
 pnpm exec supabase functions deploy process-whatsapp-coexistence
 pnpm exec supabase functions deploy whatsapp-webhook
 pnpm exec supabase functions deploy process-reminders
@@ -315,6 +329,7 @@ git diff --check
 - [Base de datos](docs/database.md)
 - [Conexión de WhatsApp](docs/whatsapp-setup.md)
 - [WhatsApp Coexistence](docs/whatsapp-coexistence.md)
+- [Embedded Signup v4](docs/whatsapp-embedded-signup.md)
 - [Recovery de WhatsApp](docs/whatsapp-recovery.md)
 - [Flujo de automatización](docs/automation-flow.md)
 - [Demo controlada](docs/demo-whatsapp-real.md)

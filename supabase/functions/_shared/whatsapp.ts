@@ -1,4 +1,9 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
+import {
+  isWhatsAppCredentialResolutionError,
+  resolveWhatsAppAccountCredentials,
+  type WhatsAppAccountCredentials,
+} from "./whatsapp-account-credentials.ts";
 
 export interface WhatsAppContact {
   id: string;
@@ -17,6 +22,7 @@ export interface WhatsAppContact {
 export interface WhatsAppConversation {
   id: string;
   contact_id: string;
+  coexistence_account_id?: string | null;
   last_inbound_message_at: string | null;
   automation_mode: "auto" | "manual";
   needs_human: boolean;
@@ -33,11 +39,9 @@ export interface WhatsAppConversation {
 interface GraphResponse {
   messages?: Array<{ id: string }>;
   error?: {
-    message?: string;
     code?: number;
     error_subcode?: number;
     is_transient?: boolean;
-    error_data?: { details?: string };
   };
 }
 
@@ -101,6 +105,7 @@ export class WhatsAppDispatchError extends Error {
   readonly retryable: boolean;
   readonly graphCode: number | null;
   readonly graphSubcode: number | null;
+  readonly credentialInvalid: boolean;
 
   constructor(
     code: string,
@@ -109,6 +114,7 @@ export class WhatsAppDispatchError extends Error {
       retryable?: boolean;
       graphCode?: number | null;
       graphSubcode?: number | null;
+      credentialInvalid?: boolean;
     } = {},
   ) {
     super(options.message ? `${code}:${options.message}` : code);
@@ -117,6 +123,7 @@ export class WhatsAppDispatchError extends Error {
     this.retryable = options.retryable ?? false;
     this.graphCode = options.graphCode ?? null;
     this.graphSubcode = options.graphSubcode ?? null;
+    this.credentialInvalid = options.credentialInvalid ?? false;
   }
 }
 
@@ -151,7 +158,26 @@ export function shouldRetryWhatsAppError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
     error.message.startsWith("CONFIGURATION_INCOMPLETE") ||
+    error.message === "WHATSAPP_CREDENTIAL_RESOLUTION_FAILED" ||
+    error.message.startsWith("WHATSAPP_CREDENTIAL_CONFIGURATION_MISSING") ||
     error.message.startsWith("MESSAGE_INSERT_FAILED")
+  );
+}
+
+/**
+ * Automation execution leases must distinguish a temporary credential lookup
+ * failure from a generation/account barrier. Treating every resolver error as
+ * retryable can leave a failed execution permanently blocking its conversation
+ * after offboarding has already terminalized the dispatch.
+ */
+export function isRetryableWhatsAppAutomationFailure(error: unknown): boolean {
+  if (isWhatsAppCredentialResolutionError(error)) return error.retryable;
+  if (error instanceof WhatsAppDispatchError) return error.retryable;
+
+  const message =
+    error instanceof Error ? error.message.toUpperCase() : "ERROR INESPERADO";
+  return !["_INVALID", "_CONFLICT", "_NOT_FOUND", "_UNSUPPORTED"].some(
+    (marker) => message.includes(marker),
   );
 }
 
@@ -280,38 +306,6 @@ function isOperatorWhatsAppSource(value: string | null): boolean {
 
 function whatsappTestModeEnabled(): boolean {
   return parseSafetyBoolean(Deno.env.get("WHATSAPP_TEST_MODE"), true);
-}
-
-function requiredEnv(name: string): string {
-  const value = Deno.env.get(name)?.trim();
-  if (!value) throw new Error(`CONFIGURATION_INCOMPLETE:${name}`);
-  return value;
-}
-
-export function graphConfiguration(): {
-  accessToken: string;
-  phoneNumberId: string;
-  businessAccountId: string;
-  apiVersion: string;
-} {
-  const phoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
-  const businessAccountId = requiredEnv("WHATSAPP_BUSINESS_ACCOUNT_ID");
-  const apiVersion = requiredEnv("WHATSAPP_GRAPH_API_VERSION");
-  if (!/^\d+$/.test(phoneNumberId)) {
-    throw new Error("CONFIGURATION_INCOMPLETE:WHATSAPP_PHONE_NUMBER_ID");
-  }
-  if (!/^\d+$/.test(businessAccountId)) {
-    throw new Error("CONFIGURATION_INCOMPLETE:WHATSAPP_BUSINESS_ACCOUNT_ID");
-  }
-  if (!/^v\d+\.\d+$/.test(apiVersion)) {
-    throw new Error("CONFIGURATION_INCOMPLETE:WHATSAPP_GRAPH_API_VERSION");
-  }
-  return {
-    accessToken: requiredEnv("WHATSAPP_ACCESS_TOKEN"),
-    phoneNumberId,
-    businessAccountId,
-    apiVersion,
-  };
 }
 
 export function validIdempotencyKey(value: string): boolean {
@@ -769,40 +763,44 @@ function graphDispatchError(
 ): WhatsAppDispatchError {
   const graphCode = result.error?.code ?? null;
   const graphSubcode = result.error?.error_subcode ?? null;
+  const credentialInvalid = responseStatus === 401 || graphCode === 190;
   const isPolicyError =
     graphCode !== null && NON_RETRYABLE_POLICY_GRAPH_CODES.has(graphCode);
   const retryable =
+    !credentialInvalid &&
     !isPolicyError &&
     (result.error?.is_transient === true ||
       responseStatus === 429 ||
       (graphCode !== null && RETRYABLE_GRAPH_CODES.has(graphCode)));
-  const detail =
-    result.error?.error_data?.details ??
-    result.error?.message ??
-    `HTTP_${responseStatus}`;
   return new WhatsAppDispatchError(
-    isPolicyError ? "META_POLICY_REJECTED" : "META_SEND_FAILED",
+    credentialInvalid
+      ? "META_AUTHENTICATION_FAILED"
+      : isPolicyError
+        ? "META_POLICY_REJECTED"
+        : "META_SEND_FAILED",
     {
-      message: detail.slice(0, 300),
       retryable,
       graphCode,
       graphSubcode,
+      credentialInvalid,
     },
   );
 }
 
-async function dispatchWhatsAppPayload(args: {
+export async function dispatchWhatsAppPayload(args: {
   recipient: string;
   payload: Record<string, unknown>;
   opaqueMessageId: string;
+  credentials: WhatsAppAccountCredentials;
+  fetchImpl?: typeof fetch;
 }): Promise<{ whatsappMessageId: string; requestId: string | null }> {
-  const config = graphConfiguration();
-  const response = await fetch(
-    `https://graph.facebook.com/${config.apiVersion}/${config.phoneNumberId}/messages`,
+  const response = await (args.fetchImpl ?? fetch)(
+    `https://graph.facebook.com/${args.credentials.apiVersion}/${args.credentials.phoneNumberId}/messages`,
     {
       method: "POST",
+      redirect: "error",
       headers: {
-        Authorization: `Bearer ${config.accessToken}`,
+        Authorization: `Bearer ${args.credentials.businessAccessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -829,6 +827,76 @@ async function dispatchWhatsAppPayload(args: {
     whatsappMessageId,
     requestId: response.headers.get("x-fb-request-id"),
   };
+}
+
+export async function markWhatsAppCredentialAttentionRequired(input: {
+  client: SupabaseClient;
+  credentials: WhatsAppAccountCredentials;
+  observedAt?: string;
+}): Promise<boolean> {
+  if (
+    input.credentials.credentialMode !== "coexistence" ||
+    !input.credentials.accountId ||
+    !input.credentials.tokenGeneration
+  ) {
+    return false;
+  }
+  const result = await input.client.rpc(
+    "mark_whatsapp_business_token_attention_required",
+    {
+      p_account_id: input.credentials.accountId,
+      p_expected_token_generation: input.credentials.tokenGeneration,
+      p_token_status: "unknown",
+      p_error_code: "META_AUTHENTICATION_FAILED",
+      p_observed_at: input.observedAt ?? new Date().toISOString(),
+    },
+  );
+  if (result.error || result.data !== true) {
+    console.error("WhatsApp credential attention state was not persisted", {
+      code: "WHATSAPP_TOKEN_ATTENTION_PERSIST_FAILED",
+      accountId: input.credentials.accountId,
+    });
+    return false;
+  }
+  return true;
+}
+
+export function isMetaGraphAuthenticationFailure(
+  responseStatus: number,
+  payload: unknown,
+): boolean {
+  if (responseStatus === 401) return true;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const error = (payload as { error?: unknown }).error;
+  return (
+    Boolean(error) &&
+    typeof error === "object" &&
+    !Array.isArray(error) &&
+    (error as { code?: unknown }).code === 190
+  );
+}
+
+export async function observeMetaGraphAuthenticationFailure(input: {
+  client: SupabaseClient;
+  credentials: WhatsAppAccountCredentials;
+  response: Response;
+}): Promise<boolean> {
+  let payload: unknown = null;
+  try {
+    payload = await input.response.clone().json();
+  } catch {
+    // HTTP 401 is sufficient evidence even if Graph returned no JSON body.
+  }
+  if (!isMetaGraphAuthenticationFailure(input.response.status, payload)) {
+    return false;
+  }
+  await markWhatsAppCredentialAttentionRequired({
+    client: input.client,
+    credentials: input.credentials,
+  });
+  return true;
 }
 
 function policyErrorFromDatabase(message: string): WhatsAppPolicyError | null {
@@ -950,7 +1018,9 @@ export async function sendAndRecordMessage(args: {
   templateName?: string | null;
   templateKey?: string | null;
   appointmentId?: string | null;
+  coexistenceAccountId?: string | null;
   metadata?: Record<string, unknown>;
+  fetchImpl?: typeof fetch;
 }): Promise<RecordedMessage> {
   const {
     client,
@@ -963,7 +1033,9 @@ export async function sendAndRecordMessage(args: {
     templateName = null,
     templateKey = null,
     appointmentId = null,
+    coexistenceAccountId = null,
     metadata = {},
+    fetchImpl,
   } = args;
 
   const type = messageTypeFromPayload(payload);
@@ -980,6 +1052,20 @@ export async function sendAndRecordMessage(args: {
   if (!bodyPreview || bodyPreview.length > 4096) {
     throw new Error("INVALID_MESSAGE_BODY");
   }
+  if (
+    coexistenceAccountId !== null &&
+    conversation.coexistence_account_id != null &&
+    coexistenceAccountId !== conversation.coexistence_account_id
+  ) {
+    throw new WhatsAppPolicyError("WHATSAPP_ACCOUNT_CONTEXT_CONFLICT");
+  }
+  const initialCredentials = await resolveWhatsAppAccountCredentials({
+    client,
+    purpose: "send",
+    coexistenceAccountId:
+      coexistenceAccountId ?? conversation.coexistence_account_id ?? null,
+    conversationId: conversation.id,
+  });
 
   const interactiveOptions = interactiveOptionsFromPayload(payload);
   const complianceMetadata: Record<string, unknown> = {
@@ -995,7 +1081,7 @@ export async function sendAndRecordMessage(args: {
   const existingResult = await client
     .from("messages")
     .select(
-      "id,conversation_id,contact_id,whatsapp_message_id,type,body,template_name,status,metadata",
+      "id,conversation_id,contact_id,coexistence_account_id,whatsapp_message_id,type,body,template_name,status,metadata",
     )
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle();
@@ -1008,6 +1094,7 @@ export async function sendAndRecordMessage(args: {
     if (
       row.conversation_id !== conversation.id ||
       row.contact_id !== contact.id ||
+      (row.coexistence_account_id ?? null) !== initialCredentials.accountId ||
       row.type !== type ||
       row.body !== bodyPreview ||
       (row.template_name ?? null) !== templateName ||
@@ -1110,6 +1197,7 @@ export async function sendAndRecordMessage(args: {
         status: "pending",
         sent_by: sentBy,
         idempotency_key: idempotencyKey,
+        coexistence_account_id: initialCredentials.accountId,
         metadata: { ...complianceMetadata, send_attempts: 1 },
       })
       .select("id,whatsapp_message_id,status,metadata")
@@ -1120,7 +1208,7 @@ export async function sendAndRecordMessage(args: {
         const raced = await client
           .from("messages")
           .select(
-            "id,conversation_id,contact_id,whatsapp_message_id,type,body,template_name,status,metadata",
+            "id,conversation_id,contact_id,coexistence_account_id,whatsapp_message_id,type,body,template_name,status,metadata",
           )
           .eq("idempotency_key", idempotencyKey)
           .single();
@@ -1169,10 +1257,27 @@ export async function sendAndRecordMessage(args: {
       type,
     });
     assertAdministrativePayload(bodyPreview, payload);
+    const credentials = await resolveWhatsAppAccountCredentials({
+      client,
+      purpose: "send",
+      coexistenceAccountId: initialCredentials.accountId,
+      wabaId: initialCredentials.wabaId,
+      phoneNumberId: initialCredentials.phoneNumberId,
+      conversationId: conversation.id,
+      expectedTokenGeneration: initialCredentials.tokenGeneration,
+    });
+    if (
+      credentials.credentialMode !== initialCredentials.credentialMode ||
+      credentials.accountId !== initialCredentials.accountId
+    ) {
+      throw new WhatsAppPolicyError("WHATSAPP_ACCOUNT_CONTEXT_CHANGED");
+    }
     const dispatched = await dispatchWhatsAppPayload({
       recipient,
       payload,
       opaqueMessageId: pending.id as string,
+      credentials,
+      fetchImpl,
     });
     const whatsappMessageId = dispatched.whatsappMessageId;
     metaAccepted = true;
@@ -1211,13 +1316,31 @@ export async function sendAndRecordMessage(args: {
       deduplicated: false,
     };
   } catch (error) {
+    if (
+      error instanceof WhatsAppDispatchError &&
+      error.credentialInvalid &&
+      initialCredentials.credentialMode === "coexistence" &&
+      initialCredentials.accountId &&
+      initialCredentials.tokenGeneration
+    ) {
+      await markWhatsAppCredentialAttentionRequired({
+        client,
+        credentials: initialCredentials,
+      });
+    }
     const message =
       error instanceof Error ? error.message.slice(0, 500) : "SEND_FAILED";
     const retryable =
       error instanceof WhatsAppDispatchError
         ? error.retryable
-        : error instanceof Error &&
-          error.message.startsWith("CONFIGURATION_INCOMPLETE");
+        : isWhatsAppCredentialResolutionError(error)
+          ? error.retryable
+          : error instanceof Error &&
+            (error.message.startsWith("CONFIGURATION_INCOMPLETE") ||
+              error.message === "WHATSAPP_CREDENTIAL_RESOLUTION_FAILED" ||
+              error.message.startsWith(
+                "WHATSAPP_CREDENTIAL_CONFIGURATION_MISSING",
+              ));
     const graphCode =
       error instanceof WhatsAppDispatchError ? error.graphCode : null;
     const graphSubcode =

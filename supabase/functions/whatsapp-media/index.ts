@@ -10,7 +10,12 @@ import {
   resolveWhatsAppMediaDescriptor,
   whatsappMediaMaxBytes,
 } from "../_shared/whatsapp-media.ts";
-import { graphConfiguration } from "../_shared/whatsapp.ts";
+import {
+  isWhatsAppCredentialResolutionError,
+  resolveWhatsAppAccountCredentials,
+} from "../_shared/whatsapp-account-credentials.ts";
+import { observeMetaGraphAuthenticationFailure } from "../_shared/whatsapp.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 interface MetaMediaInformation {
   id?: unknown;
@@ -25,11 +30,15 @@ const FETCH_TIMEOUT_MS = 10_000;
 async function timedFetch(
   url: string,
   init: RequestInit,
+  fetchImpl: typeof fetch,
 ): Promise<{ response: Response; finish: () => void }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetchImpl(url, {
+      ...init,
+      signal: controller.signal,
+    });
     return {
       response,
       finish: () => {
@@ -52,7 +61,16 @@ function mediaError(
   return jsonResponse(request, { error, message }, status);
 }
 
-Deno.serve(async (request) => {
+export interface WhatsAppMediaHandlerDependencies {
+  client?: SupabaseClient;
+  authorize?: typeof authorizeUser;
+  fetchImpl?: typeof fetch;
+}
+
+export async function handleWhatsAppMediaRequest(
+  request: Request,
+  dependencies: WhatsAppMediaHandlerDependencies = {},
+): Promise<Response> {
   if (request.method === "OPTIONS") return optionsResponse(request);
   if (request.method !== "GET") {
     return mediaError(
@@ -63,9 +81,13 @@ Deno.serve(async (request) => {
     );
   }
 
-  const client = createServiceClient();
+  const client = dependencies.client ?? createServiceClient();
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
   try {
-    const { user } = await authorizeUser(request, client);
+    const { user } = await (dependencies.authorize ?? authorizeUser)(
+      request,
+      client,
+    );
     const messageId =
       new URL(request.url).searchParams.get("messageId")?.trim() ?? "";
     if (!isValidMessageUuid(messageId)) {
@@ -79,7 +101,9 @@ Deno.serve(async (request) => {
 
     const { data: message, error: messageError } = await client
       .from("messages")
-      .select("id,direction,type,metadata")
+      .select(
+        "id,conversation_id,direction,type,metadata,coexistence_account_id",
+      )
       .eq("id", messageId)
       .maybeSingle();
     if (
@@ -110,19 +134,49 @@ Deno.serve(async (request) => {
       );
     }
 
-    const config = graphConfiguration();
+    const credentials = await resolveWhatsAppAccountCredentials({
+      client,
+      purpose: "media",
+      coexistenceAccountId:
+        typeof message.coexistence_account_id === "string"
+          ? message.coexistence_account_id
+          : null,
+      conversationId: message.conversation_id,
+    });
     const informationUrl = new URL(
-      `${config.apiVersion}/${encodeURIComponent(storedMediaId)}`,
+      `${credentials.apiVersion}/${encodeURIComponent(storedMediaId)}`,
       "https://graph.facebook.com/",
     );
-    informationUrl.searchParams.set("phone_number_id", config.phoneNumberId);
-    const informationRequest = await timedFetch(informationUrl.toString(), {
-      method: "GET",
-      redirect: "error",
-      headers: { Authorization: `Bearer ${config.accessToken}` },
-    });
+    informationUrl.searchParams.set(
+      "phone_number_id",
+      credentials.phoneNumberId,
+    );
+    const informationRequest = await timedFetch(
+      informationUrl.toString(),
+      {
+        method: "GET",
+        redirect: "error",
+        headers: {
+          Authorization: `Bearer ${credentials.businessAccessToken}`,
+        },
+      },
+      fetchImpl,
+    );
     let information: MetaMediaInformation;
     try {
+      const credentialInvalid = await observeMetaGraphAuthenticationFailure({
+        client,
+        credentials,
+        response: informationRequest.response,
+      });
+      if (credentialInvalid) {
+        return mediaError(
+          request,
+          502,
+          "MEDIA_UNAVAILABLE",
+          "No pudimos obtener el comprobante desde WhatsApp.",
+        );
+      }
       if (!informationRequest.response.ok) {
         return mediaError(
           request,
@@ -155,13 +209,32 @@ Deno.serve(async (request) => {
       graphFileSize: information.file_size,
       maxBytes,
     });
-    const mediaRequest = await timedFetch(information.url as string, {
-      method: "GET",
-      redirect: "error",
-      headers: { Authorization: `Bearer ${config.accessToken}` },
-    });
+    const mediaRequest = await timedFetch(
+      information.url as string,
+      {
+        method: "GET",
+        redirect: "error",
+        headers: {
+          Authorization: `Bearer ${credentials.businessAccessToken}`,
+        },
+      },
+      fetchImpl,
+    );
     let bytes: Uint8Array<ArrayBuffer>;
     try {
+      const credentialInvalid = await observeMetaGraphAuthenticationFailure({
+        client,
+        credentials,
+        response: mediaRequest.response,
+      });
+      if (credentialInvalid) {
+        return mediaError(
+          request,
+          502,
+          "MEDIA_UNAVAILABLE",
+          "No pudimos descargar el comprobante desde WhatsApp.",
+        );
+      }
       if (!mediaRequest.response.ok) {
         return mediaError(
           request,
@@ -219,8 +292,9 @@ Deno.serve(async (request) => {
       );
     }
     const configurationError =
-      error instanceof Error &&
-      error.message.startsWith("CONFIGURATION_INCOMPLETE");
+      (error instanceof Error &&
+        error.message.startsWith("CONFIGURATION_INCOMPLETE")) ||
+      isWhatsAppCredentialResolutionError(error);
     console.error(
       "whatsapp-media",
       configurationError ? "CONFIGURATION_INCOMPLETE" : "MEDIA_PROXY_FAILED",
@@ -232,4 +306,8 @@ Deno.serve(async (request) => {
       "No pudimos abrir el comprobante en este momento.",
     );
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve((request) => handleWhatsAppMediaRequest(request));
+}

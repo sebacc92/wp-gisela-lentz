@@ -32,6 +32,9 @@ export interface ProcessIncomingMessageOptions {
   client: SupabaseClient;
   message: NormalizedIncomingMessage;
   automationsEnabled: boolean;
+  /** Account resolved from the signed WABA + phone identity, when managed by
+   * Embedded Signup. Legacy/test messages intentionally leave it null. */
+  coexistenceAccountId?: string | null;
   /**
    * Resume idempotent side effects after a webhook delivery failed after the
    * message row was inserted. Normal callers keep duplicate messages inert.
@@ -291,9 +294,18 @@ export async function processIncomingMessage(
     client,
     message,
     automationsEnabled,
+    coexistenceAccountId = null,
     resumeSideEffectsOnDuplicate = false,
     reserveAutomationDispatch = false,
   } = options;
+  if (
+    coexistenceAccountId !== null &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      coexistenceAccountId,
+    )
+  ) {
+    throw new Error("INVALID_COEXISTENCE_ACCOUNT_ID");
+  }
   const contact = await getOrCreateWhatsAppContact(
     client,
     message.phoneE164,
@@ -316,6 +328,7 @@ export async function processIncomingMessage(
       type: message.type,
       body: message.body,
       status: "delivered",
+      coexistence_account_id: coexistenceAccountId,
       metadata: {
         ...message.metadata,
         ...(reserveAutomationDispatch
@@ -332,7 +345,9 @@ export async function processIncomingMessage(
   if (inserted.error?.code === "23505") {
     const existing = await client
       .from("messages")
-      .select("id,whatsapp_origin,conversation_id,contact_id")
+      .select(
+        "id,whatsapp_origin,conversation_id,contact_id,coexistence_account_id",
+      )
       .eq("whatsapp_message_id", message.externalMessageId)
       .single();
     if (existing.error || !existing.data) {
@@ -340,6 +355,15 @@ export async function processIncomingMessage(
     }
     savedMessage = existing.data;
     deduplicated = true;
+
+    const existingAccountId = existing.data.coexistence_account_id ?? null;
+    if (
+      (coexistenceAccountId !== null &&
+        existingAccountId !== coexistenceAccountId) ||
+      (coexistenceAccountId === null && existingAccountId !== null)
+    ) {
+      throw new Error("WHATSAPP_MESSAGE_ACCOUNT_CONFLICT");
+    }
 
     if (
       existing.data.whatsapp_origin === "history" &&
@@ -499,6 +523,7 @@ export async function processIncomingMessage(
           bodyPreview: acknowledgement,
           idempotencyKey: `proof-acknowledgement:${depositProof.appointmentId}`,
           appointmentId: depositProof.appointmentId,
+          coexistenceAccountId,
           metadata: {
             source: "proof_acknowledgement",
             inbound_message_id: savedMessage.id,

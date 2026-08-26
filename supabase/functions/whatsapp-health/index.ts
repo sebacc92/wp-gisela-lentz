@@ -5,19 +5,25 @@ import {
 } from "../_shared/http.ts";
 import { authorizeUser, createServiceClient } from "../_shared/supabase.ts";
 import {
-  graphConfiguration,
+  isWhatsAppCredentialResolutionError,
+  resolveWhatsAppAccountCredentials,
+} from "../_shared/whatsapp-account-credentials.ts";
+import {
+  observeMetaGraphAuthenticationFailure,
   parseSafetyBoolean,
   parseWhatsAppAllowedNumbers,
   whatsappAutomationsEnabled,
 } from "../_shared/whatsapp.ts";
+import type { WhatsAppAccountCredentials } from "../_shared/whatsapp-account-credentials.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 interface GraphError {
-  message?: string;
+  code?: number;
 }
 
 interface GraphCollection<T> {
   data?: T[];
-  paging?: { next?: string };
+  paging?: { next?: string; cursors?: { after?: string } };
   error?: GraphError;
 }
 
@@ -44,6 +50,35 @@ const META_TEMPLATE_STATUSES = new Set([
   "PAUSED",
   "DISABLED",
 ]);
+const CLIENT_SCOPE = "gisela-lentz-wp";
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export async function authenticatedHealthAccountId(input: {
+  client: SupabaseClient;
+  adminUserId: string;
+  requestedAccountId: string | null;
+}): Promise<string | null> {
+  const result = await input.client.rpc("whatsapp_embedded_signup_status", {
+    p_admin_user_id: input.adminUserId,
+    p_client_scope: CLIENT_SCOPE,
+  });
+  if (result.error) throw new Error("WHATSAPP_HEALTH_ACCOUNT_STATUS_FAILED");
+  const account = record(record(result.data)?.account);
+  const statusAccountId =
+    typeof account?.accountId === "string" ? account.accountId : null;
+  if (
+    input.requestedAccountId !== null &&
+    input.requestedAccountId !== statusAccountId
+  ) {
+    throw new Error("WHATSAPP_HEALTH_ACCOUNT_MISMATCH");
+  }
+  return input.requestedAccountId ?? statusAccountId;
+}
 
 function qualityRating(value: unknown): "GREEN" | "YELLOW" | "RED" | "UNKNOWN" {
   const normalized = typeof value === "string" ? value.toUpperCase() : "";
@@ -64,44 +99,122 @@ function templateQuality(
   return qualityRating(value);
 }
 
-function safeNextPage(value: string): string {
-  const next = new URL(value);
-  if (next.protocol !== "https:" || next.hostname !== "graph.facebook.com") {
+export function canonicalMetaGraphNextPage(input: {
+  initialUrl: string;
+  providerNext: string;
+  afterCursor: string;
+}): string {
+  const initial = new URL(input.initialUrl);
+  const next = new URL(input.providerNext);
+  if (
+    !input.providerNext.startsWith("https://graph.facebook.com/") ||
+    initial.origin !== "https://graph.facebook.com" ||
+    next.origin !== initial.origin ||
+    next.pathname !== initial.pathname ||
+    next.username !== "" ||
+    next.password !== "" ||
+    next.port !== "" ||
+    next.hash !== "" ||
+    !input.afterCursor ||
+    input.afterCursor.length > 2_048 ||
+    /[\u0000-\u001f\u007f]/.test(input.afterCursor)
+  ) {
     throw new Error("META_INVALID_PAGINATION_URL");
   }
-  return next.toString();
+  const allowedKeys = new Set([...initial.searchParams.keys(), "after"]);
+  for (const key of new Set(next.searchParams.keys())) {
+    if (!allowedKeys.has(key) || next.searchParams.getAll(key).length !== 1) {
+      throw new Error("META_INVALID_PAGINATION_URL");
+    }
+  }
+  for (const [key, value] of initial.searchParams) {
+    if (next.searchParams.get(key) !== value) {
+      throw new Error("META_INVALID_PAGINATION_URL");
+    }
+  }
+  if (next.searchParams.get("after") !== input.afterCursor) {
+    throw new Error("META_INVALID_PAGINATION_URL");
+  }
+
+  // Never follow a provider URL verbatim with a customer bearer token. Only
+  // the opaque cursor crosses into a URL rebuilt from our own fixed endpoint.
+  const rebuilt = new URL(initial);
+  rebuilt.searchParams.set("after", input.afterCursor);
+  return rebuilt.toString();
 }
 
-async function graphCollection<T>(
+export async function graphCollection<T>(
   initialUrl: string,
-  accessToken: string,
+  credentials: WhatsAppAccountCredentials,
+  client: SupabaseClient,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<T[]> {
   const rows: T[] = [];
   let next: string | undefined = initialUrl;
+  const seenCursors = new Set<string>();
 
   for (let page = 0; next && page < 20; page += 1) {
-    const response = await fetch(next, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+    const response = await fetchImpl(next, {
+      redirect: "error",
+      headers: {
+        Authorization: `Bearer ${credentials.businessAccessToken}`,
+      },
     });
-    const result = (await response.json()) as GraphCollection<T>;
-    if (!response.ok) {
-      throw new Error(result.error?.message ?? `HTTP_${response.status}`);
+    const credentialInvalid = await observeMetaGraphAuthenticationFailure({
+      client,
+      credentials,
+      response,
+    });
+    if (credentialInvalid) {
+      throw new Error("META_AUTHENTICATION_FAILED");
+    }
+    let result: GraphCollection<T>;
+    try {
+      result = (await response.json()) as GraphCollection<T>;
+    } catch {
+      throw new Error("META_GRAPH_RESPONSE_INVALID");
+    }
+    if (!response.ok || result.error) {
+      throw new Error("META_GRAPH_REQUEST_FAILED");
     }
     rows.push(...(result.data ?? []));
-    next = result.paging?.next ? safeNextPage(result.paging.next) : undefined;
+    if (!result.paging?.next) {
+      next = undefined;
+      continue;
+    }
+    const afterCursor = result.paging.cursors?.after;
+    if (typeof afterCursor !== "string" || seenCursors.has(afterCursor)) {
+      throw new Error("META_INVALID_PAGINATION_URL");
+    }
+    seenCursors.add(afterCursor);
+    next = canonicalMetaGraphNextPage({
+      initialUrl,
+      providerNext: result.paging.next,
+      afterCursor,
+    });
   }
 
   if (next) throw new Error("META_PAGINATION_LIMIT_EXCEEDED");
   return rows;
 }
 
-Deno.serve(async (request) => {
+export interface WhatsAppHealthHandlerDependencies {
+  client?: SupabaseClient;
+  authorize?: typeof authorizeUser;
+  fetchImpl?: typeof fetch;
+}
+
+export async function handleWhatsAppHealthRequest(
+  request: Request,
+  dependencies: WhatsAppHealthHandlerDependencies = {},
+): Promise<Response> {
   if (request.method === "OPTIONS") return optionsResponse(request);
   if (request.method !== "GET" && request.method !== "POST") {
     return jsonResponse(request, { error: "METHOD_NOT_ALLOWED" }, 405);
   }
 
-  const client = createServiceClient();
+  const client = dependencies.client ?? createServiceClient();
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
   const safety = {
     automationsEnabled: whatsappAutomationsEnabled(),
     testMode: parseSafetyBoolean(Deno.env.get("WHATSAPP_TEST_MODE"), true),
@@ -110,18 +223,37 @@ Deno.serve(async (request) => {
     ).size,
   };
   try {
-    await authorizeUser(request, client);
-    const config = graphConfiguration();
-    const graphRoot = `https://graph.facebook.com/${config.apiVersion}`;
+    const authorization = await (dependencies.authorize ?? authorizeUser)(
+      request,
+      client,
+    );
+    if (authorization.profile.role !== "ADMIN") {
+      return jsonResponse(request, { error: "FORBIDDEN" }, 403);
+    }
+    const accountId = await authenticatedHealthAccountId({
+      client,
+      adminUserId: authorization.user.id,
+      requestedAccountId: new URL(request.url).searchParams.get("accountId"),
+    });
+    const credentials = await resolveWhatsAppAccountCredentials({
+      client,
+      purpose: "management",
+      coexistenceAccountId: accountId,
+    });
+    const graphRoot = `https://graph.facebook.com/${credentials.apiVersion}`;
     const [phoneNumbers, metaTemplates, localTemplatesResult, settingsResult] =
       await Promise.all([
         graphCollection<MetaPhoneNumber>(
-          `${graphRoot}/${config.businessAccountId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating&limit=100`,
-          config.accessToken,
+          `${graphRoot}/${credentials.wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating&limit=100`,
+          credentials,
+          client,
+          fetchImpl,
         ),
         graphCollection<MetaTemplate>(
-          `${graphRoot}/${config.businessAccountId}/message_templates?fields=id,name,language,status,category&limit=100`,
-          config.accessToken,
+          `${graphRoot}/${credentials.wabaId}/message_templates?fields=id,name,language,status,category&limit=100`,
+          credentials,
+          client,
+          fetchImpl,
         ),
         client.from("message_templates").select("id,meta_name,language_code"),
         client
@@ -137,7 +269,7 @@ Deno.serve(async (request) => {
     }
 
     const phone = phoneNumbers.find(
-      (candidate) => candidate.id === config.phoneNumberId,
+      (candidate) => candidate.id === credentials.phoneNumberId,
     );
     if (!phone) throw new Error("PHONE_NUMBER_NOT_IN_CONFIGURED_WABA");
 
@@ -213,13 +345,17 @@ Deno.serve(async (request) => {
         approvedUtility: approvedUtilityTemplates,
       },
       safety,
+      credentialMode: credentials.credentialMode,
+      accountId: credentials.accountId,
     });
   } catch (error) {
     const message = safeErrorMessage(error);
     if (message === "UNAUTHORIZED") {
       return jsonResponse(request, { error: "UNAUTHORIZED" }, 401);
     }
-    const incomplete = message.startsWith("CONFIGURATION_INCOMPLETE");
+    const incomplete =
+      message.startsWith("CONFIGURATION_INCOMPLETE") ||
+      isWhatsAppCredentialResolutionError(error);
     const checkedAt = new Date().toISOString();
     await client
       .from("whatsapp_settings")
@@ -246,4 +382,8 @@ Deno.serve(async (request) => {
       incomplete ? 200 : 502,
     );
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve((request) => handleWhatsAppHealthRequest(request));
+}

@@ -8,6 +8,7 @@ function duplicateMessageClient(
   options: {
     origin?: "cloud_api" | "history";
     bsuidOnly?: boolean;
+    coexistenceAccountId?: string | null;
   } = {},
 ): {
   client: SupabaseClient;
@@ -62,6 +63,7 @@ function duplicateMessageClient(
                   whatsapp_origin: options.origin ?? "cloud_api",
                   conversation_id: "conversation-1",
                   contact_id: "contact-1",
+                  coexistence_account_id: options.coexistenceAccountId ?? null,
                 },
                 error: null,
               };
@@ -107,6 +109,7 @@ const duplicateOptOut = {
   metadata: {},
   receivedAt: "2026-08-26T10:00:00.000Z",
 };
+const COEXISTENCE_ACCOUNT_ID = "22222222-2222-4222-8222-222222222222";
 
 test("ordinary duplicate delivery remains inert", async () => {
   const { client, rpcCalls } = duplicateMessageClient();
@@ -173,5 +176,33 @@ test("a failed webhook retry resumes idempotent post-insert side effects", async
     (insertedRows[0]?.metadata as Record<string, unknown> | undefined)
       ?.automation_dispatch_reserved,
     true,
+  );
+});
+
+test("binds live Embedded messages to their resolved Coexistence account", async () => {
+  const { client, insertedRows } = duplicateMessageClient({
+    coexistenceAccountId: COEXISTENCE_ACCOUNT_ID,
+  });
+  await processIncomingMessage({
+    client,
+    message: duplicateOptOut,
+    automationsEnabled: false,
+    coexistenceAccountId: COEXISTENCE_ACCOUNT_ID,
+  });
+  assert.equal(insertedRows[0]?.coexistence_account_id, COEXISTENCE_ACCOUNT_ID);
+});
+
+test("rejects a duplicate wamid owned by another account", async () => {
+  const { client } = duplicateMessageClient({
+    coexistenceAccountId: "33333333-3333-4333-8333-333333333333",
+  });
+  await assert.rejects(
+    processIncomingMessage({
+      client,
+      message: duplicateOptOut,
+      automationsEnabled: false,
+      coexistenceAccountId: COEXISTENCE_ACCOUNT_ID,
+    }),
+    /WHATSAPP_MESSAGE_ACCOUNT_CONFLICT/,
   );
 });

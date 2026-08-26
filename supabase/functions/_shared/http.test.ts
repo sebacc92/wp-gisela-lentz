@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { corsHeaders } from "./http.ts";
+import { corsHeaders, isRequestOriginAllowed } from "./http.ts";
 
 function withAllowedOrigins(value: string, run: () => void): void {
   const target = globalThis as unknown as {
@@ -78,4 +78,53 @@ test("CORS falla cerrado para un origen desconocido o ausente", () => {
     assert.equal(unknown.get("Access-Control-Allow-Origin"), null);
     assert.equal(missing.get("Access-Control-Allow-Origin"), null);
   });
+});
+
+test("la autorización de origen exige un Origin explícito y exacto", () => {
+  withAllowedOrigins("https://gisela.example", () => {
+    assert.equal(
+      isRequestOriginAllowed(
+        new Request("https://edge.example", {
+          headers: { Origin: "https://gisela.example" },
+        }),
+      ),
+      true,
+    );
+    assert.equal(
+      isRequestOriginAllowed(
+        new Request("https://edge.example", {
+          headers: { Origin: "https://evil.example" },
+        }),
+      ),
+      false,
+    );
+    assert.equal(
+      isRequestOriginAllowed(new Request("https://edge.example")),
+      false,
+    );
+  });
+});
+
+test("una allowlist de producción inválida no reactiva localhost", () => {
+  withAllowedOrigins(
+    "https://gisela.example/path,https://user@gisela.example,http://gisela.example",
+    () => {
+      assert.equal(
+        isRequestOriginAllowed(
+          new Request("https://edge.example", {
+            headers: { Origin: "http://localhost:5173" },
+          }),
+        ),
+        false,
+      );
+      assert.equal(
+        isRequestOriginAllowed(
+          new Request("https://edge.example", {
+            headers: { Origin: "https://gisela.example" },
+          }),
+        ),
+        false,
+      );
+    },
+  );
 });

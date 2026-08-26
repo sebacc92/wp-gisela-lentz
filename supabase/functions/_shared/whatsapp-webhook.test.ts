@@ -28,14 +28,19 @@ import {
   DEFAULT_WHATSAPP_WEBHOOK_MAX_BYTES,
   hexadecimal,
   isExpectedWhatsAppBusinessAccount,
+  isIgnorableCoexistenceSyncRejection,
   isTrustedWhatsAppChange,
+  metaAccountUpdateIdentity,
+  metaChangePhoneNumberId,
   metaChangeEventId,
+  metaWebhookEntryTimestamp,
   metaStatusRecipientUserId,
   normalizeWhatsAppUserId,
   readWhatsAppWebhookBody,
   routeWhatsAppChange,
   safeWebhookMetadata,
   verifyMetaSignature,
+  whatsappChangeIdentityScope,
   WhatsAppWebhookPayloadTooLargeError,
   type MetaValue,
   type MetaWebhook,
@@ -217,6 +222,122 @@ test("requires the configured WABA and phone identity", () => {
   );
 });
 
+test("resolves phone identity independently for every change", () => {
+  const first = {
+    field: "messages",
+    value: baseValue(),
+  };
+  const second = {
+    field: "history",
+    value: {
+      ...baseValue(),
+      metadata: {
+        ...baseValue().metadata,
+        phone_number_id: "222222222222222",
+      },
+      phone_number_id: "222222222222222",
+    },
+  };
+
+  assert.equal(metaChangePhoneNumberId(first), TEST_PHONE_NUMBER_ID);
+  assert.equal(metaChangePhoneNumberId(second), "222222222222222");
+  assert.equal(
+    metaChangePhoneNumberId({
+      field: "messages",
+      value: {
+        messaging_product: "whatsapp",
+        phone_number_id: TEST_PHONE_NUMBER_ID,
+      },
+    }),
+    TEST_PHONE_NUMBER_ID,
+  );
+  assert.equal(
+    metaChangePhoneNumberId({
+      field: "messages",
+      value: {
+        ...baseValue(),
+        phone_number_id: "222222222222222",
+      },
+    }),
+    null,
+  );
+  assert.equal(
+    metaChangePhoneNumberId({
+      field: "account_update",
+      value: { event: "ACCOUNT_RECONNECTED" },
+    }),
+    null,
+  );
+  assert.equal(
+    metaChangePhoneNumberId({
+      field: "messages",
+      value: {
+        messaging_product: "whatsapp",
+        phone_number_id: "not-a-phone-id",
+      },
+    }),
+    null,
+  );
+});
+
+test("keeps account lifecycle WABA-scoped and phone events phone-scoped", () => {
+  assert.equal(whatsappChangeIdentityScope("account_update"), "waba");
+  assert.equal(
+    whatsappChangeIdentityScope("message_template_status_update"),
+    "waba",
+  );
+  assert.equal(whatsappChangeIdentityScope("messages"), "phone");
+  assert.equal(whatsappChangeIdentityScope("history"), "phone");
+  assert.equal(
+    whatsappChangeIdentityScope("phone_number_quality_update"),
+    "phone",
+  );
+  assert.equal(whatsappChangeIdentityScope("future_meta_field"), "unknown");
+});
+
+test("routes PARTNER_REMOVED by its explicit WABA and sanitizes disconnection info", () => {
+  assert.deepEqual(
+    metaAccountUpdateIdentity("1111111111", {
+      event: "PARTNER_REMOVED",
+      waba_info: {
+        waba_id: "2222222222",
+        owner_business_id: "3333333333",
+      },
+      disconnection_info: {
+        reason: "PRIMARY_INACTIVITY",
+        initiated_by: "SYSTEM",
+      },
+    }),
+    {
+      wabaId: "2222222222",
+      ownerBusinessId: "3333333333",
+      disconnectionReason: "PRIMARY_INACTIVITY",
+      disconnectionInitiatedBy: "SYSTEM",
+    },
+  );
+  assert.deepEqual(
+    metaAccountUpdateIdentity("1111111111", {
+      event: "ACCOUNT_OFFBOARDED",
+    }),
+    {
+      wabaId: "1111111111",
+      ownerBusinessId: null,
+      disconnectionReason: null,
+      disconnectionInitiatedBy: null,
+    },
+  );
+  assert.equal(
+    metaAccountUpdateIdentity("1111111111", {
+      event: "PARTNER_REMOVED",
+      disconnection_info: {
+        reason: "sensitive free-form detail",
+        initiated_by: "OTHER",
+      },
+    }),
+    null,
+  );
+});
+
 test("builds a stable duplicate key and safe metadata", async () => {
   const { field, value } = onlyChange(stateSyncFixture);
   const first = await metaChangeEventId(TEST_WABA_ID, field, value);
@@ -230,10 +351,62 @@ test("builds a stable duplicate key and safe metadata", async () => {
       event: "changed",
     }),
   );
+  const firstLifecycle = await metaChangeEventId(
+    TEST_WABA_ID,
+    "account_update",
+    { event: "PARTNER_REMOVED" },
+    1_800_000_000,
+  );
+  assert.equal(
+    firstLifecycle,
+    await metaChangeEventId(
+      TEST_WABA_ID,
+      "account_update",
+      { event: "PARTNER_REMOVED" },
+      "1800000000",
+    ),
+  );
+  assert.notEqual(
+    firstLifecycle,
+    await metaChangeEventId(
+      TEST_WABA_ID,
+      "account_update",
+      { event: "PARTNER_REMOVED" },
+      1_800_000_001,
+    ),
+  );
+  assert.deepEqual(metaWebhookEntryTimestamp("1800000000"), {
+    iso: new Date(1_800_000_000 * 1_000).toISOString(),
+    unix: "1800000000",
+  });
+  assert.equal(metaWebhookEntryTimestamp("not-a-timestamp"), null);
 
-  const metadata = safeWebhookMetadata(TEST_WABA_ID, field, value);
+  const metadata = safeWebhookMetadata(
+    TEST_WABA_ID,
+    field,
+    value,
+    1_800_000_000,
+  );
   assert.deepEqual(metadata.counts, { state_sync: 2 });
+  assert.equal(
+    metadata.entry_time,
+    new Date(1_800_000_000 * 1_000).toISOString(),
+  );
   assert.equal("state_sync" in metadata, false);
+});
+
+test("only treats the explicit stale sync authorization error as ignorable", () => {
+  assert.equal(
+    isIgnorableCoexistenceSyncRejection(
+      "RPC failed: WHATSAPP_COEXISTENCE_SYNC_EVENT_NOT_AUTHORIZED",
+    ),
+    true,
+  );
+  assert.equal(
+    isIgnorableCoexistenceSyncRejection("WHATSAPP_COEXISTENCE_EVENT_INVALID"),
+    false,
+  );
+  assert.equal(isIgnorableCoexistenceSyncRejection(null), false);
 });
 
 test("normalizes history messages without requiring `to` or delivery order", () => {

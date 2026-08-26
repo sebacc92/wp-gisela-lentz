@@ -65,6 +65,53 @@ export interface MetaValue extends MetaJson {
   message_template_language?: string;
   reason?: string;
   ban_info?: { waba_ban_state?: string; waba_ban_date?: string };
+  waba_info?: {
+    waba_id?: string;
+    owner_business_id?: string;
+  };
+  disconnection_info?: {
+    reason?: string;
+    initiated_by?: string;
+  };
+}
+
+export interface MetaAccountUpdateIdentity {
+  wabaId: string;
+  ownerBusinessId: string | null;
+  disconnectionReason: string | null;
+  disconnectionInitiatedBy: "USER" | "SYSTEM" | null;
+}
+
+export function metaAccountUpdateIdentity(
+  entryId: string,
+  value: MetaValue,
+): MetaAccountUpdateIdentity | null {
+  if (!/^[0-9]{5,64}$/.test(entryId)) return null;
+  const explicitWabaId = value.waba_info?.waba_id;
+  const ownerBusinessId = value.waba_info?.owner_business_id;
+  const reason = value.disconnection_info?.reason;
+  const initiatedBy = value.disconnection_info?.initiated_by;
+  if (
+    (explicitWabaId !== undefined &&
+      (typeof explicitWabaId !== "string" ||
+        !/^[0-9]{5,64}$/.test(explicitWabaId))) ||
+    (ownerBusinessId !== undefined &&
+      (typeof ownerBusinessId !== "string" ||
+        !/^[0-9]{5,64}$/.test(ownerBusinessId))) ||
+    (reason !== undefined &&
+      (typeof reason !== "string" || !/^[A-Z0-9_]{3,80}$/.test(reason))) ||
+    (initiatedBy !== undefined &&
+      initiatedBy !== "USER" &&
+      initiatedBy !== "SYSTEM")
+  ) {
+    return null;
+  }
+  return {
+    wabaId: explicitWabaId ?? entryId,
+    ownerBusinessId: ownerBusinessId ?? null,
+    disconnectionReason: reason ?? null,
+    disconnectionInitiatedBy: initiatedBy ?? null,
+  };
 }
 
 export interface MetaChange {
@@ -76,8 +123,34 @@ export interface MetaWebhook {
   object?: string;
   entry?: Array<{
     id?: string;
+    time?: string | number;
     changes?: MetaChange[];
   }>;
+}
+
+/**
+ * Resolve the phone identity carried by one Meta change. A direct identifier
+ * and metadata identifier may both be present, but they must agree. Keeping
+ * this change-scoped prevents an unrelated change in the same entry from
+ * supplying its phone number.
+ */
+export function metaChangePhoneNumberId(change: MetaChange): string | null {
+  const metadataId = change.value?.metadata?.phone_number_id;
+  const directId = change.value?.phone_number_id;
+  if (
+    metadataId !== undefined &&
+    (typeof metadataId !== "string" || !/^[0-9]{5,64}$/.test(metadataId))
+  ) {
+    return null;
+  }
+  if (
+    directId !== undefined &&
+    (typeof directId !== "string" || !/^[0-9]{5,64}$/.test(directId))
+  ) {
+    return null;
+  }
+  if (metadataId && directId && metadataId !== directId) return null;
+  return metadataId ?? directId ?? null;
 }
 
 export const COEXISTENCE_FIELDS = new Set([
@@ -170,6 +243,18 @@ export function routeWhatsAppChange(field: string): WhatsAppChangeRoute {
   return "unknown";
 }
 
+export function whatsappChangeIdentityScope(
+  field: string,
+): "phone" | "waba" | "unknown" {
+  if (
+    PHONE_SCOPED_FIELDS.has(field) ||
+    field === "phone_number_quality_update"
+  ) {
+    return "phone";
+  }
+  return OPERATIONAL_FIELDS.has(field) ? "waba" : "unknown";
+}
+
 export function isExpectedWhatsAppBusinessAccount(
   entryId: unknown,
   expectedWabaId: string,
@@ -217,12 +302,39 @@ export async function metaChangeEventId(
   entryId: string,
   field: string,
   value: MetaValue,
+  entryTime?: string | number,
 ): Promise<string> {
+  const normalizedEntryTime =
+    metaWebhookEntryTimestamp(entryTime)?.unix ?? null;
   const bytes = new TextEncoder().encode(
-    JSON.stringify({ entryId, field, value }),
+    JSON.stringify({ entryId, field, entryTime: normalizedEntryTime, value }),
   );
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `change:${field}:${hexadecimal(digest)}`;
+}
+
+export function metaWebhookEntryTimestamp(
+  timestamp?: string | number,
+): { iso: string; unix: string } | null {
+  const raw =
+    typeof timestamp === "number"
+      ? timestamp
+      : typeof timestamp === "string" && /^[0-9]{1,13}$/.test(timestamp)
+        ? Number(timestamp)
+        : Number.NaN;
+  if (!Number.isSafeInteger(raw) || raw < 0 || raw > 8_640_000_000_000) {
+    return null;
+  }
+  const date = new Date(raw * 1_000);
+  if (!Number.isFinite(date.getTime())) return null;
+  return { iso: date.toISOString(), unix: String(raw) };
+}
+
+export function isIgnorableCoexistenceSyncRejection(message: unknown): boolean {
+  return (
+    typeof message === "string" &&
+    message.includes("WHATSAPP_COEXISTENCE_SYNC_EVENT_NOT_AUTHORIZED")
+  );
 }
 
 export function isTrustedWhatsAppChange(
@@ -230,25 +342,19 @@ export function isTrustedWhatsAppChange(
   value: MetaValue,
   expectedPhoneNumberId: string,
 ): boolean {
-  const metadataPhoneId = value.metadata?.phone_number_id;
-  const directPhoneId = value.phone_number_id;
+  const actualPhoneNumberId = metaChangePhoneNumberId({ field, value });
 
-  // Every currently documented message/coexistence payload is phone scoped.
-  // Requiring both fields avoids accepting an event for a second number that
-  // belongs to the same signed Meta app and WABA.
   if (PHONE_SCOPED_FIELDS.has(field)) {
     return (
       value.messaging_product === "whatsapp" &&
-      metadataPhoneId === expectedPhoneNumberId &&
-      (!directPhoneId || directPhoneId === expectedPhoneNumberId)
+      actualPhoneNumberId === expectedPhoneNumberId
     );
   }
 
-  if (metadataPhoneId && metadataPhoneId !== expectedPhoneNumberId) {
-    return false;
-  }
-  if (directPhoneId && directPhoneId !== expectedPhoneNumberId) return false;
-  return true;
+  return (
+    actualPhoneNumberId === null ||
+    actualPhoneNumberId === expectedPhoneNumberId
+  );
 }
 
 export function metaEventTimestamp(timestamp?: string | number): string {
@@ -328,6 +434,7 @@ export function safeWebhookMetadata(
   entryId: string,
   field: string,
   value: MetaValue,
+  entryTime?: string | number,
 ): Record<string, unknown> {
   const collections = [
     "messages",
@@ -349,6 +456,7 @@ export function safeWebhookMetadata(
     phone_number_id:
       value.metadata?.phone_number_id ?? value.phone_number_id ?? null,
     messaging_product: value.messaging_product ?? null,
+    entry_time: metaWebhookEntryTimestamp(entryTime)?.iso ?? null,
     counts,
   };
 }

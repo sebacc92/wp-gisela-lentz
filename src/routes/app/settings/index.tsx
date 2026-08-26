@@ -7,6 +7,7 @@ import {
 } from "@qwik.dev/core";
 import { Link, type DocumentHead, useLocation } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { WhatsAppEmbeddedSignup } from "~/components/settings/WhatsAppEmbeddedSignup";
 import { Icon } from "~/components/ui/Icon";
 import { BUSINESS_CONFIG, getPageTitle } from "~/config/business";
 import { getSupabaseClient } from "~/lib/supabase/client";
@@ -2201,6 +2202,12 @@ export default component$(() => {
                     <button
                       class="secondary-button"
                       type="button"
+                      disabled={!state.isAdmin}
+                      title={
+                        state.isAdmin
+                          ? "Verificar la cuenta de WhatsApp"
+                          : "Sólo una administradora puede verificar la conexión"
+                      }
                       onClick$={async () => {
                         const { data, error } =
                           await getSupabaseClient().functions.invoke(
@@ -2246,6 +2253,9 @@ export default component$(() => {
                       <Icon name="file" size={17} /> Mensajes para WhatsApp
                     </Link>
                   </div>
+                  {state.isAdmin && (
+                    <WhatsAppEmbeddedSignup isAdmin={state.isAdmin} />
+                  )}
                 </section>
               )}
 

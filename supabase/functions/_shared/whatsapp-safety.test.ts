@@ -6,6 +6,7 @@ import {
   isAutomaticWhatsAppSource,
   isCausallyOwnedManualAutomationNotice,
   isOperatorWhatsAppPurpose,
+  isRetryableWhatsAppAutomationFailure,
   isWhatsAppTestRecipientAllowed,
   normalizeWhatsAppNumber,
   operatorSourceForPurpose,
@@ -15,6 +16,7 @@ import {
   whatsAppPolicyCode,
   whatsappRecipient,
 } from "./whatsapp.ts";
+import { WhatsAppCredentialResolutionError } from "./whatsapp-account-credentials.ts";
 
 test("prioriza el BSUID opaco como destinatario de Graph", () => {
   assert.equal(
@@ -125,6 +127,26 @@ test("reconoce la barrera SQL de modo manual como política no reintentable", ()
     "AUTOMATION_PAUSED",
   );
   assert.equal(whatsAppPolicyCode({ message: "DB_TIMEOUT" }), null);
+});
+
+test("automatización distingue credenciales transitorias de barreras terminales", () => {
+  assert.equal(
+    isRetryableWhatsAppAutomationFailure(
+      new WhatsAppCredentialResolutionError(
+        "WHATSAPP_CREDENTIAL_RESOLUTION_FAILED",
+        { retryable: true },
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    isRetryableWhatsAppAutomationFailure(
+      new WhatsAppCredentialResolutionError(
+        "WHATSAPP_BUSINESS_CREDENTIAL_ACCOUNT_BLOCKED",
+      ),
+    ),
+    false,
+  );
 });
 
 test("el navegador sólo puede elegir propósitos manuales allowlisted", () => {

@@ -30,6 +30,8 @@ WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_BUSINESS_ACCOUNT_ID=
 WHATSAPP_GRAPH_API_VERSION=
 WHATSAPP_MEDIA_MAX_BYTES=10485760
+META_APP_ID=
+META_EMBEDDED_SIGNUP_CONFIG_ID=
 META_APP_SECRET=
 META_WEBHOOK_VERIFY_TOKEN=
 WHATSAPP_WEBHOOK_MAX_BYTES=3145728
@@ -41,6 +43,7 @@ WHATSAPP_COEXISTENCE_ITEMS_PER_RUN=100
 REMINDER_CRON_SECRET=
 APP_ALLOWED_ORIGINS=https://URL_NUEVA_DE_VERCEL
 WHATSAPP_AUTOMATIONS_ENABLED=false
+WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false
 WHATSAPP_TEST_MODE=true
 WHATSAPP_TEST_ALLOWED_NUMBERS=NUMERO_PROPIO_E164
 ```
@@ -54,6 +57,12 @@ Reglas:
   ser distinto del existente de automatización y de los secretos de cron;
 - usar orígenes HTTPS exactos, separados por coma, sin wildcard;
 - mantener test mode activo y una allowlist mínima durante toda la integración.
+- mantener `WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false` hasta la autorización
+  específica del onboarding. Si falta o no vale literalmente `true`, backend y
+  frontend deben fallar cerrado sin cargar Facebook Login;
+- no crear un token global del Tech Provider. `/debug_token` se autentica con
+  un App Access Token efímero generado server-side a partir de `META_APP_ID` y
+  `META_APP_SECRET`; cada operación WABA usa el business token de ese cliente;
 - `WHATSAPP_MEDIA_MAX_BYTES` limita también el stream descargado para revisar
   comprobantes (10 MiB recomendado; máximo admitido por la función: 20 MiB).
 - `WHATSAPP_WEBHOOK_MAX_BYTES` limita el body mientras se lee el stream, antes
@@ -85,6 +94,9 @@ Sólo después del preflight, aplicar y validar las migraciones en este orden:
 2. `20260826130000_whatsapp_automation_idempotency.sql`
 3. `20260826140000_whatsapp_bsuid_and_live_promotion.sql`
 4. `20260826150000_whatsapp_automation_causal_pause.sql`
+5. `20260826160000_whatsapp_recovery_schedule.sql`
+6. `20260826170000_whatsapp_embedded_signup.sql` (sólo tras revisión y
+   autorización específica)
 
 Después desplegar las funciones consumidoras en este orden. Es importante que
 `whatsapp-automation` quede actualizado antes del outbox y que el webhook sea
@@ -95,6 +107,7 @@ pnpm exec supabase functions deploy whatsapp-send
 pnpm exec supabase functions deploy whatsapp-media
 pnpm exec supabase functions deploy whatsapp-automation
 pnpm exec supabase functions deploy process-whatsapp-automation-outbox
+pnpm exec supabase functions deploy whatsapp-embedded-signup
 pnpm exec supabase functions deploy process-whatsapp-coexistence
 pnpm exec supabase functions deploy whatsapp-webhook
 pnpm exec supabase functions deploy process-reminders
@@ -113,11 +126,15 @@ https://NUEVO_PROJECT_REF.supabase.co/functions/v1/whatsapp-webhook
 2. Pegar exactamente el valor de `META_WEBHOOK_VERIFY_TOKEN` como Verify token.
 3. Suscribir `messages`. Para un número habilitado mediante Coexistence,
    suscribir además `history`, `smb_app_state_sync` y `smb_message_echoes`.
-4. Para salud y cortes preventivos, suscribir también, cuando estén disponibles:
-   `phone_number_quality_update`, `account_update`, `account_review_update`,
+4. Antes de ejecutar Embedded Signup, confirmar `account_update`: la
+   documentación vigente de Meta lo requiere para observar alta, desconexión y
+   reconexión. La captura suministrada lo muestra como **Subscribed**; esta fase
+   no realizó llamadas Graph ni cambios en Meta para volver a suscribirlo.
+5. Para salud y cortes preventivos, suscribir también, cuando estén disponibles:
+   `phone_number_quality_update`, `account_review_update`,
    `message_template_status_update`, `message_template_quality_update` y
    `business_capability_update`.
-5. Completar **Verify and save**.
+6. Completar **Verify and save**.
 
 El GET de verificación sólo responde con el token correcto. Cada POST requiere
 `X-Hub-Signature-256` válido. Aun con una firma válida, una entrada cuyo WABA o
@@ -230,6 +247,12 @@ La recepción, cola durable e importación están implementadas, pero esta guía
 autoriza ejecutar Embedded Signup, registrar ni migrar el número real. Antes de
 esa operación seguir el checklist, cron de recuperación, monitoreo y rollback de
 [WhatsApp Business App Coexistence](./whatsapp-coexistence.md).
+
+El flujo v4 navegador/backend, intercambio de código, token por cliente en
+Vault, validación de activos, sincronización dentro de 24 horas y offboarding
+están especificados en
+[Embedded Signup v4 para WhatsApp Coexistence](./whatsapp-embedded-signup.md).
+Esa guía es preparatoria: no autoriza abrir Facebook Login ni modificar Meta.
 
 La implementación acepta identidad dual BSUID/teléfono, follow-ups de medios de
 history (`messages[]` inbound y `message_echoes[]` outbound), promoción atómica

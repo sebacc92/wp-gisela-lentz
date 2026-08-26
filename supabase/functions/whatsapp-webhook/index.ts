@@ -12,9 +12,13 @@ import {
   configuredWebhookBodyLimit,
   decodeWhatsAppWebhookBody,
   isExpectedWhatsAppBusinessAccount,
+  isIgnorableCoexistenceSyncRejection,
   isTrustedWhatsAppChange,
+  metaAccountUpdateIdentity,
+  metaChangePhoneNumberId,
   metaChangeEventId,
   metaEventTimestamp,
+  metaWebhookEntryTimestamp,
   metaStatusRecipientUserId,
   normalizeWhatsAppPhone,
   normalizeWhatsAppUserId,
@@ -22,13 +26,27 @@ import {
   routeWhatsAppChange,
   safeWebhookMetadata,
   verifyMetaSignature,
+  whatsappChangeIdentityScope,
   WhatsAppWebhookPayloadTooLargeError,
   type MetaMessage,
+  type MetaChange,
   type MetaStatus,
   type MetaValue,
   type MetaWebhook,
+  type MetaAccountUpdateIdentity,
 } from "../_shared/whatsapp-webhook.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isWhatsAppLegacyCredentialsDisabledError(
+  message: string,
+): boolean {
+  return /\bWHATSAPP_(?:ACCOUNT_ROUTING_REQUIRED|LEGACY_MODE_DISABLED|LEGACY_CREDENTIALS_DISABLED)\b/.test(
+    message,
+  );
+}
 
 function messageContent(message: MetaMessage): {
   type: "text" | "interactive" | "image" | "document";
@@ -81,12 +99,6 @@ function messageContent(message: MetaMessage): {
     body: message.text?.body ?? "Mensaje no compatible",
     metadata: { original_type: message.type ?? "unknown" },
   };
-}
-
-function requiredEnv(name: string): string {
-  const value = Deno.env.get(name)?.trim();
-  if (!value) throw new Error(`CONFIGURATION_INCOMPLETE:${name}`);
-  return value;
 }
 
 async function claimWebhookEvent(
@@ -187,27 +199,95 @@ async function recordQueuedWebhookEvent(
   if (error && error.code !== "23505") throw error;
 }
 
-async function ensureCoexistenceAccount(
+interface ResolvedWebhookAccount {
+  accountId: string | null;
+  wabaId: string;
+  phoneNumberId: string;
+}
+
+export function managedCoexistenceWebhookAccountId(
+  account: Pick<ResolvedWebhookAccount, "accountId"> | null,
+): string | null {
+  return account?.accountId && UUID_PATTERN.test(account.accountId)
+    ? account.accountId
+    : null;
+}
+
+async function resolveWebhookAccount(
   client: SupabaseClient,
   wabaId: string,
   phoneNumberId: string,
-  displayPhone: string | undefined,
-): Promise<string> {
-  const { data, error } = await client.rpc(
-    "upsert_whatsapp_coexistence_account",
-    {
-      p_waba_id: wabaId,
-      p_phone_number_id: phoneNumberId,
-      p_display_phone: displayPhone ?? null,
-      p_coexistence_status: "active",
-      p_metadata: { observed_from: "signed_webhook" },
-    },
-  );
-  const row = (Array.isArray(data) ? data[0] : data) as { id?: string } | null;
-  if (error || !row?.id) {
-    throw new Error(`COEXISTENCE_ACCOUNT_FAILED:${error?.message ?? "NO_ROW"}`);
+  cache: Map<string, Promise<ResolvedWebhookAccount | null>>,
+  legacyAllowed: () => Promise<boolean>,
+): Promise<ResolvedWebhookAccount | null> {
+  if (!/^[0-9]{5,64}$/.test(wabaId) || !/^[0-9]{5,64}$/.test(phoneNumberId)) {
+    return null;
   }
-  return row.id;
+
+  const cacheKey = `${wabaId}\u0000${phoneNumberId}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return await cached;
+
+  const resolution = (async (): Promise<ResolvedWebhookAccount | null> => {
+    const resolved = await client.rpc(
+      "resolve_whatsapp_coexistence_webhook_account",
+      { p_waba_id: wabaId, p_phone_number_id: phoneNumberId },
+    );
+    if (resolved.error) {
+      throw new Error("WHATSAPP_WEBHOOK_ACCOUNT_LOOKUP_FAILED");
+    }
+    if (typeof resolved.data === "string" && UUID_PATTERN.test(resolved.data)) {
+      return { accountId: resolved.data, wabaId, phoneNumberId };
+    }
+
+    // Preserve the existing test/legacy number until its explicitly authorized
+    // credential cut-over. New Embedded Signup accounts are resolved in SQL.
+    const legacyWabaId = Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID")?.trim();
+    const legacyPhoneNumberId = Deno.env
+      .get("WHATSAPP_PHONE_NUMBER_ID")
+      ?.trim();
+    return (await legacyAllowed()) &&
+      isExpectedWhatsAppBusinessAccount(wabaId, legacyWabaId ?? "") &&
+      phoneNumberId === legacyPhoneNumberId
+      ? { accountId: null, wabaId, phoneNumberId }
+      : null;
+  })();
+  cache.set(cacheKey, resolution);
+  return await resolution;
+}
+
+type OperationalWabaTrust = "embedded" | "legacy" | null;
+
+async function operationalWabaTrust(
+  client: SupabaseClient,
+  wabaId: unknown,
+  cache: Map<string, Promise<OperationalWabaTrust>>,
+  legacyAllowed: () => Promise<boolean>,
+): Promise<OperationalWabaTrust> {
+  if (typeof wabaId !== "string" || !/^[0-9]{5,64}$/.test(wabaId)) {
+    return null;
+  }
+  const cached = cache.get(wabaId);
+  if (cached) return await cached;
+  const resolution = (async () => {
+    const result = await client.rpc(
+      "is_trusted_whatsapp_coexistence_webhook_waba",
+      { p_waba_id: wabaId },
+    );
+    if (result.error) {
+      throw new Error("WHATSAPP_WEBHOOK_WABA_LOOKUP_FAILED");
+    }
+    if (result.data === true) return "embedded";
+    return (await legacyAllowed()) &&
+      isExpectedWhatsAppBusinessAccount(
+        wabaId,
+        Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID")?.trim() ?? "",
+      )
+      ? "legacy"
+      : null;
+  })();
+  cache.set(wabaId, resolution);
+  return await resolution;
 }
 
 async function enqueueCoexistenceChange(
@@ -217,7 +297,7 @@ async function enqueueCoexistenceChange(
   field: string,
   value: MetaValue,
   metadata: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   const { error } = await client.rpc("enqueue_whatsapp_coexistence_event", {
     p_account_id: accountId,
     p_external_event_id: externalEventId,
@@ -225,45 +305,41 @@ async function enqueueCoexistenceChange(
     p_payload: value,
     p_metadata: metadata,
   });
-  if (error) throw new Error(`COEXISTENCE_ENQUEUE_FAILED:${error.message}`);
+  if (error) {
+    if (isIgnorableCoexistenceSyncRejection(error.message)) return false;
+    throw new Error(`COEXISTENCE_ENQUEUE_FAILED:${error.message}`);
+  }
+  return true;
 }
 
-async function pauseAutomationForAppEchoes(
+async function pauseAutomationForAppEcho(
   client: SupabaseClient,
-  payload: MetaWebhook,
-  expectedWabaId: string,
+  change: MetaChange,
+  accountId: string,
   expectedPhoneNumberId: string,
+  seen: Set<string>,
 ): Promise<void> {
-  const seen = new Set<string>();
-  for (const entry of payload.entry ?? []) {
-    if (!isExpectedWhatsAppBusinessAccount(entry.id, expectedWabaId)) continue;
-    for (const change of entry.changes ?? []) {
-      if (
-        change.field !== "smb_message_echoes" ||
-        !change.value ||
-        !isTrustedWhatsAppChange(
-          change.field,
-          change.value,
-          expectedPhoneNumberId,
-        )
-      ) {
-        continue;
-      }
-      for (const identity of appEchoContactIdentities(change.value)) {
-        const key = `${identity.whatsappUserId ?? ""}\u0000${identity.phoneE164 ?? ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const { error } = await client.rpc(
-          "pause_whatsapp_automation_for_app_echo",
-          {
-            p_phone_e164: identity.phoneE164,
-            p_whatsapp_user_id: identity.whatsappUserId,
-          },
-        );
-        if (error) {
-          throw new Error(`APP_ECHO_PAUSE_FAILED:${error.message}`);
-        }
-      }
+  if (
+    change.field !== "smb_message_echoes" ||
+    !change.value ||
+    !isTrustedWhatsAppChange(change.field, change.value, expectedPhoneNumberId)
+  ) {
+    return;
+  }
+  for (const identity of appEchoContactIdentities(change.value)) {
+    const key = `${identity.whatsappUserId ?? ""}\u0000${identity.phoneE164 ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const { error } = await client.rpc(
+      "pause_whatsapp_automation_for_app_echo",
+      {
+        p_account_id: accountId,
+        p_phone_e164: identity.phoneE164,
+        p_whatsapp_user_id: identity.whatsappUserId,
+      },
+    );
+    if (error) {
+      throw new Error(`APP_ECHO_PAUSE_FAILED:${error.message}`);
     }
   }
 }
@@ -331,14 +407,46 @@ async function processQualityUpdate(
   if (error) throw error;
 }
 
-async function processAccountUpdate(
+export async function processAccountUpdate(
   client: SupabaseClient,
   value: MetaValue,
+  wabaId: string,
+  eventAt: string,
+  persistEmbeddedLifecycle: boolean,
+  identity: MetaAccountUpdateIdentity | null = null,
 ): Promise<void> {
   const event = (
     value.ban_info?.waba_ban_state ?? normalizedEvent(value)
   ).toUpperCase();
   if (
+    persistEmbeddedLifecycle &&
+    ["PARTNER_REMOVED", "ACCOUNT_OFFBOARDED", "ACCOUNT_RECONNECTED"].includes(
+      event,
+    )
+  ) {
+    const lifecycle = await client.rpc(
+      "apply_whatsapp_coexistence_account_update",
+      {
+        p_waba_id: wabaId,
+        p_event: event,
+        p_event_at: eventAt,
+        p_owner_business_id: identity?.ownerBusinessId ?? null,
+        p_disconnection_reason: identity?.disconnectionReason ?? null,
+        p_disconnection_initiated_by:
+          identity?.disconnectionInitiatedBy ?? null,
+      },
+    );
+    if (lifecycle.error) {
+      throw new Error("WHATSAPP_ACCOUNT_UPDATE_PERSIST_FAILED");
+    }
+  }
+  // An Embedded-managed WABA is isolated at the account boundary by the RPC.
+  // The singleton legacy kill switch must never pause unrelated managed
+  // accounts, including for an event this runtime does not yet recognize.
+  if (persistEmbeddedLifecycle) return;
+  if (
+    event === "PARTNER_REMOVED" ||
+    event === "ACCOUNT_OFFBOARDED" ||
     /(DISABL|BLOCK|BAN|SUSPEND|RESTRICT|VIOLATION|FLAGGED|DELET|REJECT)/.test(
       event,
     )
@@ -547,7 +655,9 @@ async function scheduleCoexistenceProcessor(): Promise<void> {
   await task;
 }
 
-Deno.serve(async (request) => {
+export async function handleWhatsAppWebhookRequest(
+  request: Request,
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (request.method === "GET") {
@@ -606,77 +716,245 @@ Deno.serve(async (request) => {
     return jsonResponse(request, { received: true, ignored: true });
   }
 
-  let expectedWabaId: string;
-  let expectedPhoneNumberId: string;
-  try {
-    expectedWabaId = requiredEnv("WHATSAPP_BUSINESS_ACCOUNT_ID");
-    expectedPhoneNumberId = requiredEnv("WHATSAPP_PHONE_NUMBER_ID");
-  } catch (error) {
-    console.error("whatsapp-webhook", safeErrorMessage(error));
-    return jsonResponse(request, { error: "CONFIGURATION_INCOMPLETE" }, 500);
-  }
-
   const client = createServiceClient();
   const automationsEnabled = whatsappAutomationsEnabled();
+  const accountResolutionCache = new Map<
+    string,
+    Promise<ResolvedWebhookAccount | null>
+  >();
+  const trustedWabaCache = new Map<string, Promise<OperationalWabaTrust>>();
+  let legacyAllowedPromise: Promise<boolean> | null = null;
+  const legacyAllowed = (): Promise<boolean> => {
+    legacyAllowedPromise ??= (async () => {
+      const result = await client.rpc("resolve_whatsapp_account_credentials", {
+        p_purpose: "management",
+        p_account_id: null,
+        p_waba_id: null,
+        p_phone_number_id: null,
+        p_conversation_id: null,
+        p_expected_token_generation: null,
+      });
+      if (result.error) {
+        if (isWhatsAppLegacyCredentialsDisabledError(result.error.message)) {
+          return false;
+        }
+        throw new Error("WHATSAPP_LEGACY_MODE_LOOKUP_FAILED");
+      }
+      const row = Array.isArray(result.data) ? result.data[0] : result.data;
+      return (
+        row !== null &&
+        typeof row === "object" &&
+        (row as { credential_mode?: unknown }).credential_mode === "legacy"
+      );
+    })();
+    return legacyAllowedPromise;
+  };
   let queuedAutomationDispatches = 0;
-  let coexistenceAccountId: string | null = null;
   let queuedCoexistenceEvents = 0;
   let ignoredEntries = 0;
   let ignoredChanges = 0;
 
   try {
-    // An app-originated echo is the durable signal that a human took control.
-    // Apply that pause for every trusted change before any live inbound change
-    // in this delivery can release an automation dispatch.
-    await pauseAutomationForAppEchoes(
-      client,
-      payload,
-      expectedWabaId,
-      expectedPhoneNumberId,
-    );
-
     for (const entry of payload.entry ?? []) {
       // The signature proves the request came from the configured Meta app. The
-      // WABA and phone checks additionally prevent a valid multi-account app
-      // event from mutating this tenant.
+      // SQL account lookup additionally prevents a valid multi-account app
+      // event from mutating an account this tenant did not onboard.
       const entryId = entry.id;
-      if (!isExpectedWhatsAppBusinessAccount(entryId, expectedWabaId)) {
+      if (typeof entryId !== "string" || !/^[0-9]{5,64}$/.test(entryId)) {
         ignoredEntries += 1;
         continue;
       }
+      const entryTimestamp = metaWebhookEntryTimestamp(entry.time);
+
+      const contexts: Array<{
+        field: string;
+        value: MetaValue;
+        wabaId: string;
+        accountUpdateIdentity: MetaAccountUpdateIdentity | null;
+        route: ReturnType<typeof routeWhatsAppChange>;
+        resolvedAccount: ResolvedWebhookAccount | null;
+        embeddedWaba: boolean;
+      }> = [];
 
       for (const change of entry.changes ?? []) {
         if (!change.field || !change.value) continue;
+        const field = change.field;
         const value = change.value;
+        const route = routeWhatsAppChange(field);
+        const accountUpdateIdentity =
+          field === "account_update"
+            ? metaAccountUpdateIdentity(entryId, value)
+            : null;
+        if (field === "account_update" && accountUpdateIdentity === null) {
+          ignoredChanges += 1;
+          continue;
+        }
+        const changeWabaId = accountUpdateIdentity?.wabaId ?? entryId;
         if (
-          !isTrustedWhatsAppChange(change.field, value, expectedPhoneNumberId)
+          [
+            "account_update",
+            "account_review_update",
+            "business_capability_update",
+          ].includes(field) &&
+          !entryTimestamp
         ) {
           ignoredChanges += 1;
           continue;
         }
+        const identityScope = whatsappChangeIdentityScope(field);
+        const phoneNumberId = metaChangePhoneNumberId(change);
+        const hasPhoneIdentity =
+          value.metadata?.phone_number_id !== undefined ||
+          value.phone_number_id !== undefined;
+        const resolvedAccount = phoneNumberId
+          ? await resolveWebhookAccount(
+              client,
+              changeWabaId,
+              phoneNumberId,
+              accountResolutionCache,
+              legacyAllowed,
+            )
+          : null;
 
-        const route = routeWhatsAppChange(change.field);
-        if (route === "coexistence") {
-          const eventId = await metaChangeEventId(entryId, change.field, value);
-          coexistenceAccountId ??= await ensureCoexistenceAccount(
+        let trusted = false;
+        let embeddedWaba = resolvedAccount?.accountId != null;
+        if (identityScope === "phone") {
+          trusted =
+            resolvedAccount !== null &&
+            isTrustedWhatsAppChange(
+              field,
+              value,
+              resolvedAccount.phoneNumberId,
+            );
+        } else if (identityScope === "waba") {
+          // Account and template lifecycle events are WABA-scoped. In
+          // particular, account_update does not carry a phone_number_id.
+          const wabaTrust = await operationalWabaTrust(
             client,
-            entryId,
-            expectedPhoneNumberId,
-            value.metadata?.display_phone_number,
+            changeWabaId,
+            trustedWabaCache,
+            legacyAllowed,
           );
-          const metadata = safeWebhookMetadata(entryId, change.field, value);
-          await enqueueCoexistenceChange(
+          trusted = wabaTrust !== null;
+          embeddedWaba = wabaTrust === "embedded";
+        } else if (hasPhoneIdentity) {
+          // Unknown phone-scoped changes are recorded only when this exact
+          // WABA/phone pair belongs to the tenant. Invalid or conflicting IDs
+          // never fall back to another change in the entry.
+          trusted =
+            resolvedAccount !== null &&
+            isTrustedWhatsAppChange(
+              field,
+              value,
+              resolvedAccount.phoneNumberId,
+            );
+        } else {
+          const wabaTrust = await operationalWabaTrust(
             client,
-            coexistenceAccountId,
+            changeWabaId,
+            trustedWabaCache,
+            legacyAllowed,
+          );
+          trusted = wabaTrust !== null;
+          embeddedWaba = wabaTrust === "embedded";
+        }
+
+        if (!trusted) {
+          ignoredChanges += 1;
+          continue;
+        }
+        contexts.push({
+          field,
+          value,
+          wabaId: changeWabaId,
+          accountUpdateIdentity,
+          route,
+          resolvedAccount,
+          embeddedWaba,
+        });
+      }
+
+      // An app-originated echo is the durable signal that a human took control.
+      // Apply it before a live message in the same signed delivery can release
+      // an automation dispatch.
+      const pausedEchoIdentities = new Set<string>();
+      for (const context of contexts) {
+        const managedAccountId = managedCoexistenceWebhookAccountId(
+          context.resolvedAccount,
+        );
+        if (context.resolvedAccount && managedAccountId) {
+          await pauseAutomationForAppEcho(
+            client,
+            { field: context.field, value: context.value },
+            managedAccountId,
+            context.resolvedAccount.phoneNumberId,
+            pausedEchoIdentities,
+          );
+        }
+      }
+
+      for (const context of contexts) {
+        const {
+          field,
+          value,
+          wabaId,
+          accountUpdateIdentity,
+          route,
+          resolvedAccount,
+          embeddedWaba,
+        } = context;
+        if (route === "coexistence") {
+          if (!resolvedAccount) throw new Error("WEBHOOK_ACCOUNT_REQUIRED");
+          const managedAccountId =
+            managedCoexistenceWebhookAccountId(resolvedAccount);
+          const eventId = await metaChangeEventId(
+            wabaId,
+            field,
+            value,
+            entry.time,
+          );
+          const metadata = safeWebhookMetadata(
+            wabaId,
+            field,
+            value,
+            entry.time,
+          );
+          // Coexistence-only fields are authorized by a completed/onboarding
+          // per-account credential. A signed event for the legacy identity
+          // must never manufacture a tokenless account and bind otherwise
+          // legacy conversations to it.
+          if (!managedAccountId) {
+            await recordIgnoredWebhookEvent(
+              client,
+              eventId,
+              `ignored.${field}.legacy_not_managed`,
+              metadata,
+            );
+            ignoredChanges += 1;
+            continue;
+          }
+          const enqueued = await enqueueCoexistenceChange(
+            client,
+            managedAccountId,
             eventId,
-            change.field,
+            field,
             value,
             metadata,
           );
+          if (!enqueued) {
+            await recordIgnoredWebhookEvent(
+              client,
+              eventId,
+              `ignored.${field}.not_authorized`,
+              metadata,
+            );
+            ignoredChanges += 1;
+            continue;
+          }
           await recordQueuedWebhookEvent(
             client,
             eventId,
-            `queued.${change.field}`,
+            `queued.${field}`,
             metadata,
           );
           queuedCoexistenceEvents += 1;
@@ -684,43 +962,55 @@ Deno.serve(async (request) => {
         }
 
         if (route === "unknown") {
-          const eventId = await metaChangeEventId(entryId, change.field, value);
+          const eventId = await metaChangeEventId(
+            wabaId,
+            field,
+            value,
+            entry.time,
+          );
           await recordIgnoredWebhookEvent(
             client,
             eventId,
-            `ignored.${change.field.slice(0, 120)}`,
-            safeWebhookMetadata(entryId, change.field, value),
+            `ignored.${field.slice(0, 120)}`,
+            safeWebhookMetadata(wabaId, field, value, entry.time),
           );
           ignoredChanges += 1;
           continue;
         }
 
         if (route === "operational") {
-          const eventId = await metaChangeEventId(entryId, change.field, value);
-          const claimed = await claimWebhookEvent(
-            client,
-            eventId,
-            change.field,
-            {
-              entry_id: entryId,
-              event: normalizedEvent(value),
-              template_id: value.message_template_id ?? null,
-              template_name: value.message_template_name ?? null,
-            },
+          const eventId = await metaChangeEventId(
+            wabaId,
+            field,
+            value,
+            entry.time,
           );
+          const claimed = await claimWebhookEvent(client, eventId, field, {
+            entry_id: entryId,
+            event: normalizedEvent(value),
+            template_id: value.message_template_id ?? null,
+            template_name: value.message_template_name ?? null,
+          });
           if (claimed === "duplicate") continue;
           if (claimed === "busy") throw new Error("WEBHOOK_EVENT_IN_PROGRESS");
 
           try {
-            if (change.field === "phone_number_quality_update") {
+            if (field === "phone_number_quality_update") {
               await processQualityUpdate(client, value);
             } else if (
-              change.field === "account_update" ||
-              change.field === "account_review_update" ||
-              change.field === "business_capability_update"
+              field === "account_update" ||
+              field === "account_review_update" ||
+              field === "business_capability_update"
             ) {
-              await processAccountUpdate(client, value);
-            } else if (change.field === "message_template_quality_update") {
+              await processAccountUpdate(
+                client,
+                value,
+                wabaId,
+                entryTimestamp!.iso,
+                embeddedWaba,
+                accountUpdateIdentity,
+              );
+            } else if (field === "message_template_quality_update") {
               await processTemplateQualityUpdate(client, value);
             } else {
               await processTemplateStatusUpdate(client, value);
@@ -733,44 +1023,63 @@ Deno.serve(async (request) => {
           continue;
         }
 
+        if (!resolvedAccount) throw new Error("WEBHOOK_ACCOUNT_REQUIRED");
         const mutations = liveMessageMutations(value);
         if (mutations.length) {
+          const managedAccountId =
+            managedCoexistenceWebhookAccountId(resolvedAccount);
           const mutationValue: MetaValue = {
             ...value,
             messages: mutations,
             statuses: undefined,
           };
           const eventId = await metaChangeEventId(
-            entryId,
+            wabaId,
             "messages",
             mutationValue,
-          );
-          coexistenceAccountId ??= await ensureCoexistenceAccount(
-            client,
-            entryId,
-            expectedPhoneNumberId,
-            value.metadata?.display_phone_number,
+            entry.time,
           );
           const metadata = safeWebhookMetadata(
-            entryId,
+            wabaId,
             "messages",
             mutationValue,
+            entry.time,
           );
-          await enqueueCoexistenceChange(
-            client,
-            coexistenceAccountId,
-            eventId,
-            "messages",
-            mutationValue,
-            metadata,
-          );
-          await recordQueuedWebhookEvent(
-            client,
-            eventId,
-            "queued.messages.mutation",
-            metadata,
-          );
-          queuedCoexistenceEvents += 1;
+          if (!managedAccountId) {
+            await recordIgnoredWebhookEvent(
+              client,
+              eventId,
+              "ignored.messages.mutation.legacy_not_managed",
+              metadata,
+            );
+            ignoredChanges += 1;
+          } else {
+            const enqueued = await enqueueCoexistenceChange(
+              client,
+              managedAccountId,
+              eventId,
+              "messages",
+              mutationValue,
+              metadata,
+            );
+            if (!enqueued) {
+              await recordIgnoredWebhookEvent(
+                client,
+                eventId,
+                "ignored.messages.not_authorized",
+                metadata,
+              );
+              ignoredChanges += 1;
+            } else {
+              await recordQueuedWebhookEvent(
+                client,
+                eventId,
+                "queued.messages.mutation",
+                metadata,
+              );
+              queuedCoexistenceEvents += 1;
+            }
+          }
         }
 
         for (const message of value.messages ?? []) {
@@ -838,6 +1147,7 @@ Deno.serve(async (request) => {
             const processed = await processIncomingMessage({
               client,
               automationsEnabled,
+              coexistenceAccountId: resolvedAccount.accountId,
               resumeSideEffectsOnDuplicate: true,
               reserveAutomationDispatch: true,
               message: {
@@ -919,4 +1229,8 @@ Deno.serve(async (request) => {
     console.error("whatsapp-webhook", safeErrorMessage(error));
     return jsonResponse(request, { error: "PROCESSING_FAILED" }, 500);
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve((request) => handleWhatsAppWebhookRequest(request));
+}
