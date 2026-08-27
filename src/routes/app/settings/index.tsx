@@ -7,6 +7,7 @@ import {
 } from "@qwik.dev/core";
 import { Link, type DocumentHead, useLocation } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { WhatsAppEmbeddedSignup } from "~/components/settings/WhatsAppEmbeddedSignup";
 import { Icon } from "~/components/ui/Icon";
 import { BUSINESS_CONFIG, getPageTitle } from "~/config/business";
@@ -517,6 +518,7 @@ export default component$(() => {
               vez.
             </p>
           </div>
+          <ManualHelpLink section="primeros-pasos" label="Abrir Manual" />
         </header>
 
         {state.loading ? (
@@ -617,6 +619,10 @@ export default component$(() => {
                         sistema usa estos datos automáticamente al ofrecer un
                         horario.
                       </p>
+                      <ManualHelpLink
+                        section="senas"
+                        label="¿Cómo funcionan las señas?"
+                      />
                     </div>
 
                     <label class="settings-checkbox">
@@ -1005,6 +1011,10 @@ export default component$(() => {
                         Si atendés mañana y tarde, agregá dos horarios para ese
                         día.
                       </p>
+                      <ManualHelpLink
+                        section="turnos"
+                        label="¿Cómo afectan los horarios a los turnos?"
+                      />
                     </div>
                     <div class="settings-record-list">
                       {state.rules.length ? (
@@ -1330,6 +1340,10 @@ export default component$(() => {
                         Ajustá el descanso entre pacientes y con cuánta
                         anticipación se puede reservar.
                       </p>
+                      <ManualHelpLink
+                        section="turnos"
+                        label="¿Cómo funcionan los turnos?"
+                      />
                     </div>
                     <div class="settings-form-grid">
                       <label class="form-field">
@@ -1580,6 +1594,10 @@ export default component$(() => {
                         ? "Conectá una cuenta una sola vez para ver también los turnos del consultorio en Google Calendar."
                         : "Acá podés comprobar si los turnos se están copiando a Google Calendar. La conexión la prepara la persona administradora."}
                     </p>
+                    <ManualHelpLink
+                      section="calendario"
+                      label="¿Cómo se sincroniza el calendario?"
+                    />
                   </div>
 
                   {googleCalendar.message && (
@@ -1889,6 +1907,10 @@ export default component$(() => {
                       Cada noche se envía un WhatsApp a quienes tienen turno al
                       día siguiente.
                     </p>
+                    <ManualHelpLink
+                      section="automatizacion"
+                      label="¿Cómo funciona la atención automática?"
+                    />
                   </div>
                   <label class="settings-checkbox">
                     <input
@@ -1983,6 +2005,10 @@ export default component$(() => {
                       si alguien menciona una urgencia, la conversación pasa a
                       una persona.
                     </p>
+                    <ManualHelpLink
+                      section="automatizacion"
+                      label="¿Cómo funciona la atención automática?"
+                    />
                   </div>
                   <label class="settings-checkbox">
                     <input
@@ -2100,6 +2126,10 @@ export default component$(() => {
                       Acá podés comprobar si el número está listo para recibir y
                       enviar mensajes.
                     </p>
+                    <ManualHelpLink
+                      section="whatsapp"
+                      label="¿Cómo funciona WhatsApp?"
+                    />
                   </div>
                   <div class="integration-summary">
                     <span>

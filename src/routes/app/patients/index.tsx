@@ -8,6 +8,7 @@ import {
 import type { DocumentHead } from "@qwik.dev/router";
 import { Link } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { Icon } from "~/components/ui/Icon";
 import { getPageTitle } from "~/config/business";
 import { formatBusinessDate } from "~/lib/date-time";
@@ -216,13 +217,16 @@ export default component$(() => {
             <h1>Pacientes</h1>
             <p>Datos de contacto y turnos, sin información clínica.</p>
           </div>
-          <button
-            class="primary-button"
-            type="button"
-            onClick$={() => openEditor()}
-          >
-            <Icon name="plus" size={17} /> Nuevo paciente
-          </button>
+          <div class="patients-header-actions">
+            <ManualHelpLink section="pacientes" label="¿Cómo usar pacientes?" />
+            <button
+              class="primary-button"
+              type="button"
+              onClick$={() => openEditor()}
+            >
+              <Icon name="plus" size={17} /> Nuevo paciente
+            </button>
+          </div>
         </header>
 
         <label class="search-field patients-search">

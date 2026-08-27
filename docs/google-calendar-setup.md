@@ -1,5 +1,10 @@
 # Google Calendar: conexión y sincronización
 
+> **Estado de Gisela (26 de agosto de 2026):** esta integración está
+> implementada localmente, pero sus Functions, secretos y cron aún no fueron
+> preparados en producción. No iniciar OAuth ni pedir a Gisela que conecte su
+> cuenta hasta completar y autorizar ese despliegue técnico separado.
+
 La integración permite que Gisela conecte su cuenta desde **Configuración →
 Google Calendar → Conectar**. Google muestra su pantalla de consentimiento y la
 aplicación crea un calendario secundario privado llamado **Gisela Lentz ·

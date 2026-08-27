@@ -8,6 +8,7 @@ import {
 import { useLocation, type DocumentHead } from "@qwik.dev/router";
 import "./agenda-print.css";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { ManualAppointmentDrawer } from "~/components/appointments/ManualAppointmentDrawer";
 import { RescheduleAppointmentDrawer } from "~/components/appointments/RescheduleAppointmentDrawer";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
@@ -439,6 +440,10 @@ export default component$(() => {
             </p>
           </div>
           <div class="agenda-header-actions">
+            <ManualHelpLink
+              section="turnos"
+              label="¿Cómo funcionan los turnos?"
+            />
             <button
               class="secondary-button agenda-print-action"
               type="button"

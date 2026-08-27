@@ -24,7 +24,10 @@ import {
   validateWhatsAppAssets,
   whatsappEmbeddedSignupEnabled,
 } from "../_shared/whatsapp-embedded-signup.ts";
-import { whatsappAutomationsEnabled } from "../_shared/whatsapp.ts";
+import {
+  parseSafetyBoolean,
+  whatsappAutomationsEnabled,
+} from "../_shared/whatsapp.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 const CLIENT_SCOPE = "gisela-lentz-wp";
@@ -85,6 +88,12 @@ function optionalIsoTimestamp(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 80) return null;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
 }
 
 function earliestTimestamp(
@@ -647,6 +656,7 @@ async function finalizeIfReady(input: {
 async function actionStatus(
   client: SupabaseClient,
   userId: string,
+  options: { strictForManual?: boolean } = {},
 ): Promise<JsonRecord> {
   const result = await client.rpc("whatsapp_embedded_signup_status", {
     p_admin_user_id: userId,
@@ -667,6 +677,60 @@ async function actionStatus(
   }
   const onboarding = record(status.onboarding);
   const account = record(status.account);
+  const strictForManual = options.strictForManual === true;
+  const accountConnected =
+    typeof account?.connected === "boolean" ? account.connected : null;
+  const accountAttentionRequired =
+    typeof account?.attentionRequired === "boolean"
+      ? account.attentionRequired
+      : null;
+  const accountTokenExpired =
+    typeof account?.tokenExpired === "boolean" ? account.tokenExpired : null;
+  const sendingPaused =
+    typeof status.sendingPaused === "boolean" ? status.sendingPaused : null;
+  const pendingJobs = nonNegativeSafeInteger(status.pendingJobs);
+  const ambiguousJobs = nonNegativeSafeInteger(status.ambiguousJobs);
+  const accountId =
+    typeof account?.accountId === "string" &&
+    UUID_PATTERN.test(account.accountId)
+      ? account.accountId
+      : null;
+  let lastWebhookAt: string | null = null;
+  let lastWebhookChecked = true;
+  let recentWebhookFailures: number | null = 0;
+  if (accountId) {
+    // The table intentionally stays private to browser roles because it holds
+    // internal Meta identifiers. This ADMIN-only endpoint returns only a
+    // sanitized timestamp/count, never an account row, payload or error.
+    const recentWindowStart = new Date(
+      Date.now() - 7 * 24 * 60 * 60 * 1_000,
+    ).toISOString();
+    const [latestWebhook, failedEvents] = await Promise.all([
+      client
+        .from("whatsapp_coexistence_accounts")
+        .select("last_webhook_at")
+        .eq("id", accountId)
+        .maybeSingle(),
+      client
+        .from("whatsapp_coexistence_events")
+        .select("id", { count: "exact", head: true })
+        .eq("account_id", accountId)
+        .eq("status", "failed")
+        .gte("failed_at", recentWindowStart),
+    ]);
+    if (!latestWebhook.error) {
+      const value = latestWebhook.data as { last_webhook_at?: unknown } | null;
+      lastWebhookAt = optionalIsoTimestamp(value?.last_webhook_at);
+    } else {
+      lastWebhookChecked = false;
+    }
+    if (!failedEvents.error) {
+      recentWebhookFailures = nonNegativeSafeInteger(failedEvents.count);
+      if (recentWebhookFailures === null) lastWebhookChecked = false;
+    } else {
+      lastWebhookChecked = false;
+    }
+  }
   const tokenExpiresAt = optionalIsoTimestamp(account?.tokenExpiresAt);
   const tokenDataAccessExpiresAt = optionalIsoTimestamp(
     account?.tokenDataAccessExpiresAt,
@@ -687,7 +751,9 @@ async function actionStatus(
     account: account
       ? {
           accountId: account.accountId ?? null,
-          connected: account.connected === true,
+          connected: strictForManual
+            ? accountConnected
+            : accountConnected === true,
           onboardingStatus: account.onboardingStatus ?? "not_started",
           wabaId: account.wabaId ?? null,
           phoneNumberId: account.phoneNumberId ?? null,
@@ -705,7 +771,9 @@ async function actionStatus(
           tokenValidationStatus: account.tokenValidationStatus ?? "missing",
           tokenLastValidatedAt: account.tokenLastValidatedAt ?? null,
           tokenValidationDueAt: account.tokenValidationDueAt ?? null,
-          attentionRequired: account.attentionRequired === true,
+          attentionRequired: strictForManual
+            ? accountAttentionRequired
+            : accountAttentionRequired === true,
           attentionReason: account.attentionReason ?? null,
           lastDisconnectionReason: account.lastDisconnectionReason ?? null,
           lastDisconnectionInitiatedBy:
@@ -717,18 +785,62 @@ async function actionStatus(
             tokenDataAccessExpiresAt,
           ),
           tokenExpiryKnown: account.tokenExpiryKnown === true,
-          tokenExpired: account.tokenExpired === true,
+          tokenExpired: strictForManual
+            ? accountTokenExpired
+            : accountTokenExpired === true,
           lastError: account.lastError ?? null,
           offboardedAt: account.offboardedAt ?? null,
         }
       : null,
-    sendingPaused: status.sendingPaused !== false,
-    pendingJobs:
-      typeof status.pendingJobs === "number" ? status.pendingJobs : 0,
-    ambiguousJobs:
-      typeof status.ambiguousJobs === "number" ? status.ambiguousJobs : 0,
+    sendingPaused: strictForManual ? sendingPaused : sendingPaused !== false,
+    pendingJobs: strictForManual ? pendingJobs : (pendingJobs ?? 0),
+    ambiguousJobs: strictForManual ? ambiguousJobs : (ambiguousJobs ?? 0),
     automationsEnabled: whatsappAutomationsEnabled(),
+    // Expose only a boolean for the administrative status screen. The allowlist
+    // and all delivery credentials remain server-side.
+    testMode: parseSafetyBoolean(Deno.env.get("WHATSAPP_TEST_MODE"), true),
+    lastWebhookAt,
+    lastWebhookChecked,
+    recentWebhookFailures: strictForManual
+      ? recentWebhookFailures
+      : (recentWebhookFailures ?? 0),
   };
+}
+
+function manualStatusProjection(status: JsonRecord): JsonRecord {
+  const account = record(status.account);
+  return {
+    accountPresent: account !== null,
+    connected:
+      typeof account?.connected === "boolean" ? account.connected : null,
+    attentionRequired:
+      typeof account?.attentionRequired === "boolean"
+        ? account.attentionRequired
+        : null,
+    tokenExpired:
+      typeof account?.tokenExpired === "boolean" ? account.tokenExpired : null,
+    sendingPaused:
+      typeof status.sendingPaused === "boolean" ? status.sendingPaused : null,
+    pendingJobs: nonNegativeSafeInteger(status.pendingJobs),
+    ambiguousJobs: nonNegativeSafeInteger(status.ambiguousJobs),
+    automationsEnabled:
+      typeof status.automationsEnabled === "boolean"
+        ? status.automationsEnabled
+        : null,
+    testMode: typeof status.testMode === "boolean" ? status.testMode : null,
+    lastWebhookAt: optionalIsoTimestamp(status.lastWebhookAt),
+    lastWebhookChecked: status.lastWebhookChecked === true,
+    recentWebhookFailures: nonNegativeSafeInteger(status.recentWebhookFailures),
+  };
+}
+
+async function actionManualStatus(
+  client: SupabaseClient,
+  userId: string,
+): Promise<JsonRecord> {
+  return manualStatusProjection(
+    await actionStatus(client, userId, { strictForManual: true }),
+  );
 }
 
 async function actionStart(
@@ -1036,7 +1148,9 @@ export async function handleWhatsAppEmbeddedSignupRequest(
     }
     let response: JsonRecord;
     if (action === "status") response = await actionStatus(client, user.id);
-    else if (action === "start") {
+    else if (action === "manual_status") {
+      response = await actionManualStatus(client, user.id);
+    } else if (action === "start") {
       response = await actionStart(client, user.id, body);
     } else if (action === "exchange") {
       response = await actionExchange(client, user.id, body);

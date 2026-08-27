@@ -174,7 +174,8 @@ Para Coexistence, aplicar antes y en orden las migraciones
 jobs se habilitan sólo mediante el procedimiento explícito y postgres-only de
 [docs/whatsapp-recovery.md](docs/whatsapp-recovery.md). La migración local
 `20260826170000_whatsapp_embedded_signup.sql` agrega Embedded Signup, Vault y su
-outbox durable; debe revisarse y autorizarse separadamente antes de aplicarla.
+outbox durable. En la producción de Gisela ya está aplicada; en un proyecto
+nuevo debe revisarse y autorizarse separadamente antes de aplicarla.
 Desplegar las funciones
 solamente en el proyecto nuevo; `whatsapp-automation` debe preceder al outbox y
 `whatsapp-webhook` debe quedar después de ambos processors:
@@ -286,12 +287,14 @@ switch también bloquea recordatorios automáticos.
 
 ### 9. Google Calendar
 
-Gisela puede conectar su propia cuenta desde **Configuración → Google
-Calendar**. La aplicación crea el calendario privado **Gisela Lentz · Turnos** y
-lo mantiene como espejo de la agenda mediante un outbox durable y un cron cada
-minuto. La agenda sigue siendo la fuente de verdad: no se importan cambios
-manuales de Google. Configuración de OAuth, permisos mínimos, secretos, cron y
-prueba controlada en
+La implementación local permite que Gisela conecte su propia cuenta desde
+**Configuración → Google Calendar** y mantiene el calendario privado **Gisela
+Lentz · Turnos** como espejo de la agenda. Sin embargo, en la producción actual
+de Gisela las Functions, secretos y cron de Calendar todavía no están
+desplegados/configurados: **no intentar conectarlo todavía**. Cuando se prepare
+en una fase técnica separada, la agenda seguirá siendo la fuente de verdad y no
+se importarán cambios manuales de Google. Configuración de OAuth, permisos
+mínimos, secretos, cron y prueba controlada en
 [docs/google-calendar-setup.md](docs/google-calendar-setup.md).
 
 ## WhatsApp Business App Coexistence
@@ -302,10 +305,11 @@ opaco o teléfono nullable y paginación del inbox para historiales grandes. Los
 medios históricos se enriquecen por wamid desde `messages[]` o
 `message_echoes[]`; una carrera history→live se promueve atómicamente y un eco
 manual pre-pausa la automatización antes de los inbound vivos del mismo POST.
-La cola encadena pasadas para no dejar otras cuentas esperando el cron. No
-ejecuta Embedded Signup ni conecta un número real. Arquitectura, orden de
-migración/despliegue, cierre de generaciones fallidas, recuperación y rollback
-de las cuatro funciones están en
+La cola encadena pasadas para no dejar otras cuentas esperando el cron. El
+módulo de Coexistence no inicia por sí solo Embedded Signup ni conecta un número
+real: eso exige la acción explícita de una ADMIN desde el flujo separado.
+Arquitectura, orden de migración/despliegue, cierre de generaciones fallidas,
+recuperación y rollback de las cuatro funciones están en
 [docs/whatsapp-coexistence.md](docs/whatsapp-coexistence.md).
 El scheduler durable, sus credenciales dedicadas y su rollback operativo están
 en [docs/whatsapp-recovery.md](docs/whatsapp-recovery.md).
@@ -330,6 +334,7 @@ git diff --check
 - [Conexión de WhatsApp](docs/whatsapp-setup.md)
 - [WhatsApp Coexistence](docs/whatsapp-coexistence.md)
 - [Embedded Signup v4](docs/whatsapp-embedded-signup.md)
+- [Checklist presencial de Gisela](docs/ONBOARDING_GISELA.md)
 - [Recovery de WhatsApp](docs/whatsapp-recovery.md)
 - [Flujo de automatización](docs/automation-flow.md)
 - [Demo controlada](docs/demo-whatsapp-real.md)

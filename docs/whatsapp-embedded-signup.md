@@ -6,12 +6,13 @@ admitido es Embedded Signup v4 mediante Facebook JavaScript SDK; no se usa un
 onboarding alojado por Meta ni se registra el número como si fuera un alta Cloud
 API normal.
 
-> **Estado actual:** esta es documentación y preparación local. No se abrió
-> Facebook Login, no se intercambió ningún código, no se conectó el número de
-> Gisela, no se solicitó una sincronización y no se modificó Meta. La captura
-> suministrada muestra `account_update` como **Subscribed**. Esta
-> implementación local no hizo llamadas Graph ni cambios en Meta para alterarla;
-> la asociación per-WABA se confirmará de forma read-only antes del onboarding.
+> **Estado operativo (26 de agosto de 2026):** la migración, las Functions y el
+> frontend para Embedded Signup ya están desplegados en la producción de
+> Gisela. Todavía no hay una cuenta Coexistence ni un número real conectados.
+> Los dos intentos de prueba previos quedaron cancelados sin código ni token.
+> Antes del onboarding presencial, confirmar en Meta el callback, los campos de
+> webhook, los permisos y los activos reales. El checklist vigente está en
+> [`ONBOARDING_GISELA.md`](./ONBOARDING_GISELA.md).
 
 ## Separación de configuración y secretos
 

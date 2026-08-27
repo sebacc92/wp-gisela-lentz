@@ -2,6 +2,7 @@ import { component$, useSignal, useVisibleTask$ } from "@qwik.dev/core";
 import { Link, useNavigate } from "@qwik.dev/router";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
 import { BUSINESS_CONFIG } from "~/config/business";
+import { isAdminProfile } from "~/lib/admin-access";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import { Icon, type IconName } from "../ui/Icon";
 
@@ -12,7 +13,8 @@ interface AppNavigationProps {
     | "inbox"
     | "patients"
     | "settings"
-    | "templates";
+    | "templates"
+    | "manual";
 }
 
 const navItems: Array<{
@@ -22,6 +24,7 @@ const navItems: Array<{
   description: string;
   href: string;
   icon: IconName;
+  adminOnly?: boolean;
 }> = [
   {
     key: "home",
@@ -63,13 +66,26 @@ const navItems: Array<{
     href: "/app/settings",
     icon: "settings",
   },
+  {
+    key: "manual",
+    label: "Manual",
+    mobileLabel: "Manual",
+    description: "Consultar la guía de uso del consultorio",
+    href: "/app/manual",
+    icon: "file",
+    adminOnly: true,
+  },
 ];
 
 export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
   const navigate = useNavigate();
   const fullName = useSignal(BUSINESS_CONFIG.name);
   const profileInitials = useSignal("GL");
+  const isAdmin = useSignal(false);
 
+  // The profile is intentionally resolved only in the browser so the sidebar
+  // never renders an ADMIN-only link before the authenticated user is known.
+  // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     const client = getSupabaseClient();
     const {
@@ -79,10 +95,13 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
 
     const { data: profile } = await client
       .from("profiles")
-      .select("full_name")
+      .select("full_name,role,active")
       .eq("id", user.id)
       .single();
-    if (!profile?.full_name) return;
+    if (!profile) return;
+
+    isAdmin.value = isAdminProfile(profile);
+    if (!profile.full_name) return;
 
     fullName.value = profile.full_name;
     profileInitials.value = profile.full_name
@@ -105,29 +124,31 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
         </Link>
 
         <nav class="nav-items">
-          {navItems.map((item) => (
-            <Link
-              key={item.key}
-              class={{
-                "nav-link": true,
-                active:
+          {navItems
+            .filter((item) => !item.adminOnly || isAdmin.value)
+            .map((item) => (
+              <Link
+                key={item.key}
+                class={{
+                  "nav-link": true,
+                  active:
+                    item.key === active ||
+                    (active === "templates" && item.key === "settings"),
+                }}
+                href={item.href}
+                title={item.description}
+                aria-label={`${item.label}: ${item.description}`}
+                aria-current={
                   item.key === active ||
-                  (active === "templates" && item.key === "settings"),
-              }}
-              href={item.href}
-              title={item.description}
-              aria-label={`${item.label}: ${item.description}`}
-              aria-current={
-                item.key === active ||
-                (active === "templates" && item.key === "settings")
-                  ? "page"
-                  : undefined
-              }
-            >
-              <Icon name={item.icon} size={21} />
-              <span>{item.label}</span>
-            </Link>
-          ))}
+                  (active === "templates" && item.key === "settings")
+                    ? "page"
+                    : undefined
+                }
+              >
+                <Icon name={item.icon} size={21} />
+                <span>{item.label}</span>
+              </Link>
+            ))}
         </nav>
 
         <div class="nav-profile">
@@ -154,30 +175,38 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
         </div>
       </aside>
 
-      <nav class="mobile-nav" aria-label="Navegación principal">
-        {navItems.map((item) => (
-          <Link
-            key={item.key}
-            class={{
-              "mobile-nav-link": true,
-              active:
+      <nav
+        class={{
+          "mobile-nav": true,
+          "mobile-nav-has-manual": isAdmin.value,
+        }}
+        aria-label="Navegación principal"
+      >
+        {navItems
+          .filter((item) => !item.adminOnly || isAdmin.value)
+          .map((item) => (
+            <Link
+              key={item.key}
+              class={{
+                "mobile-nav-link": true,
+                active:
+                  item.key === active ||
+                  (active === "templates" && item.key === "settings"),
+              }}
+              href={item.href}
+              title={item.description}
+              aria-label={`${item.label}: ${item.description}`}
+              aria-current={
                 item.key === active ||
-                (active === "templates" && item.key === "settings"),
-            }}
-            href={item.href}
-            title={item.description}
-            aria-label={`${item.label}: ${item.description}`}
-            aria-current={
-              item.key === active ||
-              (active === "templates" && item.key === "settings")
-                ? "page"
-                : undefined
-            }
-          >
-            <Icon name={item.icon} size={20} />
-            <span>{item.mobileLabel}</span>
-          </Link>
-        ))}
+                (active === "templates" && item.key === "settings")
+                  ? "page"
+                  : undefined
+              }
+            >
+              <Icon name={item.icon} size={20} />
+              <span>{item.mobileLabel}</span>
+            </Link>
+          ))}
       </nav>
     </>
   );

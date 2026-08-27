@@ -1,6 +1,7 @@
 import { googleOAuthConfiguration } from "../_shared/google-calendar.ts";
 import { jsonResponse, optionsResponse } from "../_shared/http.ts";
 import { authorizeUser, createServiceClient } from "../_shared/supabase.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 interface CalendarStatus {
   connected?: boolean;
@@ -13,22 +14,83 @@ interface CalendarStatus {
   failed_count?: number | string | null;
 }
 
-Deno.serve(async (request) => {
+type CalendarConnectionState =
+  | "connected"
+  | "disconnected"
+  | "reconnect_required"
+  | "pending"
+  | "error"
+  | "incomplete";
+
+export interface GoogleCalendarStatusDependencies {
+  createClient?: () => SupabaseClient;
+  authorize?: typeof authorizeUser;
+  environment?: (name: string) => string | undefined;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+function calendarConnectionState(
+  value: unknown,
+): CalendarConnectionState | null {
+  return value === "connected" ||
+    value === "disconnected" ||
+    value === "reconnect_required" ||
+    value === "pending" ||
+    value === "error"
+    ? value
+    : null;
+}
+
+async function asksForManualProjection(request: Request): Promise<boolean> {
+  if (request.method !== "POST") return false;
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("application/json")) return false;
+  try {
+    return record(await request.json())?.action === "manual_status";
+  } catch {
+    return false;
+  }
+}
+
+export async function handleGoogleCalendarStatusRequest(
+  request: Request,
+  dependencies: GoogleCalendarStatusDependencies = {},
+): Promise<Response> {
   if (request.method === "OPTIONS") return optionsResponse(request);
   if (request.method !== "GET" && request.method !== "POST") {
     return jsonResponse(request, { error: "METHOD_NOT_ALLOWED" }, 405);
   }
 
-  const client = createServiceClient();
+  const manualProjection = await asksForManualProjection(request);
+  const client = (dependencies.createClient ?? createServiceClient)();
   try {
-    // El estado no incluye tokens, IDs internos ni secretos. Un OPERADOR puede
-    // verlo en modo lectura para saber si la agenda se está sincronizando; las
-    // acciones que cambian la conexión siguen reservadas al ADMIN.
-    await authorizeUser(request, client);
+    // The regular Settings view may show the connected Calendar name and email
+    // to an authenticated user. The Manual asks for a separate, ADMIN-only
+    // projection with only operational booleans/counts.
+    const authorization = await (dependencies.authorize ?? authorizeUser)(
+      request,
+      client,
+    );
+    if (manualProjection && authorization.profile.role !== "ADMIN") {
+      return jsonResponse(request, { error: "ADMIN_REQUIRED" }, 403);
+    }
 
     let configured = true;
     try {
-      googleOAuthConfiguration((name) => Deno.env.get(name));
+      googleOAuthConfiguration(
+        dependencies.environment ?? ((name) => Deno.env.get(name)),
+      );
     } catch {
       configured = false;
     }
@@ -38,7 +100,33 @@ Deno.serve(async (request) => {
     const status = (
       Array.isArray(data) ? data[0] : data
     ) as CalendarStatus | null;
-    const connected = configured && Boolean(status?.connected);
+    const rawConnected =
+      typeof status?.connected === "boolean" ? status.connected : null;
+    const rawPendingCount = nonNegativeSafeInteger(status?.pending_count);
+    const rawFailedCount = nonNegativeSafeInteger(status?.failed_count);
+    const explicitState = calendarConnectionState(status?.status);
+    const manualState: CalendarConnectionState | null = !configured
+      ? "incomplete"
+      : typeof status?.status === "string"
+        ? explicitState
+        : rawConnected === true
+          ? "connected"
+          : rawConnected === false
+            ? "disconnected"
+            : null;
+
+    if (manualProjection) {
+      return jsonResponse(request, {
+        configured,
+        connected: configured ? rawConnected : false,
+        status: manualState,
+        pendingCount: rawPendingCount,
+        failedCount: rawFailedCount,
+      });
+    }
+
+    // Backwards-compatible response used by the existing Calendar Settings UI.
+    const connected = configured && rawConnected === true;
     const pendingCount = Number(status?.pending_count ?? 0);
     const failedCount = Number(status?.failed_count ?? 0);
     const connectionState = !configured
@@ -81,4 +169,8 @@ Deno.serve(async (request) => {
       500,
     );
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve((request) => handleGoogleCalendarStatusRequest(request));
+}

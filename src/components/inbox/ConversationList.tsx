@@ -1,4 +1,5 @@
 import { component$, type QRL } from "@qwik.dev/core";
+import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import type { Conversation } from "~/lib/inbox-types";
 import { Icon } from "../ui/Icon";
 
@@ -29,9 +30,12 @@ export const ConversationList = component$<ConversationListProps>((props) => {
           <span class="eyebrow">WhatsApp</span>
           <h1>Bandeja</h1>
         </div>
-        <div class="header-user" title="Usuario actual">
-          <span class="online-dot" />
-          <span>{props.operatorName || "Recepción"}</span>
+        <div class="conversation-header-actions">
+          <ManualHelpLink section="whatsapp" label="¿Cómo funciona WhatsApp?" />
+          <div class="header-user" title="Usuario actual">
+            <span class="online-dot" />
+            <span>{props.operatorName || "Recepción"}</span>
+          </div>
         </div>
       </header>
 

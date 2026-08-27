@@ -567,9 +567,36 @@ Deno.test(
     const serialized = JSON.stringify(body).toLowerCase();
     assert.equal(typeof body.configured, "boolean");
     assert.equal(body.sendingPaused, true);
+    assert.equal(typeof body.testMode, "boolean");
+    assert.equal(body.lastWebhookAt, null);
     assert.equal(serialized.includes("access_token"), false);
     assert.equal(serialized.includes("app_secret"), false);
     assert.equal(serialized.includes("code_hash"), false);
+    assert.equal(serialized.includes("must-not-cross-http-boundary"), false);
+  },
+);
+
+Deno.test(
+  "manual_status entrega sólo el resumen necesario para el Manual",
+  async () => {
+    const response = await handleWhatsAppEmbeddedSignupRequest(
+      request("manual_status"),
+      dependencies("ADMIN"),
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.accountPresent, true);
+    assert.equal(body.sendingPaused, true);
+    assert.equal(typeof body.testMode, "boolean");
+    assert.equal(body.lastWebhookChecked, true);
+    assert.equal(body.pendingJobs, null);
+    assert.equal(body.ambiguousJobs, null);
+    assert.equal(body.recentWebhookFailures, 0);
+    const serialized = JSON.stringify(body).toLowerCase();
+    assert.equal(serialized.includes("accountid"), false);
+    assert.equal(serialized.includes("waba"), false);
+    assert.equal(serialized.includes("phone"), false);
+    assert.equal(serialized.includes("access_token"), false);
     assert.equal(serialized.includes("must-not-cross-http-boundary"), false);
   },
 );
@@ -918,6 +945,53 @@ Deno.test(
           error: null,
         };
       },
+      from: (table: string) => {
+        if (table === "whatsapp_coexistence_events") {
+          return {
+            select: (column: string, options: Record<string, unknown>) => {
+              assert.equal(column, "id");
+              assert.deepEqual(options, { count: "exact", head: true });
+              return {
+                eq: (field: string, value: string) => {
+                  assert.equal(field, "account_id");
+                  assert.equal(value, "44444444-4444-4444-8444-444444444444");
+                  return {
+                    eq: (statusField: string, status: string) => {
+                      assert.equal(statusField, "status");
+                      assert.equal(status, "failed");
+                      return {
+                        gte: (failedAt: string, value: string) => {
+                          assert.equal(failedAt, "failed_at");
+                          assert.ok(Number.isFinite(Date.parse(value)));
+                          return { error: null, count: 2 };
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        }
+        assert.equal(table, "whatsapp_coexistence_accounts");
+        return {
+          select: (column: string) => {
+            assert.equal(column, "last_webhook_at");
+            return {
+              eq: (field: string, value: string) => {
+                assert.equal(field, "id");
+                assert.equal(value, "44444444-4444-4444-8444-444444444444");
+                return {
+                  maybeSingle: async () => ({
+                    data: { last_webhook_at: "2026-08-26T12:00:00Z" },
+                    error: null,
+                  }),
+                };
+              },
+            };
+          },
+        };
+      },
     } as unknown as SupabaseClient;
     const response = await handleWhatsAppEmbeddedSignupRequest(request(), {
       createClient: () => client,
@@ -938,8 +1012,31 @@ Deno.test(
       body.account.tokenEffectiveExpiresAt,
       "2026-09-30T12:00:00.000Z",
     );
+    assert.equal(body.lastWebhookAt, "2026-08-26T12:00:00.000Z");
+    assert.equal(body.lastWebhookChecked, true);
+    assert.equal(body.recentWebhookFailures, 2);
     assert.equal(JSON.stringify(body).includes("must-not-cross"), false);
     assert.equal(JSON.stringify(body).includes("55555555-5555"), false);
+
+    const manualResponse = await handleWhatsAppEmbeddedSignupRequest(
+      request("manual_status"),
+      {
+        createClient: () => client,
+        authorize: async () => ({
+          user: { id: ADMIN_ID },
+          profile: { role: "ADMIN" },
+        }),
+      },
+    );
+    const manual = (await manualResponse.json()) as Record<string, unknown>;
+    assert.equal(manualResponse.status, 200);
+    assert.equal(manual.accountPresent, true);
+    assert.equal(manual.lastWebhookAt, "2026-08-26T12:00:00.000Z");
+    assert.equal(manual.recentWebhookFailures, 2);
+    const manualSerialized = JSON.stringify(manual).toLowerCase();
+    assert.equal(manualSerialized.includes("accountid"), false);
+    assert.equal(manualSerialized.includes("55555555-5555"), false);
+    assert.equal(manualSerialized.includes("must-not-cross"), false);
   },
 );
 
