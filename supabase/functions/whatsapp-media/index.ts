@@ -110,7 +110,9 @@ export async function handleWhatsAppMediaRequest(
       messageError ||
       !message ||
       message.direction !== "inbound" ||
-      (message.type !== "image" && message.type !== "document")
+      (message.type !== "image" &&
+        message.type !== "document" &&
+        message.type !== "audio")
     ) {
       return mediaError(
         request,

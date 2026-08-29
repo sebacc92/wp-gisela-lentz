@@ -2753,6 +2753,13 @@ button {
   opacity: 0.65;
 }
 
+.message-attachment-audio {
+  width: 100%;
+  max-width: 320px;
+  min-height: 38px;
+  margin-top: 6px;
+}
+
 .message-attachment-error {
   color: #8a2838 !important;
   opacity: 1 !important;

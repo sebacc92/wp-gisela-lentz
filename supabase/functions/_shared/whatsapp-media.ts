@@ -8,6 +8,15 @@ const ALLOWED_DOWNLOAD_HOSTS = new Set(["lookaside.fbsbx.com"]);
 const TYPE_MIME_ALLOWLIST = {
   image: new Set(["image/jpeg", "image/png"]),
   document: new Set(["application/pdf"]),
+  // WhatsApp entrega las notas de voz como audio/ogg con códec opus. El resto
+  // son los formatos que Meta acepta para un adjunto de audio corriente.
+  audio: new Set([
+    "audio/ogg",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/aac",
+    "audio/amr",
+  ]),
 } as const;
 
 export type DownloadableWhatsAppMediaType = keyof typeof TYPE_MIME_ALLOWLIST;
@@ -74,10 +83,24 @@ export function isAllowedWhatsAppMediaDownloadUrl(value: unknown): boolean {
   }
 }
 
+const AUDIO_EXTENSIONS: Record<string, string> = {
+  "audio/ogg": "ogg",
+  "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "audio/aac": "aac",
+  "audio/amr": "amr",
+};
+
 function extensionForMimeType(mimeType: string): string {
   if (mimeType === "image/jpeg") return "jpg";
   if (mimeType === "image/png") return "png";
-  return "pdf";
+  return AUDIO_EXTENSIONS[mimeType] ?? "pdf";
+}
+
+/** Una nota de voz no es un comprobante: nombrarla así confundiría el archivo
+ * descargado con el respaldo de una seña. */
+function fallbackFilenameBase(mimeType: string): string {
+  return mimeType.startsWith("audio/") ? "audio" : "comprobante";
 }
 
 export function safeWhatsAppMediaFilename(
@@ -85,7 +108,8 @@ export function safeWhatsAppMediaFilename(
   mimeType: string,
 ): string {
   const extension = extensionForMimeType(mimeType);
-  if (typeof value !== "string") return `comprobante.${extension}`;
+  const fallback = fallbackFilenameBase(mimeType);
+  if (typeof value !== "string") return `${fallback}.${extension}`;
   const cleaned = value
     .normalize("NFKC")
     .replace(/[\u0000-\u001f\u007f]/g, "")
@@ -94,10 +118,10 @@ export function safeWhatsAppMediaFilename(
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 100);
-  if (!cleaned) return `comprobante.${extension}`;
+  if (!cleaned) return `${fallback}.${extension}`;
   const withoutExtension = cleaned.replace(/\.[A-Za-z0-9]{1,8}$/, "").trim();
   const safeBase = withoutExtension.replace(/^[.\s-]+/, "").trim();
-  return `${safeBase || "comprobante"}.${extension}`;
+  return `${safeBase || fallback}.${extension}`;
 }
 
 export function resolveWhatsAppMediaDescriptor(args: {
@@ -112,7 +136,11 @@ export function resolveWhatsAppMediaDescriptor(args: {
   if (args.messageDirection !== "inbound") {
     throw new WhatsAppMediaValidationError("MEDIA_NOT_INBOUND");
   }
-  if (args.messageType !== "image" && args.messageType !== "document") {
+  if (
+    args.messageType !== "image" &&
+    args.messageType !== "document" &&
+    args.messageType !== "audio"
+  ) {
     throw new WhatsAppMediaValidationError("MEDIA_TYPE_NOT_ALLOWED");
   }
   const metadata =

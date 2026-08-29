@@ -115,3 +115,46 @@ test("corta el stream aunque Content-Length mienta", async () => {
   const oversized = new Response(new Uint8Array([1, 2, 3, 4]));
   await assert.rejects(() => readBodyWithLimit(oversized, 3));
 });
+
+test("acepta una nota de voz y la nombra como audio, no como comprobante", () => {
+  assert.deepEqual(
+    resolveWhatsAppMediaDescriptor({
+      messageDirection: "inbound",
+      messageType: "audio",
+      metadata: { media_id: "1234567890", mime_type: "audio/ogg" },
+      graphMediaId: "1234567890",
+      // WhatsApp anuncia las notas de voz con el códec en el mismo header.
+      graphMimeType: "audio/ogg; codecs=opus",
+      graphFileSize: "4000",
+      maxBytes: 5000,
+    }),
+    {
+      type: "audio",
+      mediaId: "1234567890",
+      mimeType: "audio/ogg",
+      filename: "audio.ogg",
+      disposition: "inline",
+    },
+  );
+
+  assert.equal(safeWhatsAppMediaFilename(undefined, "audio/mpeg"), "audio.mp3");
+
+  for (const override of [
+    { graphMimeType: "audio/x-wav" },
+    { graphMimeType: "application/pdf" },
+    { messageType: "video" },
+  ]) {
+    assert.throws(() =>
+      resolveWhatsAppMediaDescriptor({
+        messageDirection: "inbound",
+        messageType: "audio",
+        metadata: { media_id: "1234567890", mime_type: "audio/ogg" },
+        graphMediaId: "1234567890",
+        graphMimeType: "audio/ogg",
+        graphFileSize: "4000",
+        maxBytes: 5000,
+        ...override,
+      }),
+    );
+  }
+});

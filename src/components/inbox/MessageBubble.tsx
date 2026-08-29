@@ -20,6 +20,8 @@ export const MessageBubble = component$<MessageBubbleProps>(
   ({ message, highlighted }) => {
     const openingMedia = useSignal(false);
     const mediaError = useSignal("");
+    const audioUrl = useSignal("");
+    const isAudio = message.type === "audio";
 
     if (message.direction === "system") {
       return <div class="system-message">{message.body}</div>;
@@ -35,7 +37,9 @@ export const MessageBubble = component$<MessageBubbleProps>(
         }}
       >
         <div class="message-bubble">
-          {message.type === "image" || message.type === "document" ? (
+          {message.type === "image" ||
+          message.type === "document" ||
+          isAudio ? (
             <div class="message-attachment-copy">
               <Icon name="file" size={18} />
               <span>
@@ -43,67 +47,90 @@ export const MessageBubble = component$<MessageBubbleProps>(
                   {message.filename ||
                     (message.type === "image"
                       ? "Imagen recibida"
-                      : "Documento")}
+                      : isAudio
+                        ? message.body
+                        : "Documento")}
                 </strong>
-                <small>{message.body}</small>
+                {!isAudio && <small>{message.body}</small>}
                 {message.depositProofLate && (
                   <small class="message-attachment-late" role="alert">
                     Llegó después de vencer la reserva. Revisar sin confirmar
                     automáticamente.
                   </small>
                 )}
-                {message.direction === "inbound" && message.hasMedia && (
-                  <button
-                    class="message-attachment-open"
-                    type="button"
-                    disabled={openingMedia.value}
-                    onClick$={async () => {
-                      if (openingMedia.value) return;
-                      openingMedia.value = true;
-                      mediaError.value = "";
-                      const previewWindow = window.open(
-                        "about:blank",
-                        "_blank",
-                      );
-                      try {
-                        if (!previewWindow) throw new Error("POPUP_BLOCKED");
-                        previewWindow.opener = null;
-                        const client = getSupabaseClient();
-                        const { data: sessionData } =
-                          await client.auth.getSession();
-                        const token = sessionData.session?.access_token;
-                        if (!token) throw new Error("UNAUTHORIZED");
-                        const baseUrl = String(
-                          import.meta.env.PUBLIC_SUPABASE_URL ?? "",
-                        ).replace(/\/$/, "");
-                        const response = await fetch(
-                          `${baseUrl}/functions/v1/whatsapp-media?messageId=${encodeURIComponent(message.id)}`,
-                          { headers: { Authorization: `Bearer ${token}` } },
-                        );
-                        if (!response.ok) throw new Error("MEDIA_UNAVAILABLE");
-                        const blobUrl = URL.createObjectURL(
-                          await response.blob(),
-                        );
-                        previewWindow.location.replace(blobUrl);
-                        window.setTimeout(
-                          () => URL.revokeObjectURL(blobUrl),
-                          300_000,
-                        );
-                      } catch {
-                        previewWindow?.close();
-                        mediaError.value =
-                          "No pudimos abrir el comprobante. Intentá nuevamente.";
-                      } finally {
-                        openingMedia.value = false;
-                      }
-                    }}
-                  >
-                    {openingMedia.value
-                      ? "Abriendo…"
-                      : message.type === "image"
-                        ? "Ver imagen"
-                        : "Abrir comprobante"}
-                  </button>
+                {message.direction === "inbound" &&
+                  message.hasMedia &&
+                  !audioUrl.value && (
+                    <button
+                      class="message-attachment-open"
+                      type="button"
+                      disabled={openingMedia.value}
+                      onClick$={async () => {
+                        if (openingMedia.value) return;
+                        openingMedia.value = true;
+                        mediaError.value = "";
+                        // Una nota de voz se escucha en contexto: abrir una
+                        // pestaña por cada audio haría inusable la bandeja.
+                        const previewWindow = isAudio
+                          ? null
+                          : window.open("about:blank", "_blank");
+                        try {
+                          if (!isAudio && !previewWindow) {
+                            throw new Error("POPUP_BLOCKED");
+                          }
+                          if (previewWindow) previewWindow.opener = null;
+                          const client = getSupabaseClient();
+                          const { data: sessionData } =
+                            await client.auth.getSession();
+                          const token = sessionData.session?.access_token;
+                          if (!token) throw new Error("UNAUTHORIZED");
+                          const baseUrl = String(
+                            import.meta.env.PUBLIC_SUPABASE_URL ?? "",
+                          ).replace(/\/$/, "");
+                          const response = await fetch(
+                            `${baseUrl}/functions/v1/whatsapp-media?messageId=${encodeURIComponent(message.id)}`,
+                            { headers: { Authorization: `Bearer ${token}` } },
+                          );
+                          if (!response.ok)
+                            throw new Error("MEDIA_UNAVAILABLE");
+                          const blobUrl = URL.createObjectURL(
+                            await response.blob(),
+                          );
+                          if (previewWindow) {
+                            previewWindow.location.replace(blobUrl);
+                            window.setTimeout(
+                              () => URL.revokeObjectURL(blobUrl),
+                              300_000,
+                            );
+                          } else {
+                            audioUrl.value = blobUrl;
+                          }
+                        } catch {
+                          previewWindow?.close();
+                          mediaError.value = isAudio
+                            ? "No pudimos abrir el audio. Intentá nuevamente."
+                            : "No pudimos abrir el comprobante. Intentá nuevamente.";
+                        } finally {
+                          openingMedia.value = false;
+                        }
+                      }}
+                    >
+                      {openingMedia.value
+                        ? "Abriendo…"
+                        : message.type === "image"
+                          ? "Ver imagen"
+                          : isAudio
+                            ? "Escuchar audio"
+                            : "Abrir comprobante"}
+                    </button>
+                  )}
+                {audioUrl.value && (
+                  <audio
+                    class="message-attachment-audio"
+                    controls
+                    preload="metadata"
+                    src={audioUrl.value}
+                  />
                 )}
                 {mediaError.value && (
                   <small class="message-attachment-error" role="alert">

@@ -49,7 +49,7 @@ export function isWhatsAppLegacyCredentialsDisabledError(
 }
 
 function messageContent(message: MetaMessage): {
-  type: "text" | "interactive" | "image" | "document";
+  type: "text" | "interactive" | "image" | "document" | "audio";
   body: string;
   metadata: Record<string, unknown>;
 } {
@@ -79,6 +79,17 @@ function messageContent(message: MetaMessage): {
       metadata: {
         media_id: message.image.id ?? null,
         mime_type: message.image.mime_type ?? null,
+      },
+    };
+  }
+  if (message.type === "audio" && message.audio) {
+    return {
+      type: "audio",
+      body: message.audio.voice === true ? "Nota de voz" : "Audio",
+      metadata: {
+        media_id: message.audio.id ?? null,
+        mime_type: message.audio.mime_type ?? null,
+        voice: message.audio.voice === true,
       },
     };
   }

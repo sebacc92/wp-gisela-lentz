@@ -23,7 +23,14 @@ export interface Message {
   label?: string;
   createdAt?: string;
   ingestSequence?: number;
-  type?: "text" | "template" | "interactive" | "image" | "document" | "system";
+  type?:
+    | "text"
+    | "template"
+    | "interactive"
+    | "image"
+    | "document"
+    | "audio"
+    | "system";
   filename?: string;
   mimeType?: string;
   hasMedia?: boolean;

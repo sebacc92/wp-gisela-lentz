@@ -16,6 +16,7 @@ export interface MetaMessage extends MetaJson {
     list_reply?: { id?: string; title?: string; description?: string };
   };
   image?: { id?: string; caption?: string; mime_type?: string };
+  audio?: { id?: string; mime_type?: string; voice?: boolean };
   document?: {
     id?: string;
     caption?: string;

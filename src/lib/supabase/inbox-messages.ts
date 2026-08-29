@@ -67,7 +67,9 @@ function mapInboxMessage(row: InboxMessageRow): Message {
         ? row.metadata.mime_type
         : undefined,
     hasMedia:
-      (row.type === "image" || row.type === "document") &&
+      (row.type === "image" ||
+        row.type === "document" ||
+        row.type === "audio") &&
       typeof row.metadata?.media_id === "string" &&
       Boolean(row.metadata.media_id),
     depositProofLate: row.metadata?.deposit_proof_late === true,

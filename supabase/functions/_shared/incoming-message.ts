@@ -14,7 +14,12 @@ import {
 
 const CONSENT_POLICY_VERSION = "whatsapp-business-messaging-policy/2026-08-10";
 
-export type IncomingMessageType = "text" | "interactive" | "image" | "document";
+export type IncomingMessageType =
+  | "text"
+  | "interactive"
+  | "image"
+  | "document"
+  | "audio";
 
 export interface NormalizedIncomingMessage {
   externalMessageId: string;
@@ -128,7 +133,15 @@ function consentDecision(
 export function requiresHumanReview(
   message: NormalizedIncomingMessage,
 ): boolean {
-  if (message.type === "image" || message.type === "document") return true;
+  // Un adjunto que la automatización todavía no sabe leer nunca sigue sola: una
+  // nota de voz sin transcribir es tan opaca para el bot como un comprobante.
+  if (
+    message.type === "image" ||
+    message.type === "document" ||
+    message.type === "audio"
+  ) {
+    return true;
+  }
   const phrase = normalizedPhrase(message.body);
   return /\b(diagnostico|receta|medicacion|dosis|historia clinica|resultado de estudio|urgencias?|emergencias?|dolor intenso|dolor fuerte|sangrado|accidente|traumatismo)\b/.test(
     phrase,

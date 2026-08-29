@@ -249,3 +249,16 @@ test("an ordinary booking request keeps using the automated flow", () => {
     assert.equal(requiresHumanReview(textMessage(body)), false, body);
   }
 });
+
+test("a voice note never continues through the automated flow alone", () => {
+  const audio: NormalizedIncomingMessage = {
+    ...textMessage(""),
+    type: "audio",
+    body: "Nota de voz",
+    metadata: { media_id: "1234567890", mime_type: "audio/ogg", voice: true },
+  };
+  assert.equal(requiresHumanReview(audio), true);
+  // Sin transcribir no hay texto que evaluar, así que la prioridad no se
+  // infiere de un audio: la marca una persona desde la bandeja.
+  assert.equal(requiresPriority(audio), false);
+});
