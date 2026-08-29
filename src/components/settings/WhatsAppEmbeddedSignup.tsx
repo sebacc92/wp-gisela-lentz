@@ -11,29 +11,31 @@ import { Icon } from "~/components/ui/Icon";
 import { BUSINESS_CONFIG } from "~/config/business";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
-  bindEmbeddedSignupMessageSource,
   cancelEmbeddedSignupSessionFailClosed,
+  embeddedSignupMessageEffect,
   embeddedSignupHandshakeComplete,
   effectiveEmbeddedSignupTokenExpiry,
   embeddedSignupLoginOptions,
   embeddedSignupAccountRequiresResolution,
   embeddedSignupSessionAcceptsCallback,
+  embeddedSignupSourceMatchesCapturedPopup,
   embeddedSignupStartAllowed,
   embeddedSignupTabAlreadyAttempted,
   facebookSdkInitialization,
   FACEBOOK_JAVASCRIPT_SDK_URL,
   historySharingDecisionForNewAttempt,
   initialEmbeddedSignupHandshake,
+  isTrustedFacebookMessageOrigin,
   onboardingAttemptBlocksStart,
   parseEmbeddedSignupStartConfiguration,
   parseFacebookLoginCode,
   parseWhatsAppEmbeddedSignupMessage,
   reduceEmbeddedSignupHandshake,
   reserveEmbeddedSignupTabAttempt,
-  WHATSAPP_BUSINESS_APP_FINISH_EVENT,
-  type EmbeddedSignupFinishEvent,
+  sanitizedEmbeddedSignupSessionEvent,
   type EmbeddedSignupHandshakeAction,
   type EmbeddedSignupHandshakeState,
+  type EmbeddedSignupSessionCandidate,
   type EmbeddedSignupStartConfiguration,
   type FacebookJavascriptSdk,
   type HistorySharingDecision,
@@ -44,6 +46,7 @@ type EmbeddedSignupAction =
   | "start"
   | "exchange"
   | "finish"
+  | "diagnostic"
   | "cancel"
   | "offboard";
 
@@ -100,7 +103,7 @@ interface ActiveEmbeddedSignupSession {
   timeoutId: number;
   closing: boolean;
   lifecycleState: "active" | "cancelling" | "offboarding";
-  messageSource: MessageEventSource | null;
+  capturedPopup: MessageEventSource | null;
 }
 
 interface WhatsAppEmbeddedSignupProps {
@@ -135,6 +138,46 @@ function text(value: unknown, maximum = 240): string {
 function safeErrorCode(value: unknown): string {
   const code = text(value, 100).toUpperCase();
   return /^[A-Z0-9_.:-]{2,100}$/.test(code) ? code : "";
+}
+
+class EmbeddedSignupInvocationError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, status: number) {
+    super(code);
+    this.name = "EmbeddedSignupInvocationError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function startFailureMessage(cause: unknown): string {
+  if (
+    cause instanceof EmbeddedSignupInvocationError &&
+    cause.code === "WHATSAPP_EMBEDDED_SIGNUP_RATE_LIMITED"
+  ) {
+    return "Meta no se abrió ni se creó un intento nuevo. Se alcanzó el límite de seguridad de Embedded Signup; esperá a que venza la ventana y volvé a intentarlo. Esta pestaña no quedó consumida.";
+  }
+  if (
+    cause instanceof EmbeddedSignupInvocationError &&
+    cause.code === "WHATSAPP_EMBEDDED_SIGNUP_ATTEMPT_ACTIVE"
+  ) {
+    return "Meta no se abrió porque el backend todavía registra un intento activo. Actualizamos el estado real para que puedas resolverlo sin iniciar otro onboarding.";
+  }
+  if (
+    cause instanceof EmbeddedSignupInvocationError &&
+    cause.code === "WHATSAPP_EMBEDDED_SIGNUP_ACCOUNT_ALREADY_CONNECTED"
+  ) {
+    return "Meta no se abrió porque el backend ya registra activos de Coexistence. Actualizamos el estado real y no iniciamos otro onboarding.";
+  }
+  if (
+    cause instanceof EmbeddedSignupInvocationError &&
+    cause.code === "WHATSAPP_AUTOMATIONS_MUST_BE_DISABLED"
+  ) {
+    return "Meta no se abrió porque las automatizaciones deben permanecer desactivadas durante la incorporación.";
+  }
+  return "No pudimos preparar Embedded Signup. Meta no se abrió; actualizamos el estado real antes de permitir otro intento.";
 }
 
 function bool(value: unknown): boolean {
@@ -200,7 +243,7 @@ async function invokeEmbeddedSignup(
   action: EmbeddedSignupAction,
   payload: UnknownRecord = {},
 ): Promise<UnknownRecord> {
-  const { data, error } = await getSupabaseClient().functions.invoke(
+  const { data, error, response } = await getSupabaseClient().functions.invoke(
     "whatsapp-embedded-signup",
     {
       method: "POST",
@@ -209,7 +252,19 @@ async function invokeEmbeddedSignup(
   );
   const result = record(data);
   if (error || !result || result.error) {
-    throw new Error(`WHATSAPP_EMBEDDED_SIGNUP_${action.toUpperCase()}_FAILED`);
+    let code = safeErrorCode(result?.error);
+    if (!code && response) {
+      try {
+        const body = record(await response.clone().json());
+        code = safeErrorCode(body?.error);
+      } catch {
+        // Keep the action-specific fallback. Never surface an untrusted body.
+      }
+    }
+    throw new EmbeddedSignupInvocationError(
+      code || `WHATSAPP_EMBEDDED_SIGNUP_${action.toUpperCase()}_FAILED`,
+      response?.status ?? 0,
+    );
   }
   return result;
 }
@@ -303,12 +358,14 @@ function statusLabel(value: string): string {
   return labels[value.toLowerCase()] ?? "En revisión";
 }
 
-function finishPayload(message: EmbeddedSignupFinishEvent): UnknownRecord {
+function sessionCandidatePayload(
+  message: EmbeddedSignupSessionCandidate,
+): UnknownRecord {
   const { assets } = message;
   return {
     type: message.type,
-    event: WHATSAPP_BUSINESS_APP_FINISH_EVENT,
-    version: message.version,
+    ...(message.event ? { event: message.event } : {}),
+    ...(message.version !== null ? { version: message.version } : {}),
     wabaId: assets.wabaId,
     ...(assets.phoneNumberId ? { phoneNumberId: assets.phoneNumberId } : {}),
     ...(assets.businessPortfolioId
@@ -331,7 +388,7 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
     const historyAccepted = useSignal(false);
     const loadingStatus = useSignal(true);
     const action = useSignal<
-      "" | "start" | "exchange" | "finish" | "cancel" | "offboard"
+      "" | "start" | "exchange" | "cancel" | "offboard"
     >();
     const message = useSignal("");
     const error = useSignal(false);
@@ -340,27 +397,39 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
       NoSerialize<ActiveEmbeddedSignupSession> | undefined
     >();
 
-    const replaceStatus = $((next: EmbeddedSignupStatusView) => {
-      Object.assign(status, next);
-    });
+    const queryStatus = $(
+      async (): Promise<EmbeddedSignupStatusView | null> => {
+        if (!isAdmin) return null;
+        loadingStatus.value = true;
+        try {
+          return statusView(await invokeEmbeddedSignup("status"));
+        } catch {
+          return null;
+        } finally {
+          loadingStatus.value = false;
+        }
+      },
+    );
 
-    const refreshStatus = $(async () => {
-      if (!isAdmin) return;
-      loadingStatus.value = true;
-      try {
-        await replaceStatus(statusView(await invokeEmbeddedSignup("status")));
-      } catch {
+    const refreshStatus = $(async (): Promise<boolean> => {
+      const next = await queryStatus();
+      if (!next) {
         error.value = true;
         message.value =
           "No pudimos consultar el estado de incorporación de WhatsApp.";
-      } finally {
-        loadingStatus.value = false;
+        return false;
       }
+      Object.assign(status, next);
+      return true;
     });
 
     const releaseSession = $((session: ActiveEmbeddedSignupSession) => {
       window.removeEventListener("message", session.listener);
       window.clearTimeout(session.timeoutId);
+      session.handshake = {
+        ...session.handshake,
+        authorizationCode: null,
+      };
       if (activeSession.value === session) activeSession.value = undefined;
     });
 
@@ -373,6 +442,44 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
         "Meta recibió la conexión. Estamos validando los activos e iniciando la sincronización segura.";
       await refreshStatus();
     });
+
+    const acknowledgeServerCompletion = $(
+      async (session: ActiveEmbeddedSignupSession, response: UnknownRecord) => {
+        if (response.accepted !== true && response.completed !== true) {
+          return false;
+        }
+        session.handshake = reduceEmbeddedSignupHandshake(session.handshake, {
+          type: "completion_acknowledged",
+        }).state;
+        await finishIfComplete(session);
+        return true;
+      },
+    );
+
+    const reconcileAfterTransportFailure = $(
+      async (session: ActiveEmbeddedSignupSession) => {
+        // Another concurrent signal, timeout, or explicit cancellation may
+        // already have closed this session. Its newer UI result is
+        // authoritative and must not be overwritten by a stale rejection.
+        if (activeSession.value !== session || session.closing) return true;
+        const next = await queryStatus();
+        if (activeSession.value !== session || session.closing) return true;
+        if (
+          !next ||
+          next.attemptId !== session.attemptId ||
+          !["validating", "completed"].includes(next.onboardingState)
+        ) {
+          return false;
+        }
+        Object.assign(status, next);
+        await releaseSession(session);
+        action.value = "";
+        error.value = false;
+        message.value =
+          "El backend confirmó la conexión aunque se perdió una respuesta del navegador. Actualizamos el estado real.";
+        return true;
+      },
+    );
 
     const dispatchHandshake = $(
       async (
@@ -396,75 +503,25 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
         session.handshake = transition.state;
 
         for (const effect of transition.effects) {
-          if (effect.type === "exchange") {
-            action.value = "exchange";
-            const assets = effect.finish ? finishPayload(effect.finish) : {};
-            try {
-              await invokeEmbeddedSignup("exchange", {
-                attemptId: session.attemptId,
-                state: session.state,
-                nonce: session.nonce,
-                code: effect.code,
-                historyDecision: session.historyDecision,
-                ...assets,
-              });
-              if (
-                !embeddedSignupSessionAcceptsCallback({
-                  activeSessionMatches: activeSession.value === session,
-                  closing: session.closing,
-                  expiresAtMs: session.expiresAtMs,
-                  sessionLifecycleState: session.lifecycleState,
-                })
-              ) {
-                return;
-              }
-              session.handshake = reduceEmbeddedSignupHandshake(
-                session.handshake,
-                { type: "exchange_acknowledged" },
-              ).state;
-              await finishIfComplete(session);
-              if (activeSession.value === session) action.value = "";
-            } catch {
-              action.value = "";
-              error.value = true;
-              message.value =
-                "No pudimos intercambiar el código dentro de la ventana segura. Cancelá este intento antes de volver a empezar.";
-            }
-            continue;
-          }
-
-          action.value = "finish";
+          action.value = "exchange";
           try {
-            await invokeEmbeddedSignup("finish", {
+            const response = await invokeEmbeddedSignup("exchange", {
               attemptId: session.attemptId,
               state: session.state,
               nonce: session.nonce,
+              code: effect.code,
               historyDecision: session.historyDecision,
-              ...finishPayload(effect.message),
+              ...sessionCandidatePayload(effect.session),
             });
-            if (
-              !embeddedSignupSessionAcceptsCallback({
-                activeSessionMatches: activeSession.value === session,
-                closing: session.closing,
-                expiresAtMs: session.expiresAtMs,
-                sessionLifecycleState: session.lifecycleState,
-              })
-            ) {
-              return;
+            if (!(await acknowledgeServerCompletion(session, response))) {
+              throw new Error("EMBEDDED_SIGNUP_RESPONSE_NOT_ACKNOWLEDGED");
             }
-            session.handshake = reduceEmbeddedSignupHandshake(
-              session.handshake,
-              {
-                type: "finish_acknowledged",
-              },
-            ).state;
-            await finishIfComplete(session);
-            if (activeSession.value === session) action.value = "";
           } catch {
             action.value = "";
+            if (await reconcileAfterTransportFailure(session)) continue;
             error.value = true;
             message.value =
-              "Meta completó la ventana, pero no pudimos guardar el resultado. Cancelá este intento antes de volver a empezar.";
+              "Recibimos las dos señales de Meta, pero el backend no pudo confirmar la validación. Cancelá este intento antes de volver a empezar.";
           }
         }
       },
@@ -472,11 +529,8 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
 
     const cancelAttempt = $(
       async (
-        attemptId?: string,
-        reason:
-          | "USER_CANCELLED"
-          | "META_CANCELLED"
-          | "META_ERROR" = "USER_CANCELLED",
+        attemptId: string | undefined,
+        reason: "USER_CANCELLED" | "META_CANCELLED" | "META_ERROR",
       ) => {
         const session = activeSession.value;
         const targetAttemptId =
@@ -493,7 +547,9 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
               attemptId: targetAttemptId,
               reason,
             }),
-          reconcileStatus: refreshStatus,
+          reconcileStatus: async () => {
+            await refreshStatus();
+          },
         });
         if (cancellation.outcome === "cancelled") {
           error.value = false;
@@ -539,14 +595,13 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
         return;
       }
 
-      if (!reserveEmbeddedSignupTabAttempt(window.sessionStorage)) {
+      if (embeddedSignupTabAlreadyAttempted(window.sessionStorage)) {
         tabAttemptLocked.value = true;
         error.value = true;
         message.value =
           "Esta pestaña ya inició Embedded Signup. Cerrá esta pestaña y cualquier ventana de Meta; después abrí el panel en una pestaña nueva para reintentar de forma segura.";
         return;
       }
-      tabAttemptLocked.value = true;
 
       action.value = "start";
       error.value = false;
@@ -561,6 +616,14 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
         });
         configuration = parseEmbeddedSignupStartConfiguration(response);
         if (!configuration) throw new Error("INVALID_START_CONFIGURATION");
+
+        // A rejected START never opens Meta and must not consume the tab. Once
+        // the backend has created an attempt, reserve the tombstone before
+        // loading the SDK so delayed callbacks cannot be mixed with a retry.
+        if (!reserveEmbeddedSignupTabAttempt(window.sessionStorage)) {
+          throw new Error("EMBEDDED_SIGNUP_TAB_RESERVATION_FAILED");
+        }
+        tabAttemptLocked.value = true;
 
         const sdk = await loadFacebookSdk();
         if (
@@ -588,7 +651,7 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
           timeoutId: 0,
           closing: false,
           lifecycleState: "active",
-          messageSource: null,
+          capturedPopup: null,
         };
         session.listener = (event: MessageEvent) => {
           if (
@@ -601,30 +664,50 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
           ) {
             return;
           }
+          if (!isTrustedFacebookMessageOrigin(event.origin)) return;
+          const sourceMatchesCapturedPopup =
+            embeddedSignupSourceMatchesCapturedPopup(
+              session.capturedPopup,
+              event.source,
+            );
+          const sessionEventLog = sanitizedEmbeddedSignupSessionEvent({
+            origin: event.origin,
+            data: event.data,
+            sourceMatchesCapturedPopup,
+          });
+          // Temporary, intentionally value-free browser telemetry for the
+          // real Meta Session Info shape. Never add event.data itself here.
+          if (sessionEventLog.type === "WA_EMBEDDED_SIGNUP") {
+            console.info(
+              "whatsapp_embedded_signup_session_event",
+              sessionEventLog,
+            );
+            void invokeEmbeddedSignup("diagnostic", {
+              ...sessionEventLog,
+            }).catch(() => undefined);
+          }
           const parsed = parseWhatsAppEmbeddedSignupMessage({
             origin: event.origin,
             data: event.data,
           });
-          if (!parsed.accepted) {
-            if (
-              parsed.reason !== "UNRELATED_MESSAGE" &&
-              parsed.reason !== "UNTRUSTED_ORIGIN"
-            ) {
-              error.value = true;
-              message.value =
-                "Meta envió una respuesta que no coincide con Embedded Signup v4.";
-            }
+          const effect = embeddedSignupMessageEffect(parsed);
+          if (effect === "ignore") return;
+          if (effect === "contradictory") {
+            error.value = true;
+            message.value =
+              "Meta envió un WA_EMBEDDED_SIGNUP contradictorio: no contiene progreso ni una WABA candidata.";
             return;
           }
-          const sourceBinding = bindEmbeddedSignupMessageSource(
-            session.messageSource,
-            event.source,
-          );
-          if (!sourceBinding.accepted) return;
-          session.messageSource = sourceBinding.source;
-          if (parsed.message.kind === "finish") {
+          if (!parsed.accepted) return;
+          if (parsed.message.kind === "intermediate") {
+            error.value = false;
+            message.value =
+              "Meta continúa procesando la conexión. Esperamos el Session Info final y el código OAuth.";
+            return;
+          }
+          if (parsed.message.kind === "session") {
             void dispatchHandshake(session, {
-              type: "finish_received",
+              type: "session_received",
               message: parsed.message,
             });
             return;
@@ -647,61 +730,73 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
             if (activeSession.value !== session || session.closing) return;
             error.value = true;
             message.value =
-              "La sesión de incorporación venció. Cancelamos el intento para que ningún código pueda reutilizarse.";
-            void cancelAttempt(session.attemptId);
+              "La ventana segura venció. El intento se reconciliará como expirado; no se registró una cancelación del usuario.";
+            action.value = "";
+            void (async () => {
+              try {
+                await releaseSession(session);
+                await refreshStatus();
+              } catch {
+                // The backend expiry/recovery sweep remains authoritative.
+              }
+            })();
           },
           Math.max(1, session.expiresAtMs - Date.now()),
         );
 
-        sdk.login((response) => {
-          if (
-            !embeddedSignupSessionAcceptsCallback({
-              activeSessionMatches: activeSession.value === session,
-              closing: session.closing,
-              expiresAtMs: session.expiresAtMs,
-              sessionLifecycleState: session.lifecycleState,
-            })
-          ) {
-            return;
-          }
-          const code = parseFacebookLoginCode(response);
-          if (!code) {
-            error.value = true;
-            message.value =
-              "Meta no devolvió un código intercambiable. El intento será cancelado.";
-            void cancelAttempt(session.attemptId);
-            return;
-          }
-          // The code is passed directly into the one-shot transition and is
-          // never assigned to a signal, store, URL or browser storage.
-          void dispatchHandshake(session, {
-            type: "code_received",
-            code,
-          });
-        }, embeddedSignupLoginOptions(configuration.configurationId));
+        const originalWindowOpen = window.open;
+        window.open = ((
+          url?: string | URL,
+          target?: string,
+          features?: string,
+        ) => {
+          const popup = originalWindowOpen.call(window, url, target, features);
+          session.capturedPopup = popup;
+          return popup;
+        }) as typeof window.open;
+        try {
+          sdk.login((response) => {
+            if (
+              !embeddedSignupSessionAcceptsCallback({
+                activeSessionMatches: activeSession.value === session,
+                closing: session.closing,
+                expiresAtMs: session.expiresAtMs,
+                sessionLifecycleState: session.lifecycleState,
+              })
+            ) {
+              return;
+            }
+            const code = parseFacebookLoginCode(response);
+            if (!code) {
+              error.value = false;
+              message.value =
+                "El callback OAuth todavía no entregó un código. Mantendremos el intento abierto hasta recibir ambas señales o una cancelación explícita de Meta.";
+              return;
+            }
+            // The code lives only inside this noSerialize session until a
+            // SessionInfo candidate arrives; neither signal wins the race.
+            void dispatchHandshake(session, {
+              type: "code_received",
+              code,
+            });
+          }, embeddedSignupLoginOptions(configuration.configurationId));
+        } finally {
+          window.open = originalWindowOpen;
+        }
         if (action.value === "start") action.value = "";
         message.value =
-          "Completá la ventana de Meta. El código se enviará al backend apenas sea emitido.";
-      } catch {
+          "Completá la ventana de Meta. Esperaremos el código OAuth y el Session Info antes de llamar al backend.";
+      } catch (cause) {
         const session = activeSession.value;
         if (session) {
           session.closing = true;
           await releaseSession(session);
         }
         error.value = true;
-        message.value =
-          "No pudimos abrir Embedded Signup de forma segura. El intento quedó incompleto y debe cancelarse antes de reintentar.";
-        if (configuration?.attemptId) {
-          try {
-            await invokeEmbeddedSignup("cancel", {
-              attemptId: configuration.attemptId,
-            });
-            await refreshStatus();
-          } catch {
-            // Keep the explicit incomplete warning. Never expose raw provider
-            // or backend errors, public configuration, state or nonce.
-          }
-        }
+        message.value = configuration
+          ? "No pudimos abrir Embedded Signup de forma segura. El intento quedó incompleto y debe cancelarse antes de reintentar."
+          : startFailureMessage(cause);
+        await refreshStatus();
       } finally {
         if (!activeSession.value) action.value = "";
       }
@@ -1064,9 +1159,7 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
                 ? "Preparando conexión…"
                 : action.value === "exchange"
                   ? "Validando código…"
-                  : action.value === "finish"
-                    ? "Guardando activos…"
-                    : "Conectar WhatsApp Business con Coexistence"}
+                  : "Conectar WhatsApp Business con Coexistence"}
             </button>
           )}
           {blockingAttempt && (
@@ -1077,6 +1170,7 @@ export const WhatsAppEmbeddedSignup = component$<WhatsAppEmbeddedSignupProps>(
               onClick$={() =>
                 cancelAttempt(
                   activeSession.value?.attemptId || status.attemptId,
+                  "USER_CANCELLED",
                 )
               }
             >

@@ -1,11 +1,30 @@
 import assert from "node:assert/strict";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 import {
+  embeddedSignupMaxAttempts24h,
   type EmbeddedSignupHandlerDependencies,
   handleWhatsAppEmbeddedSignupRequest,
 } from "./index.ts";
 
 const ADMIN_ID = "11111111-1111-4111-8111-111111111111";
+
+Deno.test("configura el máximo diario con default seguro y clamp 5-50", () => {
+  const configured = (value: string | undefined) =>
+    embeddedSignupMaxAttempts24h(() => value);
+
+  for (const value of [undefined, "", "abc", "10.5", "Infinity"]) {
+    assert.equal(configured(value), 10);
+  }
+  assert.equal(configured("-1"), 5);
+  assert.equal(configured("0"), 5);
+  assert.equal(configured("4"), 5);
+  assert.equal(configured("5"), 5);
+  assert.equal(configured("10"), 10);
+  assert.equal(configured("25"), 25);
+  assert.equal(configured("50"), 50);
+  assert.equal(configured("51"), 50);
+  assert.equal(configured("999"), 50);
+});
 
 function request(
   action = "status",
@@ -79,7 +98,223 @@ Deno.test(
 );
 
 Deno.test(
-  "Embedded Signup intercambia, valida y almacena el token sin devolverlo",
+  "Embedded Signup no inventa USER_CANCELLED ante una razón ausente o desconocida",
+  async () => {
+    for (const payload of [
+      { attemptId: "22222222-2222-4222-8222-222222222222" },
+      {
+        attemptId: "22222222-2222-4222-8222-222222222222",
+        reason: "SESSION_TIMEOUT",
+      },
+    ]) {
+      const response = await handleWhatsAppEmbeddedSignupRequest(
+        request("cancel", "http://localhost:5173", payload),
+        dependencies("ADMIN"),
+      );
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: "INVALID_CANCELLATION_REASON",
+      });
+    }
+  },
+);
+
+Deno.test(
+  "diagnostic registra sólo metadata sanitizada del Session Info",
+  async () => {
+    const originalInfo = console.info;
+    const entries: unknown[][] = [];
+    console.info = (...values: unknown[]) => entries.push(values);
+    try {
+      const response = await handleWhatsAppEmbeddedSignupRequest(
+        request("diagnostic", "http://localhost:5173", {
+          origin: "https://www.facebook.com",
+          dataType: "string",
+          type: "WA_EMBEDDED_SIGNUP",
+          event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+          version: 3,
+          hasCurrentStep: false,
+          hasWabaId: true,
+          sourceMatchesCapturedPopup: false,
+          dataKeys: ["authorization_code", "phone_number_id", "waba_id"],
+          ignoredValue: "must-never-be-logged",
+        }),
+        dependencies("ADMIN"),
+      );
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { accepted: true });
+      assert.equal(entries.length, 1);
+      const serialized = JSON.stringify(entries);
+      assert.equal(serialized.includes("must-never-be-logged"), false);
+      assert.equal(serialized.includes("authorization_code"), true);
+      assert.equal(serialized.includes("phone_number_id"), true);
+      assert.equal(serialized.includes("waba_id"), true);
+    } finally {
+      console.info = originalInfo;
+    }
+  },
+);
+
+Deno.test(
+  "START mantiene 10 minutos para correlacionar code y FINISH tardíos",
+  async () => {
+    const environment: Record<string, string> = {
+      META_APP_ID: "1234567890",
+      META_EMBEDDED_SIGNUP_CONFIG_ID: "9876543210",
+      META_APP_SECRET: "server-only-app-secret",
+      WHATSAPP_GRAPH_API_VERSION: "v26.0",
+      WHATSAPP_EMBEDDED_SIGNUP_ENABLED: "true",
+      WHATSAPP_AUTOMATIONS_ENABLED: "false",
+      WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H: "25",
+    };
+    const previousEnvironment = new Map<string, string | undefined>();
+    for (const [name, value] of Object.entries(environment)) {
+      previousEnvironment.set(name, Deno.env.get(name));
+      Deno.env.set(name, value);
+    }
+
+    let requestedExpiry = "";
+    const client = {
+      rpc: async (name: string, parameters: Record<string, unknown>) => {
+        assert.equal(name, "create_whatsapp_embedded_signup_attempt");
+        requestedExpiry = String(parameters.p_expires_at);
+        assert.equal(parameters.p_max_attempts_24h, 25);
+        return {
+          data: [
+            {
+              attempt_id: "22222222-2222-4222-8222-222222222222",
+              status: "initiated",
+              expires_at: requestedExpiry,
+            },
+          ],
+          error: null,
+        };
+      },
+    } as unknown as SupabaseClient;
+    const before = Date.now();
+    try {
+      const response = await handleWhatsAppEmbeddedSignupRequest(
+        request("start", "http://localhost:5173", {
+          historyDecision: "declined",
+          maxAttempts24h: 50,
+        }),
+        {
+          createClient: () => client,
+          authorize: async () => ({
+            user: { id: ADMIN_ID },
+            profile: { role: "ADMIN" },
+          }),
+        },
+      );
+      const after = Date.now();
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.sessionInfoVersion, "3");
+      assert.equal(body.featureType, "whatsapp_business_app_onboarding");
+      const expiryMs = Date.parse(requestedExpiry);
+      assert.ok(expiryMs >= before + 10 * 60_000);
+      assert.ok(expiryMs <= after + 10 * 60_000);
+    } finally {
+      for (const [name, value] of previousEnvironment) {
+        if (value === undefined) Deno.env.delete(name);
+        else Deno.env.set(name, value);
+      }
+    }
+  },
+);
+
+Deno.test(
+  "START canonicaliza el sentinel rate_limited a 409 sin crear otro intento",
+  async () => {
+    const environment: Record<string, string> = {
+      META_APP_ID: "1234567890",
+      META_EMBEDDED_SIGNUP_CONFIG_ID: "9876543210",
+      META_APP_SECRET: "server-only-app-secret",
+      WHATSAPP_GRAPH_API_VERSION: "v26.0",
+      WHATSAPP_EMBEDDED_SIGNUP_ENABLED: "true",
+      WHATSAPP_AUTOMATIONS_ENABLED: "false",
+      WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H: "10",
+    };
+    const previousEnvironment = new Map<string, string | undefined>();
+    for (const [name, value] of Object.entries(environment)) {
+      previousEnvironment.set(name, Deno.env.get(name));
+      Deno.env.set(name, value);
+    }
+
+    let createCalls = 0;
+    let responseMode: "rate_limited" | "unexpected" = "rate_limited";
+    const client = {
+      rpc: async (name: string, parameters: Record<string, unknown>) => {
+        assert.equal(name, "create_whatsapp_embedded_signup_attempt");
+        assert.equal(parameters.p_max_attempts_24h, 10);
+        createCalls += 1;
+        return {
+          data:
+            responseMode === "rate_limited"
+              ? [
+                  {
+                    attempt_id: null,
+                    status: "rate_limited",
+                    expires_at: null,
+                  },
+                ]
+              : [
+                  {
+                    attempt_id: "22222222-2222-4222-8222-222222222222",
+                    status: "completed",
+                    expires_at: new Date(Date.now() + 600_000).toISOString(),
+                  },
+                ],
+          error: null,
+        };
+      },
+    } as unknown as SupabaseClient;
+    try {
+      const response = await handleWhatsAppEmbeddedSignupRequest(
+        request("start", "http://localhost:5173", {
+          historyDecision: "declined",
+        }),
+        {
+          createClient: () => client,
+          authorize: async () => ({
+            user: { id: ADMIN_ID },
+            profile: { role: "ADMIN" },
+          }),
+        },
+      );
+      assert.equal(response.status, 409);
+      assert.deepEqual(await response.json(), {
+        error: "WHATSAPP_EMBEDDED_SIGNUP_RATE_LIMITED",
+      });
+      responseMode = "unexpected";
+      const unexpected = await handleWhatsAppEmbeddedSignupRequest(
+        request("start", "http://localhost:5173", {
+          historyDecision: "declined",
+        }),
+        {
+          createClient: () => client,
+          authorize: async () => ({
+            user: { id: ADMIN_ID },
+            profile: { role: "ADMIN" },
+          }),
+        },
+      );
+      assert.equal(unexpected.status, 500);
+      assert.deepEqual(await unexpected.json(), {
+        error: "WHATSAPP_EMBEDDED_SIGNUP_START_FAILED",
+      });
+      assert.equal(createCalls, 2);
+    } finally {
+      for (const [name, value] of previousEnvironment) {
+        if (value === undefined) Deno.env.delete(name);
+        else Deno.env.set(name, value);
+      }
+    }
+  },
+);
+
+Deno.test(
+  "Embedded Signup completa con SessionInfo WABA-only sin event/version y descubre el teléfono server-side",
   async () => {
     const environment: Record<string, string> = {
       META_APP_ID: "1234567890",
@@ -105,6 +340,7 @@ Deno.test(
     let preCompletionValidationCalls = 0;
     let preCompletionValidatedAt: unknown = null;
     let debugTokenCalls = 0;
+    let candidateRecorded = false;
     const attemptId = "22222222-2222-4222-8222-222222222222";
     const validationLease = "33333333-3333-4333-8333-333333333333";
     const wabaId = "1111111111";
@@ -115,12 +351,13 @@ Deno.test(
     const client = {
       rpc: async (name: string, parameters: Record<string, unknown>) => {
         if (name === "claim_whatsapp_embedded_signup_code") {
+          assert.equal(candidateRecorded, true);
           assert.equal(parameters.p_attempt_id, attemptId);
           return {
             data: [
               {
                 attempt_id: attemptId,
-                waba_id: wabaId,
+                waba_id: null,
                 exchange_deadline_at: new Date(
                   Date.now() + 25_000,
                 ).toISOString(),
@@ -146,7 +383,9 @@ Deno.test(
         }
         if (name === "record_whatsapp_embedded_signup_session") {
           assert.equal(parameters.p_waba_id, wabaId);
-          assert.equal(parameters.p_phone_number_id, phoneNumberId);
+          assert.equal(parameters.p_business_portfolio_id, null);
+          assert.equal(parameters.p_phone_number_id, null);
+          candidateRecorded = true;
           return { data: true, error: null };
         }
         if (
@@ -171,9 +410,9 @@ Deno.test(
                 initiated_by: ADMIN_ID,
                 validation_lease_token: validationLease,
                 business_access_token: storedToken,
-                submitted_business_portfolio_id: portfolioId,
+                submitted_business_portfolio_id: null,
                 submitted_waba_id: wabaId,
-                submitted_phone_number_id: phoneNumberId,
+                submitted_phone_number_id: null,
                 history_sharing_decision: "declined",
                 validation_deadline_at: new Date(
                   Date.now() + 5 * 60_000,
@@ -302,18 +541,14 @@ Deno.test(
           code: "single-use-code",
           historyDecision: "declined",
           type: "WA_EMBEDDED_SIGNUP",
-          event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
-          version: 3,
-          businessPortfolioId: portfolioId,
           wabaId,
-          phoneNumberId,
           assetIds: {
             adAccountIds: [],
             pageIds: [],
             datasetIds: [],
             catalogIds: [],
             instagramAccountIds: [],
-            wabaIds: [wabaId],
+            wabaIds: [],
           },
         }),
         {

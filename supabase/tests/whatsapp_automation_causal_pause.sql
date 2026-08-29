@@ -272,13 +272,19 @@ select public.pause_whatsapp_automation_for_app_echo(
 select ok(
   :'app_echo_affected'::integer = 1 and (
     select automation_mode = 'manual'
-      and needs_human is false
-      and automation_pause_source = 'app_echo'
-      and automation_pause_message_id is null
+      and needs_human
+      and automation_pause_source = 'inbound_handoff'
+      and automation_pause_message_id =
+        '95000000-0000-4000-8000-000000000021'
+      and automation_human_barrier_ingest_sequence = (
+        select whatsapp_ingest_sequence
+        from public.messages
+        where id = '95000000-0000-4000-8000-000000000021'
+      )
     from public.conversations
     where id = '95000000-0000-4000-8000-000000000011'
   ),
-  'an app echo takes causal ownership before asynchronous ingestion'
+  'an app echo records a causal human-reply barrier without replacing the existing safety preference'
 );
 
 select public.pause_whatsapp_automation_for_inbound_handoff(
@@ -289,14 +295,21 @@ select public.pause_whatsapp_automation_for_inbound_handoff(
 \gset late_app_handoff_
 
 select ok(
-  not :'late_app_handoff_claimed'::boolean and (
-    select automation_pause_source = 'app_echo'
-      and automation_pause_message_id is null
-      and needs_human is false
+  :'late_app_handoff_claimed'::boolean and (
+    select automation_pause_source = 'inbound_handoff'
+      and automation_pause_message_id =
+        '95000000-0000-4000-8000-000000000021'
+      and needs_human
+      and current_flow = 'late_handoff'
+      and automation_human_barrier_ingest_sequence = (
+        select whatsapp_ingest_sequence
+        from public.messages
+        where id = '95000000-0000-4000-8000-000000000021'
+      )
     from public.conversations
     where id = '95000000-0000-4000-8000-000000000011'
   ),
-  'a late inbound handoff cannot overwrite app-echo ownership'
+  'a same-message handoff replay preserves safety ownership and the human-reply barrier'
 );
 
 select throws_ok(
@@ -308,8 +321,8 @@ select throws_ok(
     :'app_execution_lease_token'
   ),
   '55000',
-  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL',
-  'profile effects are blocked after an app echo'
+  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY',
+  'profile effects are blocked by the causal human-reply barrier'
 );
 
 select ok(
@@ -334,8 +347,8 @@ select throws_ok(
     :'app_execution_lease_token'
   ),
   '55000',
-  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL',
-  'decision effects are blocked after an app echo'
+  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY',
+  'decision effects are blocked by the causal human-reply barrier'
 );
 
 select throws_ok(
@@ -346,8 +359,8 @@ select throws_ok(
       'blocked:appointment', 'appointment_create', '{}'::jsonb, '{}'::jsonb
     )$$,
   '55000',
-  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL',
-  'appointment effects are blocked after an app echo'
+  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY',
+  'appointment effects are blocked by the causal human-reply barrier'
 );
 
 select throws_ok(
@@ -359,8 +372,8 @@ select throws_ok(
     :'app_execution_lease_token'
   ),
   '55000',
-  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL',
-  'even session effects are blocked when the app owns the pause'
+  'WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY',
+  'even session effects are blocked for the inbound superseded by a human reply'
 );
 
 select public.pause_whatsapp_automation_for_inbound_handoff(
@@ -577,14 +590,15 @@ where contact_id = (
 
 select ok(
   (
-    select automation_mode = 'manual'
+    select automation_mode = 'auto'
       and needs_human is false
-      and automation_pause_source = 'app_echo'
+      and automation_pause_source is null
       and automation_pause_message_id is null
+      and automation_human_barrier_ingest_sequence = 0
     from public.conversations
     where id = :'echo_conversation_id'::uuid
   ),
-  'a newly ingested smb_message_echo marks app-echo ownership'
+  'a newly ingested app echo preserves auto mode when no inbound needs a causal barrier'
 );
 
 update public.conversations
@@ -633,9 +647,10 @@ select (public.ingest_whatsapp_coexistence_message(
 select ok(
   :'echo_duplicate_message_id' = :'echo_message_id'
     and (
-      select automation_mode = 'manual'
-        and automation_pause_source = 'app_echo'
+      select automation_mode = 'auto'
+        and automation_pause_source is null
         and automation_pause_message_id is null
+        and automation_human_barrier_ingest_sequence = 0
       from public.conversations
       where id = :'echo_conversation_id'::uuid
     )
@@ -644,7 +659,7 @@ select ok(
       from public.messages
       where whatsapp_message_id = 'wamid.test.causal.echo.1'
     ),
-  'the synchronous pre-pass keeps a duplicate echo causally owned and idempotent'
+  'the synchronous pre-pass keeps duplicate echo handling idempotent without changing preference'
 );
 
 select ok(
@@ -658,6 +673,12 @@ select ok(
     'authenticated',
     'public.conversations',
     'automation_pause_message_id',
+    'UPDATE'
+  )
+  and not has_column_privilege(
+    'authenticated',
+    'public.conversations',
+    'automation_human_barrier_ingest_sequence',
     'UPDATE'
   )
   and not has_function_privilege(

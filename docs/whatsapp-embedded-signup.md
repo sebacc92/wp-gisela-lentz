@@ -6,12 +6,14 @@ admitido es Embedded Signup v4 mediante Facebook JavaScript SDK; no se usa un
 onboarding alojado por Meta ni se registra el número como si fuera un alta Cloud
 API normal.
 
-> **Estado operativo (26 de agosto de 2026):** la migración, las Functions y el
+> **Estado operativo (27 de agosto de 2026):** la migración, las Functions y el
 > frontend para Embedded Signup ya están desplegados en la producción de
 > Gisela. Todavía no hay una cuenta Coexistence ni un número real conectados.
-> Los dos intentos de prueba previos quedaron cancelados sin código ni token.
-> Antes del onboarding presencial, confirmar en Meta el callback, los campos de
-> webhook, los permisos y los activos reales. El checklist vigente está en
+> Los intentos reales más recientes intercambiaron y validaron el código OAuth,
+> pero no persistieron Session Info/FINISH; al vencer se purgó correctamente la
+> credencial temporal. Antes de un único reintento controlado, confirmar el
+> callback sanitizado, los campos de webhook, los permisos y los activos reales.
+> El checklist vigente está en
 > [`ONBOARDING_GISELA.md`](./ONBOARDING_GISELA.md).
 
 ## Separación de configuración y secretos
@@ -48,6 +50,7 @@ META_APP_SECRET=
 WHATSAPP_GRAPH_API_VERSION=v26.0
 WHATSAPP_AUTOMATIONS_ENABLED=false
 WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false
+WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H=10
 ```
 
 `GET /debug_token` se autentica con un App Access Token de la misma Meta App.
@@ -73,12 +76,21 @@ intento. `status` expone al navegador únicamente el booleano `enabled`; cuando
 es falso la UI no reserva el tombstone, no solicita `start`, no carga el SDK y
 no puede ejecutar `FB.login`.
 
+`WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H` tampoco se expone al navegador. Su
+default fail-closed es `10`; entradas inválidas vuelven a `10` y enteros fuera
+del rango se limitan a `5`–`50`. Cuenta cada START persistido, incluso si luego
+termina `expired`, `cancelled` o `failed`, por la pareja ADMIN + client scope.
+Un rechazo `RATE_LIMITED` se audita pero no crea ni contabiliza otro intento.
+La protección corta de `3` intentos en `15` minutos permanece fija.
+
 ## Flujo navegador y backend
 
 El único punto de entrada de la interfaz es la Edge Function autenticada
 `whatsapp-embedded-signup`. Recibe acciones JSON `status`, `start`, `exchange`,
-`finish`, `cancel` y `offboard`; ninguna acción acepta App Secret, provider
-token o business token desde el navegador.
+`finish`, `diagnostic`, `cancel` y `offboard`; `finish` se conserva sólo para
+compatibilidad durante despliegues escalonados. El frontend vigente correlaciona
+las dos señales y hace una única llamada `exchange` combinada. Ninguna acción
+acepta App Secret, provider token o business token desde el navegador.
 
 ### 1. Crear un intento
 
@@ -87,7 +99,9 @@ backend debe:
 
 1. comprobar el rol `ADMIN` y que no haya otro intento activo o parcial;
 2. generar `state` y nonce criptográficamente aleatorios;
-3. aplicar rate limit y una expiración breve;
+3. aplicar rate limit y una expiración inicial de 10 minutos para tolerar el
+   flujo humano y callbacks en distinto orden; después del intercambio, la
+   credencial temporal conserva su límite server-side de 5 minutos;
 4. persistir sólo hashes cuando no necesite recuperar el valor original;
 5. devolver App ID, Configuration ID, intento, `state`, nonce y expiración;
 6. registrar auditoría sanitizada, sin códigos ni tokens.
@@ -146,50 +160,74 @@ https://www.facebook.com
 
 No se usa `includes`, `endsWith`, wildcard ni comparación de sufijo. Cualquier
 origen nuevo queda rechazado hasta que Meta lo documente y se agregue mediante
-un cambio de código y tests. Después se valida además:
+un cambio de código y tests.
 
-- JSON válido y acotado;
-- `type = WA_EMBEDDED_SIGNUP`;
-- `version = 3` para el FINISH de Coexistence;
-- evento incluido en la lista cerrada esperada.
+El parser runtime adapta el patrón de la muestra oficial actual de Meta, con
+validaciones locales adicionales:
 
-Sólo este evento completa el paso Coexistence:
+1. si `event.data` no puede parsearse como JSON, se ignora;
+2. si `type !== WA_EMBEDDED_SIGNUP`, se ignora;
+3. la muestra separa un `current_step` truthy del SessionInfo; nuestra frontera
+   más conservadora considera intermedio cualquier `current_step` presente;
+4. la muestra castea el resto sin validarlo; nuestra frontera exige que
+   `data.waba_id` sea un ID sintácticamente válido y que no haya
+   `current_step`, el objeto completo es un **SessionInfo candidate**.
 
-```text
-FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING
-```
+Para aceptar ese candidato en frontend no se exige `event`, `version`,
+`phone_number_id` ni `business_id`. En particular, `version: 3` es compatible
+con Embedded Signup v4, pero su presencia no es obligatoria. El evento
+`FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` y cualquier otra variante segura se
+conservan sólo como metadata observada: el navegador nunca eleva ese nombre a
+autoridad ni inventa un FINISH canónico.
 
-La carga específica de Coexistence sólo garantiza `data.waba_id`. La carga
-genérica puede incluir `phone_number_id`, `business_id` y otros activos, pero
-son pistas no confiables hasta verificarlos con Graph. No se exige que esos dos
-IDs opcionales estén presentes.
+La carga específica de Coexistence sólo necesita `data.waba_id` como candidato.
+`phone_number_id`, `business_id` y otros activos son pistas no confiables hasta
+verificarlos con Graph; su ausencia o un campo opcional incompatible no impiden
+la canonicalización server-side.
 
-`CANCEL` puede representar abandono (`current_step`) o un error reportado
-(`error_code`, `error_message`, `session_id`, `timestamp`). También se rechazan
-de forma controlada `ERROR`, versiones desconocidas y cualquier FINISH de otro
-tipo. Los ejemplos oficiales de `CANCEL` omiten `version`, por lo que para
-cancelación/error se admite ausente o `3`, pero no otro valor. Ninguno avanza el
-onboarding.
+Los `postMessage` no JSON y los JSON cuyo `type` no sea
+`WA_EMBEDDED_SIGNUP` se ignoran sin cambiar la UI ni el intento. Un nombre de
+evento o versión desconocidos no invalidan un candidato que contiene WABA. Un
+WA realmente contradictorio —sin progreso, WABA ni error/cancelación
+explícitos— puede mostrarse como diagnóstico, pero no se convierte en
+`USER_CANCELLED`.
+
+Durante el diagnóstico controlado, el navegador replica a la Function
+autenticada exclusivamente `origin`, `typeof data`, `type`, `event`, `version`,
+presencia de `current_step`, presencia de `waba_id`, coincidencia booleana de
+`event.source` con el popup capturado y los nombres de las claves de `data`. La
+ruta no acepta ni registra valores, códigos, tokens, secretos o IDs completos y
+no modifica el intento.
+
+Todo WA con `current_step` se trata como progreso, incluso si otros campos
+parecen cancelación. Sólo `CANCEL` o `ERROR` explícitos sin `current_step`
+alteran el intento; `USER_CANCELLED` requiere una acción explícita del
+administrador. La ausencia o variación de `version` nunca se traduce por sí sola
+en cancelación.
 
 El código OAuth y el evento de sesión llegan por callbacks distintos, cuyo
 orden no está garantizado. Se correlacionan con el mismo intento y la
 finalización backend sólo continúa cuando dispone de la evidencia necesaria.
-El evento y las marcas de consumo pueden persistirse; el código se transmite de
-forma inmediata y nunca se guarda en estado del navegador, tablas ni logs.
+Ambas señales viven separadas en una sesión de memoria marcada `noSerialize`.
+`maybeComplete` no hace nada hasta tener las dos; entonces emite una sola
+operación backend y elimina el código del estado en memoria. El código nunca se
+guarda en signals serializables, tablas, storage, URLs ni logs.
 
 Meta no incluye `state`, nonce ni un identificador de sesión de la aplicación
-en el FINISH. Por eso la UI reserva una sola apertura de Embedded Signup por
-pestaña, incluso después de cancelar o recargar, y fija los mensajes aceptados
-al primer `event.source` no nulo de esa sesión. Para reintentar hay que cerrar la
-pestaña administrativa y cualquier popup de Meta, y recién entonces abrir el
-panel en una pestaña nueva. En `sessionStorage` sólo queda el tombstone literal
-no sensible `used`; nunca se guardan IDs, códigos, `state`, nonce ni tokens.
+en SessionInfo. Por eso la UI reserva una sola apertura por pestaña y sólo
+acepta callbacks mientras existe el intento local activo dentro de su ventana.
+`event.source === capturedPopup` se registra como booleano diagnóstico, pero no
+es requisito fatal: la muestra oficial tampoco lo usa. Las barreras reales son
+origen exacto, tombstone, intento vivo, code del mismo intento, `state`/nonce
+server-side y Graph. En `sessionStorage` sólo queda el literal no sensible
+`used`.
 
-### 4. Intercambiar inmediatamente el código
+### 4. Correlacionar e intercambiar una sola vez
 
-El callback de `FB.login` entrega `response.authResponse.code`. Meta documenta
-una duración de aproximadamente 30 segundos, por lo que el navegador lo envía
-inmediatamente en el body de un POST autenticado al backend.
+El callback de `FB.login` entrega `response.authResponse.code`. Como code y
+SessionInfo pueden llegar en cualquier orden, el frontend espera ambos dentro
+de la ventana activa y los envía juntos una única vez en el body autenticado.
+Callbacks duplicados no vuelven a despachar la operación.
 
 El backend usa una llamada servidor-a-servidor:
 
@@ -286,8 +324,9 @@ autorizada. `anon` y `authenticated` no pueden leerlo ni invocar las funciones
 internas.
 
 `onboarding_completed_at` conserva el momento en que el backend recibió el
-FINISH oficial y `initial_sync_deadline_at` es exactamente ese valor más 24
-horas; la latencia posterior de Graph no extiende la ventana. El estado
+SessionInfo candidate luego correlacionado y `initial_sync_deadline_at` es
+exactamente ese valor más 24 horas; la latencia posterior de Graph no extiende
+la ventana. El estado
 `ambiguous` del outbox es terminal y no-retry para una mutación cuyo resultado
 Meta no puede confirmarse. El RPC
 `begin_whatsapp_coexistence_offboarding(p_account_id, p_admin_user_id,
@@ -299,10 +338,10 @@ importados.
 
 El backend no confía en los IDs del `postMessage`. Hace dos inspecciones reales
 y separadas mediante `debug_token`: una inmediatamente después del intercambio
-(`post_exchange`, incluso si FINISH todavía no llegó) y otra justo antes de
-confirmar la cuenta (`pre_completion`). No se duplican filas de auditoría para
-simular dos llamadas. Ambas persisten server-side `is_valid`, App ID, scopes,
-granular scopes, target IDs, expiraciones y fecha de validación; nunca el token.
+(`post_exchange`) y otra justo antes de confirmar la cuenta
+(`pre_completion`). No se duplican filas de auditoría para simular dos llamadas.
+Ambas persisten server-side `is_valid`, App ID, scopes, granular scopes, target
+IDs, expiraciones y fecha de validación; nunca el token.
 
 Con el business token nuevo ejecuta, en orden:
 
@@ -319,8 +358,7 @@ Con el business token nuevo ejecuta, en orden:
    Coexistence exige `is_on_biz_app = true` y `platform_type = CLOUD_API`.
 
 El manifest no confiable del navegador se canonicaliza y se limita a 100 IDs
-agregados/16 KiB; si incluye `waba_ids`, debe incluir también la WABA principal.
-Esos IDs quedan sólo como evidencia de auditoría: no reemplazan las consultas
+agregados/16 KiB. Esos IDs quedan sólo como evidencia de auditoría: no reemplazan las consultas
 server-side anteriores.
 
 Se bloquea el flujo ante token inválido, App ID inesperado, permisos faltantes,
@@ -398,11 +436,11 @@ como consentimiento para otra incorporación: hace falta una nueva acción
 afirmativa del administrador.
 
 Meta permite iniciar cada tipo de sync una sola vez y exige iniciar dentro de
-las 24 horas tanto contactos como el historial autorizado. Como la carga FINISH
-no incluye un timestamp de
-finalización, `onboarding_completed_at` se fija con el reloj backend al recibir
-ese evento oficial, antes de la validación server-side. También se persiste
-`initial_sync_deadline_at`, exactamente 24 horas después.
+las 24 horas tanto contactos como el historial autorizado. Como el SessionInfo
+no incluye un timestamp de finalización, `onboarding_completed_at` se fija con
+el reloj backend al recibir el candidato correlacionado, antes de la validación
+server-side. También se persiste `initial_sync_deadline_at`, exactamente 24
+horas después.
 
 Antes de cada llamada se registra durablemente la intención y la generación.
 Inmediatamente después de una respuesta válida se guarda `request_id`. El
@@ -419,9 +457,12 @@ Los webhooks `history` y `smb_app_state_sync` no devuelven el `request_id` de
 `/smb_app_data` ni un identificador de generación. La barrera local sólo puede
 autorizar una entrega posterior al despacho y asociarla a la generación abierta;
 no puede demostrar criptográficamente qué request la originó. Por eso, si un
-onboarding anterior ya llegó a despachar history, una nueva incorporación con
-history aceptado queda bloqueada para revisión manual en vez de arriesgar la
-mezcla de historiales. Rechazar history evita la nueva solicitud.
+onboarding anterior ya llegó a despachar history, una nueva incorporación nunca
+repite el POST. Cuando existe exactamente un único request remoto confirmado de
+la misma cuenta, se crea una referencia local terminal y auditable que permite
+recibir su webhook tardío sin trabajo remoto reclamable. Si la evidencia es
+ambigua, se conserva el consentimiento `accepted`, se registra revisión requerida
+y sólo continúan suscripción y contactos; history permanece bloqueado.
 
 Para contactos tampoco existe correlación protocolaria y la metadata causal de
 cada contacto puede representar cambios anteriores. No se usa ese timestamp
@@ -553,10 +594,23 @@ multitenancy de runtime ya terminada.
 - [ ] `WHATSAPP_AUTOMATIONS_ENABLED=false` confirmado en producción.
 - [ ] Backups y conteos pre-onboarding verificados.
 - [ ] Operador disponible para observar callbacks, sync, errores y deadline.
-- [ ] Número real de Gisela aún desconectado hasta una autorización final.
+- [ ] Vinculación existente del teléfono preservada; no repetir onboarding ni
+      desconectar Meta durante la corrección del callback.
+
+## Diferencia verificada con la muestra oficial
+
+La comparación se hizo contra `Fbl4bLauncher.tsx` en el commit
+`14703a3e1fdba9bcf75b2360b00817b6fcc9f79b` del repositorio oficial. Esa
+implementación ignora mensajes no JSON/no WA para la correlación, separa los
+mensajes con `current_step` y guarda el objeto restante como SessionInfo; no
+comprueba `event`, `version`, WABA ni `event.source` en el listener. Nuestra
+integración conserva barreras adicionales de origen exacto, WABA candidata,
+intento activo, expiración, deduplicación, `state`/nonce y validación Graph, pero
+ya no usa `event`, `version` ni `event.source` como requisitos runtime.
 
 ## Fuentes oficiales de Meta
 
+- [Muestra oficial actual: `Fbl4bLauncher.tsx`](https://github.com/fbsamples/business-messaging-sample-tech-provider-app/blob/14703a3e1fdba9bcf75b2360b00817b6fcc9f79b/app/components/Fbl4bLauncher.tsx)
 - [Embedded Signup v4](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-4/)
 - [Implementación mediante Facebook JavaScript SDK](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation)
 - [Onboarding de usuarios de WhatsApp Business App](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users)

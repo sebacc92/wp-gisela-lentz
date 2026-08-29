@@ -20,7 +20,8 @@ Paciente ◄──── WhatsApp Cloud API ◄───┼──► whatsapp-se
                                       ├──► process-whatsapp-automation-outbox
                                       ├──► process-whatsapp-coexistence
                                       ├──► process-reminders
-                                      └──► whatsapp-health
+                                      ├──► whatsapp-health
+                                      └──► OpenAI Responses API (opcional)
 ```
 
 El navegador sólo recibe la URL y la publishable key. Las claves de servicio,
@@ -42,9 +43,11 @@ tokens de Meta y secretos internos permanecen en Supabase Edge Functions.
   cuentas sin romper el orden de locks ni depender del cron.
 - **`whatsapp-send`:** autentica al operador y centraliza política, test mode,
   idempotencia y despacho a Graph.
-- **`whatsapp-automation`:** máquina de estados determinista, sin IA generativa,
-  para turnos e información administrativa; cada inbound conserva un snapshot
-  y un ledger transaccional de efectos para que los retries sean deterministas.
+- **`whatsapp-automation`:** máquina de estados determinista y autoridad única
+  para turnos. Sólo para preguntas estrictamente administrativas sobre horarios
+  o ubicación puede usar opcionalmente OpenAI con una consulta canónica, sin el
+  texto original ni datos del paciente; cada inbound conserva un snapshot y un
+  ledger transaccional de efectos para que los retries sean deterministas.
 - **`process-whatsapp-automation-outbox`:** reclama con lease las
   automatizaciones aceptadas por el webhook y las reintenta sin perderlas ante
   un fallo parcial.
@@ -71,6 +74,11 @@ de unicidad/conflicto.
 
 - Automatizaciones apagadas y test mode activo son los defaults si los flags
   faltan o son inválidos.
+- La asistencia con OpenAI nace apagada y exige simultáneamente el kill switch
+  global activo, `OPENAI_ADMINISTRATIVE_ENABLED=true`,
+  `app_settings.ai_enabled=true`, el modelo fijo esperado, conexión sin pausa y
+  una clave backend válida. Los controles se vuelven a leer antes de llamar al
+  proveedor y antes de enviar.
 - En test mode, un número fuera de la allowlist se bloquea antes de Graph y deja
   auditoría sanitizada.
 - Un envío manual reclama la conversación antes de llamar a Meta. Un eco de la

@@ -1,8 +1,9 @@
 # Flujo de automatización
 
-La automatización es determinista y no usa un LLM. Cada conversación tiene una
-fila durable en `automation_sessions`; los cambios críticos se confirman contra
-Postgres y no dependen sólo de la respuesta del paciente.
+La automatización y todos los cambios de turnos son deterministas. Cada
+conversación tiene una fila durable en `automation_sessions`; los cambios
+críticos se confirman contra Postgres y no dependen de un modelo. Existe una
+asistencia opcional y acotada para redactar únicamente horarios o ubicación.
 
 ```text
 idle
@@ -23,7 +24,8 @@ idle
  │                              └─ conservar ─► idle
  ├─ Cancelar ─► selecting_appointment_to_cancel
  │               └─ confirming_cancellation ─► turno cancelado
- ├─ Horarios y ubicación ─► información configurada o human_handoff
+ ├─ Horarios y ubicación ─► información configurada
+ │                           └─ IA administrativa opcional o human_handoff
  └─ Hablar con Gisela ─► human_handoff
 ```
 
@@ -87,6 +89,13 @@ puede habilitarlo. El cooldown evita repetir el aviso ante cada mensaje.
 - `WHATSAPP_AUTOMATIONS_ENABLED=false`: no se invoca el bot ni se despachan
   handoffs, respuestas urgentes o recordatorios automáticos. Webhook, bandeja y
   respuestas manuales siguen disponibles.
+- `app_settings.ai_enabled=false`: no se llama a OpenAI aunque la automatización
+  general esté activa. Además requiere el kill switch backend
+  `OPENAI_ADMINISTRATIVE_ENABLED=true`. Cuando los tres controles están activos,
+  sólo se envía una pregunta canónica sobre horarios/ubicación, los datos
+  estructurados del consultorio y un identificador seudónimo; nunca el texto
+  original ni datos del paciente. La solicitud usa `store=false` y el modelo
+  fijo `gpt-5.6-luna`.
 - `WHATSAPP_TEST_MODE=true`: todo destinatario debe aparecer en
   `WHATSAPP_TEST_ALLOWED_NUMBERS`, incluidas respuestas manuales y recordatorios.
 - `Menú`, `inicio` o `volver al menú` reinician el flujo sin escribir cambios

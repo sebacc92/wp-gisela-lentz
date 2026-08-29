@@ -117,7 +117,7 @@ export default component$(() => {
       </section>
 
       <section>
-        <h2>4. Supabase, Meta, Google y otros proveedores</h2>
+        <h2>4. Supabase, Meta, OpenAI, Google y otros proveedores</h2>
         <p>
           La información operativa de la plataforma se almacena en Supabase, que
           provee infraestructura de base de datos, autenticación y servicios
@@ -130,6 +130,16 @@ export default component$(() => {
           transportar los mensajes y prestar sus servicios conforme a sus
           propias políticas. También puede intervenir el proveedor de
           alojamiento técnico de la aplicación.
+        </p>
+        <p>
+          Si el consultorio habilita el asistente administrativo opcional,
+          OpenAI puede procesar una pregunta canónica sobre horarios o
+          ubicación, la dirección y las reglas estructuradas de horarios del
+          consultorio, y un identificador técnico seudónimo. No se le envían el
+          mensaje original, nombre o teléfono del paciente, cobertura, turnos,
+          comprobantes ni información clínica. La solicitud se realiza con
+          almacenamiento desactivado y, ante una duda, la conversación se deriva
+          a una persona.
         </p>
         <p>
           Si el consultorio habilita Google Calendar, Google procesa la copia
@@ -165,6 +175,14 @@ export default component$(() => {
             rel="noreferrer"
           >
             política de privacidad de Meta
+          </a>
+          , y la
+          <a
+            href="https://openai.com/policies/privacy-policy/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            política de privacidad de OpenAI
           </a>
           , y la
           <a

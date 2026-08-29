@@ -70,6 +70,13 @@ aprobados por la responsable del consultorio.
 11. **Kill switch:** con `WHATSAPP_AUTOMATIONS_ENABLED=false` siguen funcionando
     webhook, persistencia, inbox y respuesta manual, pero no bot, handoffs
     automáticos ni recordatorios.
+12. **IA administrativa opcional:** requiere además
+    `OPENAI_ADMINISTRATIVE_ENABLED=true` y `ai_enabled=true`, sólo admite
+    consultas de horarios/ubicación y envía al proveedor una pregunta canónica
+    con dirección y horarios estructurados. No comparte el mensaje original,
+    identidad, teléfono del paciente, cobertura, turnos, comprobantes ni datos
+    de salud; usa `store=false` y deriva a una persona ante datos faltantes o una
+    respuesta riesgosa.
 
 La autoridad final de mensajería es el backend compartido y el trigger
 `enforce_whatsapp_outbound_policy`. El ledger `whatsapp_consent_events` es
@@ -94,6 +101,9 @@ no se exige una frase exacta.
 - Callback y firma probados; eventos de otra WABA o número ignorados.
 - Perfil comercial real y actualizado con un contacto de soporte.
 - Política de privacidad publicada y revisión jurídica local completada.
+- Si se habilitará IA: clave exclusiva del proyecto, presupuesto/límites
+  revisados, datos estructurados del consultorio correctos y los tres kill
+  switches probados primero con datos ficticios.
 - Health confirma pertenencia Phone/WABA, calidad y plantillas
   `APPROVED / UTILITY`.
 - Horarios, bloqueos, servicios, textos y responsables de handoff revisados.

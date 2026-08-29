@@ -12,6 +12,7 @@ import {
   sendAndRecordMessage,
   templatePayload,
   textPayload,
+  WhatsAppDispatchError,
   type WhatsAppContact,
   type WhatsAppConversation,
   validIdempotencyKey,
@@ -297,31 +298,20 @@ Deno.serve(async (request) => {
     });
 
     if (!message.deduplicated) {
-      await Promise.all([
-        client
-          .from("conversations")
-          .update({
-            automation_mode: "manual",
-            needs_human: false,
-            automation_pause_source: "operator",
-            automation_pause_message_id: null,
-          })
-          .eq("id", conversationId),
-        client.from("audit_logs").insert({
-          actor_user_id: user.id,
-          action: "message.manual_sent",
-          entity_type: "message",
-          entity_id: message.id,
-          metadata: {
-            conversation_id: conversationId,
-            template_name: templateName,
-            template_key: templateKey,
-            appointment_id: appointmentId,
-            purpose,
-            idempotency_key: idempotencyKey,
-          },
-        }),
-      ]);
+      await client.from("audit_logs").insert({
+        actor_user_id: user.id,
+        action: "message.operator_sent",
+        entity_type: "message",
+        entity_id: message.id,
+        metadata: {
+          conversation_id: conversationId,
+          template_name: templateName,
+          template_key: templateKey,
+          appointment_id: appointmentId,
+          purpose,
+          idempotency_key: idempotencyKey,
+        },
+      });
     }
 
     return jsonResponse(
@@ -338,11 +328,19 @@ Deno.serve(async (request) => {
       message.startsWith("CONFIGURATION_INCOMPLETE") ||
       isWhatsAppCredentialResolutionError(error)
     ) {
+      const sendingPaused =
+        (isWhatsAppCredentialResolutionError(error) &&
+          (error.code === "WHATSAPP_SENDING_PAUSED" ||
+            error.code === "WHATSAPP_BUSINESS_CREDENTIAL_ACCOUNT_BLOCKED")) ||
+        message.includes("SENDING_PAUSED");
       return jsonResponse(
         request,
         {
           error: "CONFIGURATION_INCOMPLETE",
-          message: "La conexión con WhatsApp todavía no está configurada.",
+          message: sendingPaused
+            ? "El envío de WhatsApp está pausado en la configuración."
+            : "La conexión con WhatsApp todavía no está configurada.",
+          retryable: false,
         },
         503,
       );
@@ -352,6 +350,7 @@ Deno.serve(async (request) => {
         request,
         {
           error: error.code,
+          retryable: false,
           message:
             error.code === "CONTACT_OPTED_OUT"
               ? "El contacto pidió no recibir mensajes proactivos."
@@ -363,9 +362,17 @@ Deno.serve(async (request) => {
       );
     }
     console.error("whatsapp-send", message);
+    const retryable =
+      error instanceof WhatsAppDispatchError && error.retryable === true;
     return jsonResponse(
       request,
-      { error: "SEND_FAILED", message: "No pudimos enviar el mensaje." },
+      {
+        error: "SEND_FAILED",
+        retryable,
+        message: retryable
+          ? "No pudimos confirmar el envío. El mismo intento puede reintentarse sin duplicarlo."
+          : "No pudimos enviar el mensaje.",
+      },
       502,
     );
   }

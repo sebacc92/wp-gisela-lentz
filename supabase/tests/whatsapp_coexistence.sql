@@ -503,7 +503,16 @@ select ok(
 
 select ok(
   (
-    select automation_mode = 'manual'
+    select automation_mode = 'auto'
+      and not needs_human
+      and automation_pause_source is null
+      and automation_pause_message_id is null
+      and automation_human_barrier_ingest_sequence = (
+        select max(whatsapp_ingest_sequence)
+        from public.messages inbound_message
+        where inbound_message.conversation_id = conversations.id
+          and inbound_message.direction = 'inbound'
+      )
       and last_inbound_message_at is null
     from public.conversations
     where id = (
@@ -511,7 +520,7 @@ select ok(
       where id = :'echo_message_id'::uuid
     )
   ),
-  'an app echo pauses automation without opening a customer-service window'
+  'an app echo preserves auto mode and opens neither a barrier nor a customer-service window without prior inbound'
 );
 
 select (public.ingest_whatsapp_coexistence_message(

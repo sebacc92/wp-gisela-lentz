@@ -232,6 +232,16 @@ export default component$(() => {
             <strong>Vercel:</strong> alojamiento y entrega de la aplicación web.
           </li>
           <li>
+            <strong>OpenAI:</strong> sólo si el consultorio habilita el
+            asistente administrativo opcional. Recibe una pregunta canónica
+            sobre horarios o ubicación, la dirección y las reglas estructuradas
+            de horarios del consultorio, y un identificador técnico seudónimo.
+            No recibe el mensaje original, nombre o teléfono del paciente,
+            cobertura, turnos, comprobantes ni información clínica. La solicitud
+            se realiza con almacenamiento desactivado y las consultas dudosas se
+            derivan a una persona.
+          </li>
+          <li>
             <strong>Google:</strong> únicamente cuando el consultorio habilita
             la sincronización opcional con Google Calendar.
           </li>
@@ -252,6 +262,14 @@ export default component$(() => {
             rel="noreferrer"
           >
             Vercel
+          </a>
+          ,
+          <a
+            href="https://openai.com/policies/privacy-policy/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            OpenAI
           </a>
           y
           <a

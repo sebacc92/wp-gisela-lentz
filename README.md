@@ -127,6 +127,8 @@ WHATSAPP_COEXISTENCE_RECOVERY_SECRET=
 WHATSAPP_COEXISTENCE_CLAIM_LIMIT=5
 WHATSAPP_COEXISTENCE_ITEMS_PER_RUN=100
 REMINDER_CRON_SECRET=
+OPENAI_API_KEY=
+OPENAI_ADMINISTRATIVE_ENABLED=false
 APP_BASE_URL=
 GOOGLE_CALENDAR_CLIENT_ID=
 GOOGLE_CALENDAR_CLIENT_SECRET=
@@ -135,6 +137,7 @@ GOOGLE_CALENDAR_CRON_SECRET=
 APP_ALLOWED_ORIGINS=
 WHATSAPP_AUTOMATIONS_ENABLED=false
 WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false
+WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H=10
 WHATSAPP_TEST_MODE=true
 WHATSAPP_TEST_ALLOWED_NUMBERS=
 ```
@@ -147,12 +150,23 @@ WHATSAPP_TEST_ALLOWED_NUMBERS=
   (10 MiB recomendado; nunca se exponen al navegador el token ni la URL de Meta).
 - `WHATSAPP_WEBHOOK_MAX_BYTES`: límite incremental del webhook (3 MiB por
   defecto); evita bufferizar bodies no autenticados sin cota.
+- `OPENAI_API_KEY`: secreto exclusivo de Supabase Edge Functions para el
+  asistente administrativo opcional. El modelo queda fijado server-side en
+  `gpt-5.6-luna`; la función no envía el mensaje original, usa `store=false` y
+  sólo puede ejecutarse si están activos `OPENAI_ADMINISTRATIVE_ENABLED`,
+  `ai_enabled` y `WHATSAPP_AUTOMATIONS_ENABLED`. Los horarios provienen de las
+  reglas estructuradas de agenda y la ubicación de los datos del consultorio;
+  no existe un prompt/conocimiento libre editable.
 - Los flags solo aceptan `true` o `false`. Si faltan o están mal escritos, el
   sistema asume automatizaciones apagadas y mantiene activo el modo general de
   prueba.
 - `WHATSAPP_EMBEDDED_SIGNUP_ENABLED` es un kill switch backend y queda en
   `false` por defecto. Sólo el literal `true` permite crear un intento; el
   frontend consume únicamente el booleano sanitizado de `status`.
+- `WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H` permanece sólo en backend. Usa
+  `10` si falta o es inválido y limita cualquier entero configurado al rango
+  `5`–`50`. La cuota se aplica por ADMIN y client scope; el burst guard fijo
+  de `3` intentos cada `15` minutos no se desactiva.
 - `/debug_token` usa un App Access Token efímero generado server-side con
   `META_APP_ID` y `META_APP_SECRET`. No se configura un token global del
   proveedor. Las operaciones sobre una WABA usan exclusivamente el business

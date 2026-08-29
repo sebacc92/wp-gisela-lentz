@@ -69,9 +69,14 @@ select ok(
 select ok(
   has_function_privilege(
     'service_role',
-    'public.create_whatsapp_embedded_signup_attempt(uuid,text,text,text,text,text,text,timestamptz)',
+    'public.create_whatsapp_embedded_signup_attempt(uuid,text,text,text,text,text,text,timestamptz,integer)',
     'EXECUTE'
   )
+    and has_function_privilege(
+      'service_role',
+      'public.whatsapp_embedded_signup_rate_limit_eligible(uuid,text,integer)',
+      'EXECUTE'
+    )
     and has_function_privilege(
       'service_role',
       'public.claim_whatsapp_embedded_signup_validations(integer,uuid)',
@@ -84,9 +89,27 @@ select ok(
     )
     and not has_function_privilege(
       'authenticated',
-      'public.create_whatsapp_embedded_signup_attempt(uuid,text,text,text,text,text,text,timestamptz)',
+      'public.create_whatsapp_embedded_signup_attempt(uuid,text,text,text,text,text,text,timestamptz,integer)',
       'EXECUTE'
     )
+    and not has_function_privilege(
+      'anon',
+      'public.create_whatsapp_embedded_signup_attempt(uuid,text,text,text,text,text,text,timestamptz,integer)',
+      'EXECUTE'
+    )
+    and not has_function_privilege(
+      'authenticated',
+      'public.whatsapp_embedded_signup_rate_limit_eligible(uuid,text,integer)',
+      'EXECUTE'
+    )
+    and not has_function_privilege(
+      'anon',
+      'public.whatsapp_embedded_signup_rate_limit_eligible(uuid,text,integer)',
+      'EXECUTE'
+    )
+    and to_regprocedure(
+      'public.create_whatsapp_embedded_signup_attempt(uuid,text,text,text,text,text,text,timestamptz)'
+    ) is null
     and not has_function_privilege(
       'anon',
       'public.claim_whatsapp_embedded_signup_validations(integer,uuid)',
@@ -216,7 +239,10 @@ values
   ('97000000-0000-4000-8000-000000000009', 'embedded-admin-8@example.test', '', 'authenticated', 'authenticated'),
   ('97000000-0000-4000-8000-000000000010', 'embedded-admin-9@example.test', '', 'authenticated', 'authenticated'),
   ('97000000-0000-4000-8000-000000000011', 'embedded-admin-10@example.test', '', 'authenticated', 'authenticated'),
-  ('97000000-0000-4000-8000-000000000012', 'embedded-admin-11@example.test', '', 'authenticated', 'authenticated');
+  ('97000000-0000-4000-8000-000000000012', 'embedded-admin-11@example.test', '', 'authenticated', 'authenticated'),
+  ('97000000-0000-4000-8000-000000000013', 'embedded-admin-12@example.test', '', 'authenticated', 'authenticated'),
+  ('97000000-0000-4000-8000-000000000014', 'embedded-admin-13@example.test', '', 'authenticated', 'authenticated'),
+  ('97000000-0000-4000-8000-000000000015', 'embedded-admin-14@example.test', '', 'authenticated', 'authenticated');
 
 update public.profiles
 set role = 'ADMIN'
@@ -231,7 +257,10 @@ where id in (
   '97000000-0000-4000-8000-000000000009',
   '97000000-0000-4000-8000-000000000010',
   '97000000-0000-4000-8000-000000000011',
-  '97000000-0000-4000-8000-000000000012'
+  '97000000-0000-4000-8000-000000000012',
+  '97000000-0000-4000-8000-000000000013',
+  '97000000-0000-4000-8000-000000000014',
+  '97000000-0000-4000-8000-000000000015'
 );
 
 select throws_ok(
@@ -2113,21 +2142,67 @@ select ok(
   ),
   'automation execution snapshots carry the immutable account routing identity'
 );
-select is(
-  public.pause_whatsapp_automation_for_app_echo(
-    '97000000-0000-4000-8000-000000000120',
-    '+5491100000090', null
-  ),
-  1,
-  'account-scoped app echo pauses exactly its bound conversation'
+select
+  automation_mode::text as mode,
+  needs_human::text as needs_human,
+  coalesce(automation_pause_source::text, '') as pause_source,
+  coalesce(automation_pause_message_id::text, '') as pause_message_id
+from public.conversations
+where id = '97000000-0000-4000-8000-000000000091'
+\gset account_echo_before_
+select public.pause_whatsapp_automation_for_app_echo(
+  '97000000-0000-4000-8000-000000000120',
+  '+5491100000090', null
+) as affected
+\gset account_echo_first_
+select ok(
+  :'account_echo_first_affected'::integer = 1
+    and (
+      select coexistence_account_id =
+          '97000000-0000-4000-8000-000000000120'
+        and automation_mode::text = :'account_echo_before_mode'
+        and needs_human::text = :'account_echo_before_needs_human'
+        and coalesce(automation_pause_source::text, '') =
+          :'account_echo_before_pause_source'
+        and coalesce(automation_pause_message_id::text, '') =
+          :'account_echo_before_pause_message_id'
+        and automation_human_barrier_ingest_sequence = (
+          select max(whatsapp_ingest_sequence)
+          from public.messages
+          where conversation_id =
+            '97000000-0000-4000-8000-000000000091'
+            and direction = 'inbound'
+        )
+      from public.conversations
+      where id = '97000000-0000-4000-8000-000000000091'
+    ),
+  'account-scoped app echo records the bound conversation barrier without changing its preference'
 );
-select is(
-  public.pause_whatsapp_automation_for_app_echo(
-    '97000000-0000-4000-8000-000000000120',
-    '+5491100000090', null
-  ),
-  0,
-  'exact account-scoped app echo replay is idempotent'
+select public.pause_whatsapp_automation_for_app_echo(
+  '97000000-0000-4000-8000-000000000120',
+  '+5491100000090', null
+) as affected
+\gset account_echo_replay_
+select ok(
+  :'account_echo_replay_affected'::integer = 0
+    and (
+      select automation_mode::text = :'account_echo_before_mode'
+        and needs_human::text = :'account_echo_before_needs_human'
+        and coalesce(automation_pause_source::text, '') =
+          :'account_echo_before_pause_source'
+        and coalesce(automation_pause_message_id::text, '') =
+          :'account_echo_before_pause_message_id'
+        and automation_human_barrier_ingest_sequence = (
+          select max(whatsapp_ingest_sequence)
+          from public.messages
+          where conversation_id =
+            '97000000-0000-4000-8000-000000000091'
+            and direction = 'inbound'
+        )
+      from public.conversations
+      where id = '97000000-0000-4000-8000-000000000091'
+    ),
+  'exact account-scoped app echo replay is state-idempotent'
 );
 select throws_ok(
   format(
@@ -2142,12 +2217,22 @@ select throws_ok(
 select ok(
   (
     select coexistence_account_id = '97000000-0000-4000-8000-000000000120'
-      and automation_mode = 'manual'
-      and automation_pause_source = 'app_echo'
+      and automation_mode::text = :'account_echo_before_mode'
+      and needs_human::text = :'account_echo_before_needs_human'
+      and coalesce(automation_pause_source::text, '') =
+        :'account_echo_before_pause_source'
+      and coalesce(automation_pause_message_id::text, '') =
+        :'account_echo_before_pause_message_id'
+      and automation_human_barrier_ingest_sequence = (
+        select max(whatsapp_ingest_sequence)
+        from public.messages
+        where conversation_id = '97000000-0000-4000-8000-000000000091'
+          and direction = 'inbound'
+      )
     from public.conversations
     where id = '97000000-0000-4000-8000-000000000091'
   ),
-  'cross-account echo rejection leaves sibling routing and pause owner unchanged'
+  'cross-account echo rejection leaves sibling routing, preference, and barrier unchanged'
 );
 insert into public.contacts (id, phone_e164, whatsapp_id, name) values (
   '97000000-0000-4000-8000-000000000146',
@@ -2162,14 +2247,15 @@ select is(
     '97000000-0000-4000-8000-000000000120',
     '+5491100000146', null
   ),
-  1,
-  'managed account may atomically claim an unbound legacy conversation'
+  0,
+  'managed account may bind an unbound conversation without inventing a barrier when no inbound exists'
 );
 select ok(
   (
     select coexistence_account_id = '97000000-0000-4000-8000-000000000120'
-      and automation_mode = 'manual'
-      and automation_pause_source = 'app_echo'
+      and automation_mode = 'auto'
+      and automation_pause_source is null
+      and automation_human_barrier_ingest_sequence = 0
     from public.conversations
     where id = '97000000-0000-4000-8000-000000000147'
   )
@@ -2183,7 +2269,7 @@ select ok(
       'public.pause_whatsapp_automation_for_app_echo(uuid,text,text)',
       'EXECUTE'
     ),
-  'legacy overload is disabled while the scoped overload binds without ambiguity'
+  'legacy overload is disabled while the scoped overload binds without changing preference'
 );
 select is(
   public.whatsapp_embedded_signup_status(
@@ -2934,15 +3020,221 @@ select is(
   'cancelled remains immutable after a late FINISH'
 );
 
-select throws_ok(
-  $$select * from public.create_whatsapp_embedded_signup_attempt(
-    '97000000-0000-4000-8000-000000000004', 'rate-limited',
-    repeat('0', 64), repeat('1', 64), '123456789012345',
-    '234567890123456', 'declined', clock_timestamp() + interval '10 minutes'
-  )$$,
-  'P0001',
-  'WHATSAPP_EMBEDDED_SIGNUP_RATE_LIMITED',
-  'three attempts in fifteen minutes trigger the admin rate limit'
+-- The fixed burst guard remains 3/15m and is scoped to ADMIN + client.
+insert into public.whatsapp_embedded_signup_attempts (
+  client_scope, initiated_by, status, state_hash, nonce_hash, app_id,
+  configuration_id, history_sharing_decision, expires_at, created_at, updated_at
+)
+select
+  'burst-rate-limit',
+  '97000000-0000-4000-8000-000000000015'::uuid,
+  'cancelled',
+  lpad(to_hex(150000 + value), 64, '0'),
+  lpad(to_hex(160000 + value), 64, '0'),
+  '123456789012345', '234567890123456', 'declined',
+  created_at_value + interval '10 minutes',
+  created_at_value,
+  created_at_value
+from generate_series(1, 3) value
+cross join lateral (
+  select clock_timestamp() - interval '5 minutes'
+    - value * interval '1 second' as created_at_value
+) fixture;
+
+select is(
+  (
+    select status
+    from public.create_whatsapp_embedded_signup_attempt(
+      '97000000-0000-4000-8000-000000000015', 'burst-rate-limit',
+      lpad(to_hex(159999), 64, '0'), lpad(to_hex(169999), 64, '0'),
+      '123456789012345', '234567890123456', 'declined',
+      clock_timestamp() + interval '10 minutes', 25
+    )
+  ),
+  'rate_limited',
+  'three attempts in fifteen minutes still reject the next START with daily max 25'
+);
+select is(
+  (
+    select count(*)::integer
+    from public.whatsapp_embedded_signup_attempts
+    where initiated_by = '97000000-0000-4000-8000-000000000015'
+      and client_scope = 'burst-rate-limit'
+  ),
+  3,
+  'a burst-rate rejection does not create or count another attempt'
+);
+
+-- Daily fixtures deliberately mix terminal states: every persisted START
+-- counts, while the rejected request itself never enters the attempts table.
+insert into public.whatsapp_embedded_signup_attempts (
+  client_scope, initiated_by, status, state_hash, nonce_hash, app_id,
+  configuration_id, history_sharing_decision, expires_at, created_at, updated_at
+)
+select
+  'daily-rate-limit',
+  '97000000-0000-4000-8000-000000000013'::uuid,
+  case value % 3
+    when 0 then 'expired'
+    when 1 then 'cancelled'
+    else 'failed'
+  end,
+  lpad(to_hex(130000 + value), 64, '0'),
+  lpad(to_hex(140000 + value), 64, '0'),
+  '123456789012345', '234567890123456', 'declined',
+  created_at_value + interval '10 minutes',
+  created_at_value,
+  created_at_value
+from generate_series(1, 10) value
+cross join lateral (
+  select clock_timestamp() - interval '2 hours'
+    - value * interval '1 minute' as created_at_value
+) fixture;
+
+select is(
+  public.whatsapp_embedded_signup_rate_limit_eligible(
+    '97000000-0000-4000-8000-000000000013', 'daily-rate-limit'
+  ),
+  false,
+  'the server-only safe read reports default-limit ineligibility without START'
+);
+select is(
+  public.whatsapp_embedded_signup_rate_limit_eligible(
+    '97000000-0000-4000-8000-000000000013', 'daily-rate-limit', 25
+  ),
+  true,
+  'the same safe read reports eligibility with configured limit 25'
+);
+select ok(
+  not public.whatsapp_embedded_signup_rate_limit_eligible(
+    '97000000-0000-4000-8000-000000000013', 'daily-rate-limit', 1
+  )
+    and public.whatsapp_embedded_signup_rate_limit_eligible(
+      '97000000-0000-4000-8000-000000000013', 'daily-rate-limit', 500
+    )
+    and not exists (
+      select 1
+      from public.audit_logs
+      where actor_user_id = '97000000-0000-4000-8000-000000000013'
+        and action = 'whatsapp.embedded_signup.rate_limited'
+        and metadata ->> 'client_scope' = 'daily-rate-limit'
+    ),
+  'SQL clamps 1/500 to 5/50 and the eligibility read writes no audit row'
+);
+
+update public.whatsapp_settings
+set sending_paused = false,
+    sending_pause_reason = null
+where id = true;
+
+select is(
+  (
+    select status
+    from public.create_whatsapp_embedded_signup_attempt(
+      '97000000-0000-4000-8000-000000000013', 'daily-rate-limit',
+      lpad(to_hex(139999), 64, '0'), lpad(to_hex(149999), 64, '0'),
+      '123456789012345', '234567890123456', 'declined',
+      clock_timestamp() + interval '10 minutes'
+    )
+  ),
+  'rate_limited',
+  'ten persisted attempts with the default daily limit 10 reject the next START'
+);
+select is(
+  (
+    select status
+    from public.create_whatsapp_embedded_signup_attempt(
+      '97000000-0000-4000-8000-000000000013', 'daily-rate-limit',
+      lpad(to_hex(139998), 64, '0'), lpad(to_hex(149998), 64, '0'),
+      '123456789012345', '234567890123456', 'declined',
+      clock_timestamp() + interval '10 minutes'
+    )
+  ),
+  'rate_limited',
+  'a duplicate rejection remains idempotently rate-limited'
+);
+select ok(
+  (
+    select count(*) = 10
+    from public.whatsapp_embedded_signup_attempts
+    where initiated_by = '97000000-0000-4000-8000-000000000013'
+      and client_scope = 'daily-rate-limit'
+  ) and (
+    select count(*) = 1
+    from public.audit_logs
+    where actor_user_id = '97000000-0000-4000-8000-000000000013'
+      and action = 'whatsapp.embedded_signup.rate_limited'
+      and metadata @> '{"client_scope":"daily-rate-limit","daily_limit_reached":true}'::jsonb
+      and not metadata ? 'max_attempts_24h'
+  ) and (
+    select not sending_paused and sending_pause_reason is null
+    from public.whatsapp_settings
+    where id = true
+  ),
+  'rejections preserve attempts/settings and deduplicate their audit event'
+);
+
+select * from public.create_whatsapp_embedded_signup_attempt(
+  '97000000-0000-4000-8000-000000000013', 'daily-rate-limit',
+  lpad(to_hex(131000), 64, '0'), lpad(to_hex(141000), 64, '0'),
+  '123456789012345', '234567890123456', 'declined',
+  clock_timestamp() + interval '10 minutes', 25
+)
+\gset daily_25_
+select is(
+  :'daily_25_status'::text,
+  'initiated'::text,
+  'ten persisted attempts with configured daily limit 25 allow the next START'
+);
+select ok(
+  public.cancel_whatsapp_embedded_signup_attempt(
+    :'daily_25_attempt_id'::uuid,
+    '97000000-0000-4000-8000-000000000013',
+    'USER_CANCELLED'
+  ),
+  'the configurable-limit fixture is closed before isolation checks'
+);
+
+select * from public.create_whatsapp_embedded_signup_attempt(
+  '97000000-0000-4000-8000-000000000014', 'daily-rate-limit',
+  lpad(to_hex(142000), 64, '0'), lpad(to_hex(143000), 64, '0'),
+  '123456789012345', '234567890123456', 'declined',
+  clock_timestamp() + interval '10 minutes', 10
+)
+\gset other_user_
+select is(
+  :'other_user_status'::text,
+  'initiated'::text,
+  'attempts from ADMIN A do not consume ADMIN B quota in the same client scope'
+);
+select ok(
+  public.cancel_whatsapp_embedded_signup_attempt(
+    :'other_user_attempt_id'::uuid,
+    '97000000-0000-4000-8000-000000000014',
+    'USER_CANCELLED'
+  ),
+  'the second-user isolation fixture is closed'
+);
+
+select * from public.create_whatsapp_embedded_signup_attempt(
+  '97000000-0000-4000-8000-000000000013', 'daily-rate-other',
+  lpad(to_hex(144000), 64, '0'), lpad(to_hex(145000), 64, '0'),
+  '123456789012345', '234567890123456', 'declined',
+  clock_timestamp() + interval '10 minutes', 10
+)
+\gset other_scope_
+select is(
+  :'other_scope_status'::text,
+  'initiated'::text,
+  'attempts from client scope A do not consume the same ADMIN quota in scope B'
+);
+select ok(
+  public.cancel_whatsapp_embedded_signup_attempt(
+    :'other_scope_attempt_id'::uuid,
+    '97000000-0000-4000-8000-000000000013',
+    'USER_CANCELLED'
+  ),
+  'the second-client isolation fixture is closed'
 );
 
 select * from public.create_whatsapp_embedded_signup_attempt(

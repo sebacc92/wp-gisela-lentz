@@ -145,11 +145,14 @@ export function whatsAppPolicyCode(error: unknown): string | null {
       : error && typeof error === "object" && "message" in error
         ? String((error as { message?: unknown }).message ?? "")
         : "";
-  return message
-    .toUpperCase()
-    .includes("WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL")
-    ? "AUTOMATION_PAUSED"
-    : null;
+  const normalized = message.toUpperCase();
+  if (normalized.includes("WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL")) {
+    return "AUTOMATION_PAUSED";
+  }
+  if (normalized.includes("WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY")) {
+    return "AUTOMATION_SUPERSEDED_BY_HUMAN_REPLY";
+  }
+  return null;
 }
 
 export function shouldRetryWhatsAppError(error: unknown): boolean {
@@ -204,14 +207,162 @@ export function normalizeWhatsAppNumber(value: string): string | null {
   return /^[1-9][0-9]{7,14}$/.test(digits) ? digits : null;
 }
 
+export type WhatsAppRecipientIdentityKind = "wa_id" | "phone" | "bsuid";
+
+export interface WhatsAppRecipientIdentity {
+  value: string;
+  kind: WhatsAppRecipientIdentityKind;
+  provenance: "coexistence_mapping" | "recent_inbound" | "legacy";
+}
+
+export function whatsappRecipientIdentity(contact: WhatsAppContact): {
+  value: string;
+  kind: WhatsAppRecipientIdentityKind;
+} {
+  const whatsappId = contact.whatsapp_id?.trim() ?? "";
+  if (/^[1-9][0-9]{7,14}$/.test(whatsappId)) {
+    return { value: whatsappId, kind: "wa_id" };
+  }
+
+  const phone = contact.phone_e164
+    ? normalizeWhatsAppNumber(contact.phone_e164)
+    : null;
+  if (phone) return { value: phone, kind: "phone" };
+
+  const businessScopedUserId = contact.whatsapp_user_id?.trim() ?? "";
+  if (businessScopedUserId) {
+    return { value: businessScopedUserId, kind: "bsuid" };
+  }
+
+  throw new WhatsAppPolicyError("CONTACT_IDENTITY_MISSING");
+}
+
 export function whatsappRecipient(contact: WhatsAppContact): string {
-  const recipient =
-    contact.whatsapp_user_id?.trim() ||
-    contact.whatsapp_id?.trim() ||
-    contact.phone_e164?.replace(/^\+/, "").trim() ||
-    "";
-  if (!recipient) throw new WhatsAppPolicyError("CONTACT_IDENTITY_MISSING");
-  return recipient;
+  return whatsappRecipientIdentity(contact).value;
+}
+
+function firstRecipientRpcRow(value: unknown): Record<string, unknown> | null {
+  const row = Array.isArray(value) ? value[0] : value;
+  return row && typeof row === "object" && !Array.isArray(row)
+    ? (row as Record<string, unknown>)
+    : null;
+}
+
+export async function resolveWhatsAppRecipientIdentity(args: {
+  client: SupabaseClient;
+  contact: WhatsAppContact;
+  conversation: WhatsAppConversation;
+  credentials: WhatsAppAccountCredentials;
+}): Promise<WhatsAppRecipientIdentity> {
+  if (args.credentials.credentialMode === "legacy") {
+    return { ...whatsappRecipientIdentity(args.contact), provenance: "legacy" };
+  }
+  if (!args.credentials.accountId) {
+    throw new WhatsAppPolicyError("CONTACT_IDENTITY_UNVERIFIED");
+  }
+
+  const result = await args.client.rpc(
+    "resolve_whatsapp_coexistence_recipient",
+    {
+      p_account_id: args.credentials.accountId,
+      p_conversation_id: args.conversation.id,
+      p_contact_id: args.contact.id,
+    },
+  );
+  if (result.error) {
+    throw new WhatsAppPolicyError("CONTACT_IDENTITY_UNVERIFIED");
+  }
+  const row = firstRecipientRpcRow(result.data);
+  const value =
+    typeof row?.recipient_value === "string" ? row.recipient_value.trim() : "";
+  const kind = row?.identity_kind;
+  const provenance = row?.identity_provenance;
+  const validValue =
+    kind === "bsuid"
+      ? /^[A-Za-z0-9.]{1,256}$/.test(value)
+      : /^[1-9][0-9]{7,14}$/.test(value);
+  if (
+    !validValue ||
+    (kind !== "wa_id" && kind !== "phone" && kind !== "bsuid") ||
+    (provenance !== "coexistence_mapping" && provenance !== "recent_inbound")
+  ) {
+    throw new WhatsAppPolicyError("CONTACT_IDENTITY_UNVERIFIED");
+  }
+  return {
+    value,
+    kind,
+    provenance,
+  };
+}
+
+function runtimeSecret(name: string): string | null {
+  const value =
+    typeof Deno !== "undefined"
+      ? Deno.env.get(name)
+      : (
+          globalThis as typeof globalThis & {
+            process?: { env?: Record<string, string | undefined> };
+          }
+        ).process?.env?.[name];
+  const clean = value?.trim() ?? "";
+  return clean && !/[\r\n]/.test(clean) ? clean : null;
+}
+
+export async function whatsappRecipientFingerprint(args: {
+  identity: Pick<WhatsAppRecipientIdentity, "kind" | "value">;
+  accountId: string | null;
+  idempotencyKey: string;
+  secret?: string;
+}): Promise<string> {
+  const secret =
+    args.secret?.trim() ||
+    runtimeSecret("WHATSAPP_RECIPIENT_FINGERPRINT_SECRET") ||
+    runtimeSecret("META_APP_SECRET");
+  if (!secret || /[\r\n]/.test(secret)) {
+    throw new Error("WHATSAPP_RECIPIENT_FINGERPRINT_SECRET_MISSING");
+  }
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const payload = [
+    "whatsapp-recipient-idempotency:v1",
+    args.accountId ?? "legacy",
+    args.idempotencyKey,
+    args.identity.kind,
+    args.identity.value,
+  ].join("\u0000");
+  const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export function assertWhatsAppRecipientSnapshot(args: {
+  metadata: Record<string, unknown>;
+  fingerprint: string;
+  kind: WhatsAppRecipientIdentityKind;
+  required: boolean;
+}): void {
+  const existingFingerprint = args.metadata.recipient_fingerprint;
+  if (
+    typeof existingFingerprint === "string" &&
+    existingFingerprint !== args.fingerprint
+  ) {
+    throw new Error("IDEMPOTENCY_CONFLICT");
+  }
+  if (
+    args.required &&
+    (existingFingerprint !== args.fingerprint ||
+      args.metadata.recipient_fingerprint_version !== 1 ||
+      args.metadata.recipient_identity_kind !== args.kind)
+  ) {
+    throw new Error("IDEMPOTENCY_RECIPIENT_UNVERIFIABLE");
+  }
 }
 
 export function parseWhatsAppAllowedNumbers(
@@ -294,14 +445,6 @@ export function operatorSourceForPurpose(
   purpose: OperatorWhatsAppPurpose,
 ): "operator" | "operator_deposit_request" | "operator_deposit_confirmation" {
   return purpose === "operator_message" ? "operator" : purpose;
-}
-
-function isOperatorWhatsAppSource(value: string | null): boolean {
-  return (
-    value === "operator" ||
-    value === "operator_deposit_request" ||
-    value === "operator_deposit_confirmation"
-  );
 }
 
 function whatsappTestModeEnabled(): boolean {
@@ -532,7 +675,7 @@ async function assertOutboundPolicy(args: {
       client
         .from("conversations")
         .select(
-          "id,contact_id,last_inbound_message_at,automation_mode,automation_pause_source,automation_pause_message_id",
+          "id,contact_id,last_inbound_message_at,automation_mode,automation_pause_source,automation_pause_message_id,automation_human_barrier_ingest_sequence",
         )
         .eq("id", conversation.id)
         .single(),
@@ -577,6 +720,7 @@ async function assertOutboundPolicy(args: {
     automation_mode: "auto" | "manual";
     automation_pause_source: string | null;
     automation_pause_message_id: string | null;
+    automation_human_barrier_ingest_sequence: number;
   };
   const freshContact = contactResult.data as {
     id: string;
@@ -590,6 +734,31 @@ async function assertOutboundPolicy(args: {
     throw new WhatsAppPolicyError("AUTOMATIONS_DISABLED");
   }
   if (automaticSource) {
+    if (automationOwnerMessageId) {
+      const ownerResult = await client
+        .from("messages")
+        .select("whatsapp_ingest_sequence")
+        .eq("id", automationOwnerMessageId)
+        .eq("conversation_id", freshConversation.id)
+        .eq("direction", "inbound")
+        .maybeSingle();
+      const ownerSequence = Number(
+        ownerResult.data?.whatsapp_ingest_sequence ?? Number.NaN,
+      );
+      const barrierSequence = Number(
+        freshConversation.automation_human_barrier_ingest_sequence,
+      );
+      if (
+        ownerResult.error ||
+        !Number.isSafeInteger(ownerSequence) ||
+        !Number.isSafeInteger(barrierSequence)
+      ) {
+        throw new WhatsAppPolicyError("AUTOMATION_OWNER_CONTEXT_INVALID");
+      }
+      if (ownerSequence <= barrierSequence) {
+        throw new WhatsAppPolicyError("AUTOMATION_SUPERSEDED_BY_HUMAN_REPLY");
+      }
+    }
     const ownedManualNotice = isCausallyOwnedManualAutomationNotice({
       source,
       pauseSource: freshConversation.automation_pause_source,
@@ -789,11 +958,18 @@ function graphDispatchError(
 
 export async function dispatchWhatsAppPayload(args: {
   recipient: string;
+  recipientKind?: WhatsAppRecipientIdentityKind;
   payload: Record<string, unknown>;
   opaqueMessageId: string;
   credentials: WhatsAppAccountCredentials;
   fetchImpl?: typeof fetch;
 }): Promise<{ whatsappMessageId: string; requestId: string | null }> {
+  const outboundPayload = { ...args.payload };
+  delete outboundPayload.messaging_product;
+  delete outboundPayload.recipient_type;
+  delete outboundPayload.to;
+  delete outboundPayload.recipient;
+  delete outboundPayload.biz_opaque_callback_data;
   const response = await (args.fetchImpl ?? fetch)(
     `https://graph.facebook.com/${args.credentials.apiVersion}/${args.credentials.phoneNumberId}/messages`,
     {
@@ -804,11 +980,13 @@ export async function dispatchWhatsAppPayload(args: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        ...outboundPayload,
         messaging_product: "whatsapp",
         recipient_type: "individual",
-        to: args.recipient,
+        ...(args.recipientKind === "bsuid"
+          ? { recipient: args.recipient }
+          : { to: args.recipient }),
         biz_opaque_callback_data: args.opaqueMessageId,
-        ...args.payload,
       }),
     },
   );
@@ -981,32 +1159,6 @@ async function assertTestRecipientAllowed(args: {
   throw new WhatsAppPolicyError("TEST_RECIPIENT_NOT_ALLOWED");
 }
 
-async function pauseAutomationForManualDispatch(args: {
-  client: SupabaseClient;
-  conversation: WhatsAppConversation;
-  contact: WhatsAppContact;
-  source: string | null;
-}): Promise<void> {
-  const { client, conversation, contact, source } = args;
-  if (!isOperatorWhatsAppSource(source)) return;
-
-  // Claim human control before the external send. Automation dispatches query
-  // this fresh value immediately before Graph, closing the common bot/operator
-  // race instead of waiting until after the manual message was accepted.
-  const { data, error } = await client
-    .from("conversations")
-    .update({
-      automation_mode: "manual",
-      automation_pause_source: "operator",
-      automation_pause_message_id: null,
-    })
-    .eq("id", conversation.id)
-    .eq("contact_id", contact.id)
-    .select("id")
-    .maybeSingle();
-  if (error || !data) throw new Error("MANUAL_HANDOFF_FAILED");
-}
-
 export async function sendAndRecordMessage(args: {
   client: SupabaseClient;
   conversation: WhatsAppConversation;
@@ -1044,7 +1196,6 @@ export async function sendAndRecordMessage(args: {
     typeof metadata.inbound_message_id === "string"
       ? metadata.inbound_message_id
       : null;
-  const recipient = whatsappRecipient(contact);
   assertAdministrativePayload(bodyPreview, payload);
   if (!validIdempotencyKey(idempotencyKey)) {
     throw new Error("INVALID_IDEMPOTENCY_KEY");
@@ -1066,10 +1217,26 @@ export async function sendAndRecordMessage(args: {
       coexistenceAccountId ?? conversation.coexistence_account_id ?? null,
     conversationId: conversation.id,
   });
+  const recipientIdentity = await resolveWhatsAppRecipientIdentity({
+    client,
+    contact,
+    conversation,
+    credentials: initialCredentials,
+  });
+  const recipient = recipientIdentity.value;
+  const recipientFingerprint = await whatsappRecipientFingerprint({
+    identity: recipientIdentity,
+    accountId: initialCredentials.accountId,
+    idempotencyKey,
+  });
 
   const interactiveOptions = interactiveOptionsFromPayload(payload);
   const complianceMetadata: Record<string, unknown> = {
     ...metadata,
+    recipient_identity_kind: recipientIdentity.kind,
+    recipient_identity_provenance: recipientIdentity.provenance,
+    recipient_fingerprint_version: 1,
+    recipient_fingerprint: recipientFingerprint,
     ...(interactiveOptions.length
       ? { interactive_options: interactiveOptions }
       : {}),
@@ -1089,7 +1256,10 @@ export async function sendAndRecordMessage(args: {
     throw new Error(`MESSAGE_LOOKUP_FAILED:${existingResult.error.message}`);
   }
 
-  const assertExistingMatches = (row: Record<string, unknown>) => {
+  const assertExistingMatches = (
+    row: Record<string, unknown>,
+    requireRecipientSnapshot: boolean,
+  ) => {
     const rowMetadata = (row.metadata ?? {}) as Record<string, unknown>;
     if (
       row.conversation_id !== conversation.id ||
@@ -1107,12 +1277,19 @@ export async function sendAndRecordMessage(args: {
     ) {
       throw new Error("IDEMPOTENCY_CONFLICT");
     }
+    assertWhatsAppRecipientSnapshot({
+      metadata: rowMetadata,
+      fingerprint: recipientFingerprint,
+      kind: recipientIdentity.kind,
+      required: requireRecipientSnapshot,
+    });
   };
 
   if (existingResult.data) {
     const existing = existingResult.data as Record<string, unknown>;
-    assertExistingMatches(existing);
-    if (existingWhatsAppDispatchDisposition(existing) !== "retryable_failure") {
+    const disposition = existingWhatsAppDispatchDisposition(existing);
+    assertExistingMatches(existing, disposition === "retryable_failure");
+    if (disposition !== "retryable_failure") {
       return completedExistingMessage(existing);
     }
   }
@@ -1126,13 +1303,6 @@ export async function sendAndRecordMessage(args: {
     source,
     type,
   });
-  await pauseAutomationForManualDispatch({
-    client,
-    conversation,
-    contact,
-    source,
-  });
-
   await assertOutboundPolicy({
     client,
     conversation,
@@ -1144,7 +1314,6 @@ export async function sendAndRecordMessage(args: {
     source,
     automationOwnerMessageId,
   });
-
   let pending: Record<string, unknown> | null = null;
   if (existingResult.data) {
     const existing = existingResult.data as Record<string, unknown>;
@@ -1156,6 +1325,12 @@ export async function sendAndRecordMessage(args: {
     const retryMetadata = {
       ...existingMetadata,
       ...complianceMetadata,
+      recipient_identity_kind: existingMetadata.recipient_identity_kind,
+      recipient_identity_provenance:
+        existingMetadata.recipient_identity_provenance,
+      recipient_fingerprint_version:
+        existingMetadata.recipient_fingerprint_version,
+      recipient_fingerprint: existingMetadata.recipient_fingerprint,
       send_attempts: attempts + 1,
       error: null,
       error_code: null,
@@ -1215,7 +1390,7 @@ export async function sendAndRecordMessage(args: {
         if (raced.error || !raced.data) {
           throw new Error("MESSAGE_IDEMPOTENCY_LOOKUP_FAILED");
         }
-        assertExistingMatches(raced.data as Record<string, unknown>);
+        assertExistingMatches(raced.data as Record<string, unknown>, false);
         return completedExistingMessage(raced.data as Record<string, unknown>);
       }
       const policyError = insertResult.error
@@ -1257,6 +1432,23 @@ export async function sendAndRecordMessage(args: {
       type,
     });
     assertAdministrativePayload(bodyPreview, payload);
+    const currentRecipientIdentity = await resolveWhatsAppRecipientIdentity({
+      client,
+      contact,
+      conversation,
+      credentials: initialCredentials,
+    });
+    const currentRecipientFingerprint = await whatsappRecipientFingerprint({
+      identity: currentRecipientIdentity,
+      accountId: initialCredentials.accountId,
+      idempotencyKey,
+    });
+    if (
+      currentRecipientFingerprint !== recipientFingerprint ||
+      currentRecipientIdentity.kind !== recipientIdentity.kind
+    ) {
+      throw new WhatsAppPolicyError("WHATSAPP_RECIPIENT_CONTEXT_CHANGED");
+    }
     const credentials = await resolveWhatsAppAccountCredentials({
       client,
       purpose: "send",
@@ -1274,6 +1466,7 @@ export async function sendAndRecordMessage(args: {
     }
     const dispatched = await dispatchWhatsAppPayload({
       recipient,
+      recipientKind: recipientIdentity.kind,
       payload,
       opaqueMessageId: pending.id as string,
       credentials,

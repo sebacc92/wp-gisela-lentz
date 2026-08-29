@@ -94,25 +94,36 @@ select is(
     'user.9373795779eb6441c8adb2eaee5b848e7dd174ddd302d7db62142f4722d574b6'
   ),
   1,
-  'an authenticated app echo synchronously claims manual control by BSUID'
+  'an authenticated app echo synchronously records the human-reply barrier by BSUID'
 );
 
 select ok(
   (
-    select automation_mode = 'manual' and needs_human is false
+    select automation_mode = 'auto'
+      and needs_human
+      and automation_pause_source is null
+      and automation_pause_message_id is null
+      and automation_human_barrier_ingest_sequence = 0
     from public.conversations
     where id = :'bsuid_conversation_id'::uuid
   ),
-  'the app-echo barrier is durable before asynchronous echo ingestion'
+  'the app-echo barrier preserves the exact pre-existing conversation preference'
 );
 
-select is(
+select ok(
   public.pause_whatsapp_automation_for_app_echo(
-    null,
-    'user.9373795779eb6441c8adb2eaee5b848e7dd174ddd302d7db62142f4722d574b6'
-  ),
-  0,
-  'replaying the app-echo barrier is idempotent'
+      null,
+      'user.9373795779eb6441c8adb2eaee5b848e7dd174ddd302d7db62142f4722d574b6'
+    ) = 1
+    and (
+      select automation_mode = 'auto'
+        and needs_human
+        and automation_pause_source is null
+        and automation_human_barrier_ingest_sequence = 0
+      from public.conversations
+      where id = :'bsuid_conversation_id'::uuid
+    ),
+  'replaying the app-echo barrier is state-idempotent'
 );
 
 select is(
@@ -134,9 +145,12 @@ select ok(
         'user.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
       and contact.phone_e164 is null
       and conversation.status = 'open'
-      and conversation.automation_mode = 'manual'
+      and conversation.automation_mode = 'auto'
+      and not conversation.needs_human
+      and conversation.automation_pause_source is null
+      and conversation.automation_human_barrier_ingest_sequence = 0
   ),
-  'the unknown-contact echo barrier is a durable manual conversation'
+  'the unknown-contact echo barrier creates a durable auto-preference conversation'
 );
 
 select (public.enqueue_whatsapp_coexistence_event(

@@ -104,10 +104,12 @@ export default component$(() => {
         <p>
           La plataforma depende de servicios de terceros, incluidos Supabase, la
           WhatsApp Cloud API de Meta y, cuando el consultorio habilita la
-          integración opcional, Google Calendar. Su funcionamiento también está
-          sujeto a las condiciones, límites y disponibilidad técnica de esos
-          proveedores. Una demora, interrupción o rechazo de una operación por
-          parte de un tercero puede afectar temporalmente el servicio.
+          integración opcional correspondiente, OpenAI para respuestas
+          administrativas acotadas y Google Calendar para la copia privada de
+          turnos. Su funcionamiento también está sujeto a las condiciones,
+          límites y disponibilidad técnica de esos proveedores. Una demora,
+          interrupción o rechazo de una operación por parte de un tercero puede
+          afectar temporalmente el servicio.
         </p>
       </section>
 

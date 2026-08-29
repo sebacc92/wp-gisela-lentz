@@ -33,6 +33,9 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 const CLIENT_SCOPE = "gisela-lentz-wp";
 const ATTEMPT_LIFETIME_MS = 10 * 60 * 1_000;
 const MAXIMUM_REQUEST_BYTES = 16 * 1_024;
+export const DEFAULT_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H = 10;
+export const MINIMUM_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H = 5;
+export const MAXIMUM_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H = 50;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const META_ID_PATTERN = /^[0-9]{5,64}$/;
@@ -41,6 +44,26 @@ const MAXIMUM_ASSET_IDS = 100;
 
 type HistoryDecision = "accepted" | "declined";
 type JsonRecord = Record<string, unknown>;
+
+export function embeddedSignupMaxAttempts24h(
+  getEnvironment: (name: string) => string | undefined = (name) =>
+    Deno.env.get(name),
+): number {
+  const raw = getEnvironment(
+    "WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H",
+  )?.trim();
+  if (!raw || !/^-?(?:0|[1-9][0-9]{0,9})$/.test(raw)) {
+    return DEFAULT_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H;
+  }
+  const configured = Number(raw);
+  if (!Number.isSafeInteger(configured)) {
+    return DEFAULT_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H;
+  }
+  return Math.max(
+    MINIMUM_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H,
+    Math.min(MAXIMUM_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H, configured),
+  );
+}
 
 interface ClaimedCode {
   attempt_id: string;
@@ -59,6 +82,15 @@ interface ClaimedValidation {
   history_sharing_decision: HistoryDecision;
   validation_deadline_at: string;
   validation_attempts: number;
+}
+
+interface SubmittedSessionCandidate {
+  event: string | null;
+  version: string | number | null;
+  wabaId: string;
+  businessPortfolioId: string | null;
+  phoneNumberId: string | null;
+  assetIds: JsonRecord;
 }
 
 class EmbeddedSignupApiError extends Error {
@@ -171,6 +203,44 @@ function embeddedAssetManifest(body: JsonRecord): JsonRecord {
     output[outputKey] = canonicalValues;
   }
   return output;
+}
+
+function optionalSessionEvent(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !/^[A-Z][A-Z0-9_]{0,99}$/.test(value)) {
+    throw new EmbeddedSignupApiError("INVALID_SESSION_EVENT_METADATA");
+  }
+  return value;
+}
+
+function optionalSessionVersion(value: unknown): string | number | null {
+  if (value === undefined || value === null) return null;
+  if (
+    (typeof value === "number" &&
+      Number.isSafeInteger(value) &&
+      value >= 0 &&
+      value <= 999) ||
+    (typeof value === "string" && /^[0-9]{1,3}$/.test(value))
+  ) {
+    return value;
+  }
+  throw new EmbeddedSignupApiError("INVALID_SESSION_VERSION_METADATA");
+}
+
+function submittedSessionCandidate(
+  body: JsonRecord,
+): SubmittedSessionCandidate {
+  if (body.type !== "WA_EMBEDDED_SIGNUP") {
+    throw new EmbeddedSignupApiError("UNEXPECTED_EMBEDDED_SIGNUP_TYPE");
+  }
+  return {
+    event: optionalSessionEvent(body.event),
+    version: optionalSessionVersion(body.version),
+    wabaId: requiredString(body, "wabaId", META_ID_PATTERN, 64),
+    businessPortfolioId: optionalMetaId(body, "businessPortfolioId"),
+    phoneNumberId: optionalMetaId(body, "phoneNumberId"),
+    assetIds: embeddedAssetManifest(body),
+  };
 }
 
 function historyDecision(body: JsonRecord): HistoryDecision {
@@ -348,36 +418,23 @@ async function recordPreCompletionValidation(input: {
   }
 }
 
-async function recordFinish(input: {
+async function recordSessionCandidate(input: {
   client: SupabaseClient;
   userId: string;
-  body: JsonRecord;
+  candidate: SubmittedSessionCandidate;
   attemptId: string;
   stateHash: string;
   nonceHash: string;
   decision: HistoryDecision;
   callbackReceivedAt: string;
 }): Promise<void> {
-  if (
-    input.body.type !== "WA_EMBEDDED_SIGNUP" ||
-    input.body.event !== "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
-    input.body.version !== 3
-  ) {
-    throw new EmbeddedSignupApiError("UNEXPECTED_EMBEDDED_SIGNUP_EVENT");
-  }
-  const wabaId = requiredString(input.body, "wabaId", META_ID_PATTERN, 64);
-  const businessPortfolioId = optionalMetaId(input.body, "businessPortfolioId");
-  const phoneNumberId = optionalMetaId(input.body, "phoneNumberId");
-  const assetIds = embeddedAssetManifest(input.body);
-  const submittedWabaIds = assetIds.waba_ids as string[];
-  if (submittedWabaIds.length > 0 && !submittedWabaIds.includes(wabaId)) {
-    throw new EmbeddedSignupApiError("INVALID_ASSET_IDS");
-  }
+  const { wabaId, businessPortfolioId, phoneNumberId, assetIds } =
+    input.candidate;
   const eventHash = await sha256Hex(
     JSON.stringify({
       type: "WA_EMBEDDED_SIGNUP",
-      event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
-      version: 3,
+      event: input.candidate.event,
+      version: input.candidate.version,
       wabaId,
       businessPortfolioId,
       phoneNumberId,
@@ -871,6 +928,7 @@ async function actionStart(
     p_configuration_id: config.configurationId,
     p_history_sharing_decision: decision,
     p_expires_at: expiresAt,
+    p_max_attempts_24h: embeddedSignupMaxAttempts24h(),
   });
   if (result.error) {
     throw new EmbeddedSignupApiError(
@@ -878,8 +936,18 @@ async function actionStart(
       409,
     );
   }
-  const row = firstRow<{ attempt_id: string; expires_at: string }>(result.data);
-  if (!row?.attempt_id || !row.expires_at) {
+  const row = firstRow<{
+    attempt_id: string | null;
+    status: string | null;
+    expires_at: string | null;
+  }>(result.data);
+  if (row?.status === "rate_limited") {
+    throw new EmbeddedSignupApiError(
+      "WHATSAPP_EMBEDDED_SIGNUP_RATE_LIMITED",
+      409,
+    );
+  }
+  if (row?.status !== "initiated" || !row.attempt_id || !row.expires_at) {
     throw new EmbeddedSignupApiError(
       "WHATSAPP_EMBEDDED_SIGNUP_START_FAILED",
       500,
@@ -920,8 +988,24 @@ async function actionExchange(
   const receivedAtMs = Date.now();
   const config = signupConfig();
   const context = await callbackContext(body);
+  // Parse the untrusted browser candidate before consuming the one-shot OAuth
+  // code. It remains evidence only; Graph canonicalization below is authority.
+  const sessionCandidate =
+    body.wabaId === undefined ? null : submittedSessionCandidate(body);
   const code = authorizationCode(body);
   const codeHash = await sha256Hex(code);
+  if (sessionCandidate) {
+    // Persist the idempotent browser evidence before consuming Meta's
+    // one-shot code. This RPC validates the same admin/state/nonce and lets
+    // every subsequent token checkpoint bind to the candidate WABA.
+    await recordSessionCandidate({
+      client,
+      userId,
+      candidate: sessionCandidate,
+      ...context,
+      callbackReceivedAt: new Date(receivedAtMs).toISOString(),
+    });
+  }
   const claim = await client.rpc("claim_whatsapp_embedded_signup_code", {
     p_attempt_id: context.attemptId,
     p_admin_user_id: userId,
@@ -982,10 +1066,11 @@ async function actionExchange(
     let validationError: unknown = null;
     try {
       const claimedWabaId =
-        typeof claimed.waba_id === "string" &&
+        sessionCandidate?.wabaId ??
+        (typeof claimed.waba_id === "string" &&
         META_ID_PATTERN.test(claimed.waba_id)
           ? claimed.waba_id
-          : null;
+          : null);
       assertPostExchangeTokenMetadata({
         metadata,
         config,
@@ -1011,18 +1096,6 @@ async function actionExchange(
     await failAttempt(client, context.attemptId, userId, error);
     throw error;
   }
-  // The code has a 30-second lifetime, so all FINISH persistence deliberately
-  // happens only after its one-shot exchange, immediate Vault write and an
-  // independently persisted post-exchange debug_token checkpoint.
-  if (body.event !== undefined) {
-    await recordFinish({
-      client,
-      userId,
-      body,
-      ...context,
-      callbackReceivedAt: new Date(receivedAtMs).toISOString(),
-    });
-  }
   const completion = await finalizeIfReady({
     client,
     userId,
@@ -1040,10 +1113,10 @@ async function actionFinish(
   const callbackReceivedAt = new Date().toISOString();
   const config = signupConfig();
   const context = await callbackContext(body);
-  await recordFinish({
+  await recordSessionCandidate({
     client,
     userId,
-    body,
+    candidate: submittedSessionCandidate(body),
     ...context,
     callbackReceivedAt,
   });
@@ -1062,10 +1135,14 @@ async function actionCancel(
   body: JsonRecord,
 ): Promise<JsonRecord> {
   const attemptId = requiredString(body, "attemptId", UUID_PATTERN, 36);
-  const reason =
-    body.reason === "META_CANCELLED" || body.reason === "META_ERROR"
-      ? body.reason
-      : "USER_CANCELLED";
+  if (
+    body.reason !== "USER_CANCELLED" &&
+    body.reason !== "META_CANCELLED" &&
+    body.reason !== "META_ERROR"
+  ) {
+    throw new EmbeddedSignupApiError("INVALID_CANCELLATION_REASON");
+  }
+  const reason = body.reason;
   const result = await client.rpc("cancel_whatsapp_embedded_signup_attempt", {
     p_attempt_id: attemptId,
     p_admin_user_id: userId,
@@ -1078,6 +1155,62 @@ async function actionCancel(
     );
   }
   return { cancelled: result.data === true };
+}
+
+function actionDiagnostic(body: JsonRecord): JsonRecord {
+  const origin = body.origin;
+  const dataType = body.dataType;
+  const type = body.type;
+  const event = body.event;
+  const version = body.version;
+  const hasCurrentStep = body.hasCurrentStep;
+  const hasWabaId = body.hasWabaId;
+  const sourceMatchesCapturedPopup = body.sourceMatchesCapturedPopup;
+  const dataKeys = body.dataKeys;
+  const validEvent =
+    event === null ||
+    (typeof event === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(event));
+  const validVersion =
+    version === null ||
+    (typeof version === "number" &&
+      Number.isSafeInteger(version) &&
+      version >= 0 &&
+      version <= 999) ||
+    (typeof version === "string" && /^[0-9]{1,3}$/.test(version));
+  const validDataKeys =
+    Array.isArray(dataKeys) &&
+    dataKeys.length <= 50 &&
+    dataKeys.every(
+      (key) =>
+        typeof key === "string" &&
+        /^[a-z][a-z0-9_]{0,39}$/.test(key) &&
+        !/[0-9]{5,}/.test(key),
+    );
+  if (
+    origin !== "https://www.facebook.com" ||
+    (dataType !== "string" && dataType !== "object") ||
+    type !== "WA_EMBEDDED_SIGNUP" ||
+    !validEvent ||
+    !validVersion ||
+    typeof hasCurrentStep !== "boolean" ||
+    typeof hasWabaId !== "boolean" ||
+    typeof sourceMatchesCapturedPopup !== "boolean" ||
+    !validDataKeys
+  ) {
+    throw new EmbeddedSignupApiError("INVALID_SESSION_DIAGNOSTIC");
+  }
+  console.info("WhatsApp Embedded Signup session event", {
+    origin,
+    dataType,
+    type,
+    event,
+    version,
+    hasCurrentStep,
+    hasWabaId,
+    sourceMatchesCapturedPopup,
+    dataKeys,
+  });
+  return { accepted: true };
 }
 
 async function actionOffboard(
@@ -1156,6 +1289,8 @@ export async function handleWhatsAppEmbeddedSignupRequest(
       response = await actionExchange(client, user.id, body);
     } else if (action === "finish") {
       response = await actionFinish(client, user.id, body);
+    } else if (action === "diagnostic") {
+      response = actionDiagnostic(body);
     } else if (action === "cancel") {
       response = await actionCancel(client, user.id, body);
     } else if (action === "offboard") {

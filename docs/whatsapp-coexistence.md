@@ -49,29 +49,33 @@ fallido queda visible y no se revive infinitamente por cada duplicado de Meta.
 
 ## Comportamiento por evento
 
-| Campo                | Persistencia                                                                                              | Efectos deliberadamente omitidos                                                              |
-| -------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `messages`           | Mensajes inbound vivos y estados; `edit`/`revoke` se reconcilian por wamid                                | Ninguna regresión del flujo vivo existente                                                    |
-| `history`            | Contacto, conversación, mensaje, dirección, wamid, timestamp, estado, contenido, tipo Meta, lote y origen | Sin unread, bot, respuestas, consentimiento, urgencia, seña, handoff ni ventana de atención   |
-| `smb_app_state_sync` | Alta/actualización por BSUID y/o teléfono; baja marcada en el mapping de Coexistence                      | No elimina el contacto administrativo ni su historial                                         |
-| `smb_message_echoes` | Mensaje outbound ya enviado y pausa inmediata de automatización de la conversación                        | No llama a Graph, no pasa por política de nuevo envío y no abre/extiende la ventana Cloud API |
+| Campo                | Persistencia                                                                                              | Efectos deliberadamente omitidos                                                                             |
+| -------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `messages`           | Mensajes inbound vivos y estados; `edit`/`revoke` se reconcilian por wamid                                | Ninguna regresión del flujo vivo existente                                                                   |
+| `history`            | Contacto, conversación, mensaje, dirección, wamid, timestamp, estado, contenido, tipo Meta, lote y origen | Sin unread, bot, respuestas, consentimiento, urgencia, seña, handoff ni ventana de atención                  |
+| `smb_app_state_sync` | Alta/actualización por BSUID y/o teléfono; baja marcada en el mapping de Coexistence                      | No elimina el contacto administrativo ni su historial                                                        |
+| `smb_message_echoes` | Mensaje outbound ya enviado y barrera causal contra una respuesta automática duplicada                    | No llama a Graph, no pausa el bot, no pasa por política de nuevo envío ni abre/extiende la ventana Cloud API |
 
 ## Identidad dual: BSUID y teléfono
 
-`contacts.whatsapp_user_id` guarda el BSUID opaco de hasta 256 caracteres y es
-la identidad preferida para resolver y enviar a ese usuario. `phone_e164` ahora
-es nullable: una fila real debe tener al menos BSUID o teléfono, pero nunca se
-inventa uno a partir del otro. Los índices únicos parciales y los locks por cada
-identidad impiden que un mismo BSUID, `wa_id` o teléfono se una silenciosamente
-a contactos diferentes.
+`contacts.whatsapp_user_id` guarda el BSUID opaco de hasta 256 caracteres.
+`phone_e164` ahora es nullable: una fila real debe tener al menos BSUID o
+teléfono, pero nunca se inventa uno a partir del otro. Los índices únicos
+parciales y los locks por cada identidad impiden que un mismo BSUID, `wa_id` o
+teléfono se una silenciosamente a contactos diferentes.
 
 El adaptador reconoce las variantes actuales de Meta: `contacts[].user_id`,
 `messages[].from_user_id`/`to_user_id`, `threads[].context.user_id`,
 `state_sync[].contact.user_id` y `message_echoes[].to_user_id`. Conserva además
 `username` y `country_code` como metadata cuando llegan. Los campos telefónicos
-legacy siguen admitidos, pero pueden venir vacíos. Al enviar, el backend usa el
-BSUID si existe y sólo cae al teléfono/`whatsapp_id` cuando no existe; la
-allowlist de test se aplica al destino real resuelto.
+legacy siguen admitidos, pero pueden venir vacíos. Al enviar, el backend
+resuelve la identidad dentro de la cuenta Coexistence: usa primero el mapping
+activo y, si la sincronización de contactos no estuvo disponible, permite una
+identidad protegida sólo cuando existe un inbound vivo y firmado de esa misma
+cuenta durante las últimas 24 horas. Los identificadores numéricos van en `to`;
+un BSUID va en `recipient`, nunca simulando ser un teléfono. El destino efectivo
+queda ligado a la idempotencia mediante un HMAC sin persistir el identificador
+crudo.
 
 Los ecos no copian `to` a `contacts.whatsapp_id`: teléfono, `wa_id` y BSUID no
 son equivalentes. Las actualizaciones de contactos usan el timestamp de origen
@@ -95,19 +99,14 @@ aplica una sola vez unread/actividad y reserva el dispatch de automatización.
 Un retry posterior detecta la promoción ya confirmada y no repite esos efectos.
 
 Antes de procesar cualquier `messages` vivo de un POST firmado, el webhook hace
-una pre-pasada por todos los `smb_message_echoes` confiables y llama
-`pause_whatsapp_automation_for_app_echo(...)`. Así, una respuesta manual enviada
-desde la app pone la conversación en modo manual antes de liberar dispatches del
-mismo payload. La ingesta asíncrona del eco persiste luego el mensaje y conserva
-la pausa. La conversación registra si esa pausa pertenece a un eco, un operador,
-el sistema o un handoff causado por un inbound concreto. El ledger de efectos
-toma el mismo lock antes del commit: si el eco u operador ganó la carrera, la
-transacción revierte también cualquier cambio previo de turno, perfil, decisión
-o sesión. Sólo el aviso de handoff perteneciente exactamente a ese inbound puede
-atravesar su propia transición deliberada a modo manual. Además, todos los
-orígenes automáticos vuelven a leer el modo inmediatamente antes de llamar a
-Graph; una solicitud que Graph ya aceptó antes de esa comprobación no puede
-retirarse retroactivamente.
+una pre-pasada por todos los `smb_message_echoes` confiables y llama la barrera
+causal de respuesta humana. Una respuesta desde la app o desde la web invalida
+la automatización perteneciente a los inbound ya observados, pero conserva la
+preferencia `automation_mode=auto`; sólo el botón explícito o un handoff de
+seguridad cambian ese modo. El ledger de efectos toma el mismo lock antes del
+commit: si la respuesta humana ganó la carrera, la transacción revierte también
+cualquier cambio previo de turno, perfil, decisión o sesión. Todos los orígenes
+automáticos vuelven a validar la barrera inmediatamente antes de Graph.
 
 ## Persistencia
 

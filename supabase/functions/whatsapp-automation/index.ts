@@ -24,6 +24,18 @@ import {
   optionsResponse,
   safeErrorMessage,
 } from "../_shared/http.ts";
+import {
+  administrativeInfoIntent,
+  administrativeInfoRoute,
+  administrativeOpenAIEnabled,
+  administrativeSafetyIdentifier,
+  buildAdministrativeKnowledge,
+  formatStructuredBusinessHours,
+  isAllowedAdministrativeQuestion,
+  OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE,
+  requestAdministrativeOpenAIAnswer,
+  resolveDurableAdministrativeAnswer,
+} from "../_shared/openai-administrative.ts";
 import { createServiceClient } from "../_shared/supabase.ts";
 import { constantTimeEqual } from "../_shared/whatsapp-webhook.ts";
 import {
@@ -84,6 +96,8 @@ interface AppSettingsSnapshot {
   automation_welcome_message?: string | null;
   urgent_message?: string | null;
   general_info_message?: string | null;
+  ai_enabled?: boolean;
+  ai_model?: string | null;
   out_of_hours_enabled?: boolean;
   out_of_hours_message?: string | null;
   out_of_hours_cooldown_minutes?: number;
@@ -1236,20 +1250,263 @@ Deno.serve(async (request) => {
         typeof appSettings?.general_info_message === "string"
           ? appSettings.general_info_message.trim()
           : "";
-      if (!configuredInfo) {
+      const showConfiguredInfo = async () => {
+        if (!configuredInfo) {
+          await handoff(
+            "Todavía no tenemos esa información configurada para responder automáticamente.",
+          );
+          return;
+        }
+        await send(
+          buttonsPayload(configuredInfo, [
+            { id: "flow:new", title: "Sacar un turno" },
+            { id: "flow:human", title: "Hablar con Gisela" },
+            { id: "flow:menu", title: "Menú principal" },
+          ]),
+          configuredInfo,
+        );
+        await saveSession("idle");
+      };
+      const fallbackAnswer = () =>
+        configuredInfo
+          ? {
+              answer: configuredInfo,
+              handoff: false,
+              responseId: null,
+              source: "fallback" as const,
+            }
+          : {
+              answer: OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE,
+              handoff: true,
+              responseId: null,
+              source: "fallback" as const,
+            };
+
+      if (appSettings?.ai_enabled !== true) {
+        await showConfiguredInfo();
+        return;
+      }
+      const intent = administrativeInfoIntent(inputValue);
+      if (!intent || !isAllowedAdministrativeQuestion(inputValue)) {
         await handoff(
-          "Todavía no tenemos esa información configurada para responder automáticamente.",
+          "Para cuidar tu privacidad, esa consulta necesita que la revise Gisela.",
         );
         return;
       }
-      const message = configuredInfo;
+
+      const readLiveAIControl = async () => {
+        if (!whatsappAutomationsEnabled()) {
+          return {
+            automationsEnabled: false,
+            aiEnabled: false,
+            settings: null,
+          };
+        }
+        const serverEnabled =
+          Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED") === "true";
+        if (!serverEnabled) {
+          return {
+            automationsEnabled: true,
+            aiEnabled: false,
+            settings: null,
+          };
+        }
+        const [settingsResult, whatsappResult, hoursResult] = await Promise.all(
+          [
+            client
+              .from("app_settings")
+              .select("ai_enabled,ai_model,business_address")
+              .eq("id", true)
+              .single(),
+            client
+              .from("whatsapp_settings")
+              .select("sending_paused,integration_status")
+              .eq("id", true)
+              .single(),
+            client
+              .from("availability_rules")
+              .select(
+                "weekday,start_time,end_time,active,professionals!inner(active)",
+              )
+              .eq("active", true)
+              .eq("professionals.active", true)
+              .order("weekday")
+              .order("start_time"),
+          ],
+        );
+        if (
+          settingsResult.error ||
+          whatsappResult.error ||
+          hoursResult.error ||
+          !settingsResult.data ||
+          !whatsappResult.data ||
+          whatsappResult.data.sending_paused ||
+          whatsappResult.data.integration_status !== "connected"
+        ) {
+          console.warn("whatsapp-automation openai", {
+            code: "OPENAI_CONTROL_UNAVAILABLE",
+          });
+          return {
+            automationsEnabled: true,
+            aiEnabled: false,
+            settings: null,
+          };
+        }
+        return {
+          automationsEnabled: true,
+          aiEnabled: administrativeOpenAIEnabled({
+            globalAutomationsEnabled: true,
+            serverEnabled,
+            aiEnabled: settingsResult.data.ai_enabled,
+            model: settingsResult.data.ai_model,
+          }),
+          settings: {
+            ...settingsResult.data,
+            business_hours: formatStructuredBusinessHours(
+              hoursResult.data ?? [],
+            ),
+          },
+        };
+      };
+
+      const beforeCall = await readLiveAIControl();
+      if (!beforeCall.automationsEnabled) return;
+
+      let answer: Awaited<ReturnType<typeof requestAdministrativeOpenAIAnswer>>;
+      try {
+        const lease = executionLease;
+        if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+        const sequence = decisionSequence;
+        decisionSequence += 1;
+        answer = await resolveDurableAdministrativeAnswer({
+          recall: async () => {
+            const recalled = await client.rpc(
+              "recall_whatsapp_automation_decision",
+              {
+                p_message_id: lease.messageId,
+                p_lease_token: lease.leaseToken,
+                p_sequence: sequence,
+                p_key: "openai_administrative_answer",
+              },
+            );
+            if (recalled.error) throw recalled.error;
+            if (recalled.data === null) return null;
+            const remembered = recalled.data as { value?: unknown };
+            if (!("value" in remembered)) {
+              throw new Error("OPENAI_DURABLE_RESPONSE_INVALID");
+            }
+            return remembered.value;
+          },
+          reserve: async () => {
+            if (!beforeCall.aiEnabled) return false;
+            const reservation = await client.rpc(
+              "reserve_openai_administrative_request",
+              {
+                p_message_id: inbound.id,
+                p_lease_token: lease.leaseToken,
+              },
+            );
+            if (reservation.error) {
+              throw new Error("OPENAI_QUOTA_UNAVAILABLE");
+            }
+            const quota = reservation.data as {
+              allowed?: unknown;
+              reason?: unknown;
+            } | null;
+            if (!quota || quota.allowed !== true) {
+              const reason =
+                typeof quota?.reason === "string" &&
+                [
+                  "ALREADY_RESERVED",
+                  "CONTACT_HOURLY_LIMIT",
+                  "TENANT_HOURLY_LIMIT",
+                  "TENANT_DAILY_LIMIT",
+                ].includes(quota.reason)
+                  ? quota.reason
+                  : "QUOTA_UNAVAILABLE";
+              throw new Error(`OPENAI_${reason}`);
+            }
+            return true;
+          },
+          request: async () =>
+            await requestAdministrativeOpenAIAnswer({
+              apiKey: Deno.env.get("OPENAI_API_KEY")?.trim() ?? "",
+              intent,
+              knowledge: buildAdministrativeKnowledge(
+                beforeCall.settings ?? {},
+              ),
+              safetyIdentifier: await administrativeSafetyIdentifier(
+                contact.id,
+              ),
+            }),
+          fallback: async (error) => {
+            const code =
+              error instanceof DOMException && error.name === "TimeoutError"
+                ? "OPENAI_TIMEOUT"
+                : error instanceof Error &&
+                    /^OPENAI_[A-Z0-9_]+(?::[0-9]{3})?$/.test(error.message)
+                  ? error.message
+                  : "OPENAI_REQUEST_FAILED";
+            console.warn("whatsapp-automation openai", { code });
+            return fallbackAnswer();
+          },
+          remember: async (value) => {
+            const result = await client.rpc(
+              "remember_whatsapp_automation_decision",
+              {
+                p_message_id: lease.messageId,
+                p_lease_token: lease.leaseToken,
+                p_sequence: sequence,
+                p_key: "openai_administrative_answer",
+                p_value: { value },
+              },
+            );
+            if (result.error) throw result.error;
+            const remembered = result.data as { value?: unknown } | null;
+            if (!remembered || !("value" in remembered)) {
+              throw new Error("OPENAI_DURABLE_RESPONSE_INVALID");
+            }
+            return remembered.value;
+          },
+        });
+      } catch {
+        console.warn("whatsapp-automation openai", {
+          code: "OPENAI_DURABILITY_UNAVAILABLE",
+        });
+        return;
+      }
+
+      const beforeSend = await readLiveAIControl();
+      if (!beforeSend.automationsEnabled) return;
+      if (answer.source === "openai" && !beforeSend.aiEnabled) return;
+      if (answer.handoff) {
+        await claimInboundHandoff(client, inbound.id);
+        await send(
+          textPayload(OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE),
+          OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE,
+          {
+            ai_administrative: answer.source === "openai",
+            ai_fallback: answer.source === "fallback",
+            human_handoff: true,
+            openai_response_id: answer.responseId,
+          },
+          "handoff",
+        );
+        await saveSession("human_handoff");
+        return;
+      }
       await send(
-        buttonsPayload(message, [
+        buttonsPayload(answer.answer, [
           { id: "flow:new", title: "Sacar un turno" },
           { id: "flow:human", title: "Hablar con Gisela" },
           { id: "flow:menu", title: "Menú principal" },
         ]),
-        message,
+        answer.answer,
+        {
+          ai_administrative: answer.source === "openai",
+          ai_fallback: answer.source === "fallback",
+          openai_response_id: answer.responseId,
+        },
       );
       await saveSession("idle");
     };
@@ -1399,7 +1656,8 @@ Deno.serve(async (request) => {
       });
     }
 
-    const requestedIntent = resolveMainMenuIntent(inputValue);
+    const requestedIntent =
+      resolveMainMenuIntent(inputValue) ?? administrativeInfoRoute(inputValue);
     const explicitHumanRequest =
       inputValue === "flow:human" ||
       /^(?:quiero |necesito )?(?:hablar|comunicarme) con (?:gisela|una persona|un humano|un operador)$/.test(

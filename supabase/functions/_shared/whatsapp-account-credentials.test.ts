@@ -449,6 +449,41 @@ test("POST /messages usa únicamente teléfono y business token resueltos", asyn
   });
 });
 
+test("POST /messages coloca el BSUID en recipient y nunca en to", async () => {
+  let observedBody: Record<string, unknown> = {};
+  await dispatchWhatsAppPayload({
+    recipient: "AR.syntheticrecipient1",
+    recipientKind: "bsuid",
+    payload: { type: "text", text: { body: "hola" } },
+    opaqueMessageId: "99999999-9999-4999-8999-999999999998",
+    credentials: {
+      credentialMode: "coexistence",
+      accountId: ACCOUNT_ID,
+      wabaId: WABA_ID,
+      phoneNumberId: PHONE_NUMBER_ID,
+      businessAccessToken: BUSINESS_TOKEN,
+      tokenGeneration: 3,
+      coexistenceStatus: "active",
+      onboardingStatus: "completed",
+      appSubscriptionStatus: "subscribed",
+      businessTokenStatus: "active",
+      businessTokenValidationStatus: "valid",
+      sendingPaused: false,
+      apiVersion: "v26.0",
+    },
+    fetchImpl: async (_input, init) => {
+      observedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        JSON.stringify({ messages: [{ id: "wamid.sent.bsuid" }] }),
+        { status: 200 },
+      );
+    },
+  });
+
+  assert.equal(observedBody.recipient, "AR.syntheticrecipient1");
+  assert.equal("to" in observedBody, false);
+});
+
 test("Graph 190 se clasifica sin propagar el detalle del proveedor", async () => {
   const providerDetail = "provider detail with sensitive-token-sentinel";
   let observed: unknown;

@@ -235,6 +235,8 @@ export default component$(() => {
     outOfHoursCooldownMinutes: 720,
     urgentMessage: "",
     generalInfoMessage: "",
+    aiEnabled: false,
+    aiModel: "gpt-5.6-luna",
     whatsappStatus: "incomplete" as "incomplete" | "connected" | "error",
     whatsappPhone: "",
     whatsappName: "",
@@ -353,6 +355,8 @@ export default component$(() => {
         state.urgentMessage = (data.urgent_message as string | null) ?? "";
         state.generalInfoMessage =
           (data.general_info_message as string | null) ?? "";
+        state.aiEnabled = data.ai_enabled === true;
+        state.aiModel = "gpt-5.6-luna";
       }
       if (whatsapp.data) {
         state.whatsappStatus = whatsapp.data
@@ -2073,6 +2077,46 @@ export default component$(() => {
                       }
                     />
                   </label>
+                  <div>
+                    <h3>Asistente de IA para información administrativa</h3>
+                    <p>
+                      Puede redactar únicamente respuestas sobre horarios y
+                      ubicación usando la dirección y las reglas de horarios ya
+                      configuradas. No recibe el mensaje original ni datos del
+                      paciente.
+                    </p>
+                  </div>
+                  <label class="settings-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.aiEnabled}
+                      disabled={!state.isAdmin}
+                      onChange$={(_, element) =>
+                        (state.aiEnabled = element.checked)
+                      }
+                    />
+                    <span>Usar IA sólo para horarios y ubicación</span>
+                  </label>
+                  <label class="form-field">
+                    <span>Modelo fijado por el backend</span>
+                    <input
+                      type="text"
+                      value={state.aiModel}
+                      readOnly
+                      disabled
+                    />
+                  </label>
+                  <div class="settings-policy-alert">
+                    <Icon name="info" size={18} />
+                    <span>
+                      <strong>La IA tiene un interruptor independiente</strong>
+                      <small>
+                        Aunque se marque acá, no funciona mientras las
+                        automatizaciones globales estén apagadas. Ante datos
+                        faltantes o una consulta sensible, deriva a Gisela.
+                      </small>
+                    </span>
+                  </div>
                   {containsRestrictedAutomationRequest(
                     `${state.outOfHoursMessage} ${state.urgentMessage} ${state.generalInfoMessage}`,
                   ) && (
@@ -2108,6 +2152,8 @@ export default component$(() => {
                           urgent_message: state.urgentMessage.trim(),
                           general_info_message:
                             state.generalInfoMessage.trim() || null,
+                          ai_enabled: state.aiEnabled,
+                          ai_model: "gpt-5.6-luna",
                         },
                         "Automatización guardada.",
                       )

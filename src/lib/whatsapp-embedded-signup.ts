@@ -68,19 +68,28 @@ export interface EmbeddedSignupAssets {
   wabaIds: string[];
 }
 
-export interface EmbeddedSignupFinishEvent {
-  kind: "finish";
+export interface EmbeddedSignupSessionCandidate {
+  kind: "session";
   type: typeof WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE;
-  event: typeof WHATSAPP_BUSINESS_APP_FINISH_EVENT;
-  version: 3;
+  /** Optional browser metadata only. The backend never treats it as authority. */
+  event: string | null;
+  version: string | number | null;
   assets: EmbeddedSignupAssets;
+}
+
+export interface EmbeddedSignupIntermediateEvent {
+  kind: "intermediate";
+  type: typeof WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE;
+  event: string | null;
+  version: string | number | null;
+  currentStepPresent: true;
 }
 
 export interface EmbeddedSignupCancelEvent {
   kind: "cancel";
   type: typeof WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE;
   event: "CANCEL";
-  version: 3;
+  version: string | number | null;
   currentStep: string | null;
   errorCode: string | null;
   hasError: boolean;
@@ -90,12 +99,13 @@ export interface EmbeddedSignupErrorEvent {
   kind: "error";
   type: typeof WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE;
   event: "ERROR";
-  version: 3;
+  version: string | number | null;
   errorCode: string | null;
 }
 
 export type EmbeddedSignupMessage =
-  | EmbeddedSignupFinishEvent
+  | EmbeddedSignupSessionCandidate
+  | EmbeddedSignupIntermediateEvent
   | EmbeddedSignupCancelEvent
   | EmbeddedSignupErrorEvent;
 
@@ -105,11 +115,32 @@ export type EmbeddedSignupMessageRejection =
   | "UNRELATED_MESSAGE"
   | "UNSUPPORTED_VERSION"
   | "UNEXPECTED_EVENT"
-  | "INVALID_ASSETS";
+  | "INVALID_ASSETS"
+  | "CONTRADICTORY_SESSION_INFO";
 
 export type EmbeddedSignupMessageParseResult =
   | { accepted: true; message: EmbeddedSignupMessage }
   | { accepted: false; reason: EmbeddedSignupMessageRejection };
+
+export type EmbeddedSignupMessageEffect =
+  | "ignore"
+  | "contradictory"
+  | "session"
+  | "intermediate"
+  | "cancel"
+  | "error";
+
+export interface SanitizedEmbeddedSignupSessionEvent {
+  origin: string;
+  dataType: string;
+  type: string | number | boolean | null;
+  event: string | number | boolean | null;
+  version: string | number | boolean | null;
+  hasCurrentStep: boolean;
+  hasWabaId: boolean;
+  sourceMatchesCapturedPopup: boolean;
+  dataKeys: string[];
+}
 
 export type HistorySharingDecision = "accepted" | "declined";
 
@@ -271,31 +302,16 @@ export async function cancelEmbeddedSignupSessionFailClosed(input: {
   return { outcome, released, reconciled };
 }
 
-export type EmbeddedSignupMessageSourceBinding<T> =
-  | { accepted: true; source: T }
-  | {
-      accepted: false;
-      source: T | null;
-      reason: "MISSING_SOURCE" | "UNEXPECTED_SOURCE";
-    };
-
 /**
- * Meta's FINISH payload has no application attempt identifier. Bind the first
- * non-null source object accepted for this in-memory session and reject every
- * different source afterwards. Object identity is intentionally used: no
- * source data is serialized or trusted as an identifier.
+ * Popup identity is useful telemetry but is not a protocol requirement in
+ * Meta's current sample. Security comes from exact origin, the live tab-scoped
+ * attempt and backend state/nonce/Graph checks.
  */
-export function bindEmbeddedSignupMessageSource<T>(
-  current: T | null,
-  candidate: T | null,
-): EmbeddedSignupMessageSourceBinding<T> {
-  if (candidate === null) {
-    return { accepted: false, source: current, reason: "MISSING_SOURCE" };
-  }
-  if (current !== null && current !== candidate) {
-    return { accepted: false, source: current, reason: "UNEXPECTED_SOURCE" };
-  }
-  return { accepted: true, source: candidate };
+export function embeddedSignupSourceMatchesCapturedPopup<T>(
+  capturedPopup: T | null,
+  messageSource: T | null,
+): boolean {
+  return capturedPopup !== null && messageSource === capturedPopup;
 }
 
 export interface EmbeddedSignupStartConfiguration {
@@ -311,26 +327,26 @@ export interface EmbeddedSignupStartConfiguration {
 }
 
 export interface EmbeddedSignupHandshakeState {
-  codeDispatched: boolean;
-  finish: EmbeddedSignupFinishEvent | null;
-  finishDispatched: boolean;
-  exchangeAcknowledged: boolean;
-  finishAcknowledged: boolean;
+  authorizationCode: string | null;
+  codeReceived: boolean;
+  sessionCandidate: EmbeddedSignupSessionCandidate | null;
+  completionDispatched: boolean;
+  completionAcknowledged: boolean;
 }
 
 export type EmbeddedSignupHandshakeAction =
   | { type: "code_received"; code: string }
-  | { type: "finish_received"; message: EmbeddedSignupFinishEvent }
-  | { type: "exchange_acknowledged" }
-  | { type: "finish_acknowledged" };
-
-export type EmbeddedSignupHandshakeEffect =
   | {
-      type: "exchange";
-      code: string;
-      finish: EmbeddedSignupFinishEvent | null;
+      type: "session_received";
+      message: EmbeddedSignupSessionCandidate;
     }
-  | { type: "finish"; message: EmbeddedSignupFinishEvent };
+  | { type: "completion_acknowledged" };
+
+export type EmbeddedSignupHandshakeEffect = {
+  type: "complete";
+  code: string;
+  session: EmbeddedSignupSessionCandidate;
+};
 
 export interface EmbeddedSignupHandshakeTransition {
   state: EmbeddedSignupHandshakeState;
@@ -386,6 +402,67 @@ function parsedPayload(value: unknown): UnknownRecord | null {
     }
   }
   return record(value);
+}
+
+function sanitizedSessionEventName(value: unknown): string | null {
+  const candidate = safeShortString(value, 100);
+  return candidate && /^[A-Z][A-Z0-9_]{0,99}$/.test(candidate)
+    ? candidate
+    : null;
+}
+
+function sanitizedSessionVersion(value: unknown): string | number | null {
+  if (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 999
+  ) {
+    return value;
+  }
+  return typeof value === "string" && /^[0-9]{1,3}$/.test(value) ? value : null;
+}
+
+/**
+ * Keep production troubleshooting useful without copying payload values into
+ * browser logs. In particular, nested values can contain public asset IDs and
+ * must never cross this boundary; only bounded field names are retained.
+ */
+export function sanitizedEmbeddedSignupSessionEvent(input: {
+  origin: string;
+  data: unknown;
+  sourceMatchesCapturedPopup?: boolean;
+}): SanitizedEmbeddedSignupSessionEvent {
+  const payload = parsedPayload(input.data);
+  const isWhatsAppSessionEvent =
+    payload?.type === WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE;
+  const data = isWhatsAppSessionEvent ? record(payload.data) : null;
+  const dataKeys = data
+    ? Object.keys(data)
+        .filter(
+          (key) => /^[a-z][a-z0-9_]{0,39}$/.test(key) && !/[0-9]{5,}/.test(key),
+        )
+        .sort()
+        .slice(0, 50)
+    : [];
+  return {
+    origin: input.origin,
+    dataType: typeof input.data,
+    type: isWhatsAppSessionEvent ? WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE : null,
+    event: isWhatsAppSessionEvent
+      ? sanitizedSessionEventName(payload.event)
+      : null,
+    version: isWhatsAppSessionEvent
+      ? sanitizedSessionVersion(payload.version)
+      : null,
+    hasCurrentStep:
+      data !== null &&
+      Object.prototype.hasOwnProperty.call(data, "current_step"),
+    hasWabaId:
+      data !== null && Object.prototype.hasOwnProperty.call(data, "waba_id"),
+    sourceMatchesCapturedPopup: input.sourceMatchesCapturedPopup === true,
+    dataKeys,
+  };
 }
 
 /**
@@ -540,94 +617,40 @@ export function parseWhatsAppEmbeddedSignupMessage(input: {
   if (payload.type !== WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE) {
     return { accepted: false, reason: "UNRELATED_MESSAGE" };
   }
-  if (payload.event === WHATSAPP_BUSINESS_APP_FINISH_EVENT) {
-    if (payload.version !== 3) {
-      return { accepted: false, reason: "UNSUPPORTED_VERSION" };
-    }
-    const data = record(payload.data);
-    if (!data) return { accepted: false, reason: "INVALID_PAYLOAD" };
-    const wabaId = optionalAssetId(data.waba_id);
-    const phoneNumberId = optionalAssetId(data.phone_number_id);
-    const businessPortfolioId = optionalAssetId(data.business_id);
-    const adAccountIds = assetIdList(data.ad_account_ids);
-    const pageIds = assetIdList(data.page_ids);
-    const datasetIds = assetIdList(data.dataset_ids);
-    const catalogIds = assetIdList(data.catalog_ids);
-    const instagramAccountIds = assetIdList(data.instagram_account_ids);
-    const wabaIds = assetIdList(data.waba_ids);
-    const assetLists = [
-      adAccountIds,
-      pageIds,
-      datasetIds,
-      catalogIds,
-      instagramAccountIds,
-      wabaIds,
-    ];
-    if (
-      !wabaId ||
-      phoneNumberId === undefined ||
-      businessPortfolioId === undefined ||
-      adAccountIds === null ||
-      pageIds === null ||
-      datasetIds === null ||
-      catalogIds === null ||
-      instagramAccountIds === null ||
-      wabaIds === null ||
-      assetLists.reduce((total, list) => total + (list?.length ?? 0), 0) >
-        MAX_EMBEDDED_SIGNUP_ASSET_IDS ||
-      (wabaIds.length > 0 && !wabaIds.includes(wabaId))
-    ) {
-      return { accepted: false, reason: "INVALID_ASSETS" };
-    }
+  const data = record(payload.data);
+  if (!data) {
+    return { accepted: false, reason: "CONTRADICTORY_SESSION_INFO" };
+  }
+  const event = sanitizedSessionEventName(payload.event);
+  const version = sanitizedSessionVersion(payload.version);
+
+  // Meta's current reference implementation treats current_step as progress,
+  // independently of event/version. Presence (not truthiness) is deliberate.
+  if (Object.prototype.hasOwnProperty.call(data, "current_step")) {
     return {
       accepted: true,
       message: {
-        kind: "finish",
+        kind: "intermediate",
         type: WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE,
-        event: WHATSAPP_BUSINESS_APP_FINISH_EVENT,
-        version: 3,
-        assets: {
-          wabaId,
-          phoneNumberId,
-          businessPortfolioId,
-          adAccountIds,
-          pageIds,
-          datasetIds,
-          catalogIds,
-          instagramAccountIds,
-          wabaIds,
-        },
+        event,
+        version,
+        currentStepPresent: true,
       },
     };
   }
 
   if (payload.event === "CANCEL") {
-    // Meta's published CANCEL examples omit `version`, while FINISH v3 carries
-    // it. Accept an omitted version for cancellation, but never a conflicting
-    // one, so a real abandonment can always release the active attempt.
-    if (payload.version !== undefined && payload.version !== 3) {
-      return { accepted: false, reason: "UNSUPPORTED_VERSION" };
-    }
-    const data = record(payload.data);
-    if (!data) return { accepted: false, reason: "INVALID_PAYLOAD" };
-    const currentStep = safeShortString(data.current_step, 160);
     const errorCode = safeShortString(data.error_code, 160);
     const hasError =
       errorCode !== null || safeShortString(data.error_message, 500) !== null;
-    if (
-      (data.current_step !== undefined && currentStep === null) ||
-      (data.error_code !== undefined && errorCode === null)
-    ) {
-      return { accepted: false, reason: "INVALID_PAYLOAD" };
-    }
     return {
       accepted: true,
       message: {
         kind: "cancel",
         type: WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE,
         event: "CANCEL",
-        version: 3,
-        currentStep,
+        version,
+        currentStep: null,
         errorCode,
         hasError,
       },
@@ -635,93 +658,141 @@ export function parseWhatsAppEmbeddedSignupMessage(input: {
   }
 
   if (payload.event === "ERROR") {
-    if (payload.version !== undefined && payload.version !== 3) {
-      return { accepted: false, reason: "UNSUPPORTED_VERSION" };
-    }
-    const data = record(payload.data);
-    if (!data) return { accepted: false, reason: "INVALID_PAYLOAD" };
     const errorCode = safeShortString(data.error_code, 160);
-    if (data.error_code !== undefined && errorCode === null) {
-      return { accepted: false, reason: "INVALID_PAYLOAD" };
-    }
     return {
       accepted: true,
       message: {
         kind: "error",
         type: WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE,
         event: "ERROR",
-        version: 3,
+        version,
         errorCode,
       },
     };
   }
 
-  return { accepted: false, reason: "UNEXPECTED_EVENT" };
-}
-
-export function initialEmbeddedSignupHandshake(): EmbeddedSignupHandshakeState {
+  const wabaId = optionalAssetId(data.waba_id);
+  if (!wabaId) {
+    return { accepted: false, reason: "CONTRADICTORY_SESSION_INFO" };
+  }
+  const phoneNumberId = optionalAssetId(data.phone_number_id) ?? null;
+  const businessPortfolioId = optionalAssetId(data.business_id) ?? null;
+  const adAccountIds = assetIdList(data.ad_account_ids) ?? [];
+  const pageIds = assetIdList(data.page_ids) ?? [];
+  const datasetIds = assetIdList(data.dataset_ids) ?? [];
+  const catalogIds = assetIdList(data.catalog_ids) ?? [];
+  const instagramAccountIds = assetIdList(data.instagram_account_ids) ?? [];
+  const wabaIds = assetIdList(data.waba_ids) ?? [];
   return {
-    codeDispatched: false,
-    finish: null,
-    finishDispatched: false,
-    exchangeAcknowledged: false,
-    finishAcknowledged: false,
+    accepted: true,
+    message: {
+      kind: "session",
+      type: WHATSAPP_EMBEDDED_SIGNUP_MESSAGE_TYPE,
+      event,
+      version,
+      assets: {
+        wabaId,
+        phoneNumberId,
+        businessPortfolioId,
+        adAccountIds,
+        pageIds,
+        datasetIds,
+        catalogIds,
+        instagramAccountIds,
+        wabaIds,
+      },
+    },
   };
 }
 
 /**
- * The authorization code is emitted only as a transient effect. It is never
- * copied into the returned state, so callers can dispatch it immediately and
- * cannot accidentally persist it with the UI state or a page snapshot.
+ * Rejected window messages are observational noise, not onboarding failures.
+ * Only the closed set of accepted WA_EMBEDDED_SIGNUP events may change state.
+ */
+export function embeddedSignupMessageEffect(
+  result: EmbeddedSignupMessageParseResult,
+): EmbeddedSignupMessageEffect {
+  if (result.accepted) return result.message.kind;
+  return result.reason === "CONTRADICTORY_SESSION_INFO"
+    ? "contradictory"
+    : "ignore";
+}
+
+export function initialEmbeddedSignupHandshake(): EmbeddedSignupHandshakeState {
+  return {
+    authorizationCode: null,
+    codeReceived: false,
+    sessionCandidate: null,
+    completionDispatched: false,
+    completionAcknowledged: false,
+  };
+}
+
+/**
+ * The authorization code and SessionInfo are independent signals. The caller
+ * keeps this state only inside a Qwik noSerialize session; once both exist the
+ * code is scrubbed from state and a single combined backend effect is emitted.
  */
 export function reduceEmbeddedSignupHandshake(
   current: EmbeddedSignupHandshakeState,
   action: EmbeddedSignupHandshakeAction,
 ): EmbeddedSignupHandshakeTransition {
-  if (action.type === "code_received") {
-    const code = parseFacebookLoginCode({
-      authResponse: { code: action.code },
-    });
-    if (!code || current.codeDispatched) {
+  let next = current;
+  if (action.type === "completion_acknowledged") {
+    if (!current.completionDispatched || current.completionAcknowledged) {
       return { state: current, effects: [] };
     }
     return {
-      state: { ...current, codeDispatched: true },
-      effects: [{ type: "exchange", code, finish: current.finish }],
-    };
-  }
-
-  if (action.type === "finish_received") {
-    if (current.finishDispatched) {
-      return { state: current, effects: [] };
-    }
-    return {
-      state: {
-        ...current,
-        finish: action.message,
-        finishDispatched: true,
-      },
-      effects: [{ type: "finish", message: action.message }],
-    };
-  }
-
-  if (action.type === "exchange_acknowledged") {
-    return {
-      state: { ...current, exchangeAcknowledged: true },
+      state: { ...current, completionAcknowledged: true },
       effects: [],
     };
   }
 
+  if (action.type === "code_received") {
+    const code = parseFacebookLoginCode({
+      authResponse: { code: action.code },
+    });
+    if (!code || current.codeReceived || current.completionDispatched) {
+      return { state: current, effects: [] };
+    }
+    next = {
+      ...current,
+      authorizationCode: code,
+      codeReceived: true,
+    };
+  } else {
+    if (current.sessionCandidate || current.completionDispatched) {
+      return { state: current, effects: [] };
+    }
+    next = {
+      ...current,
+      sessionCandidate: action.message,
+    };
+  }
+
+  if (!next.authorizationCode || !next.sessionCandidate) {
+    return { state: next, effects: [] };
+  }
   return {
-    state: { ...current, finishAcknowledged: true },
-    effects: [],
+    state: {
+      ...next,
+      authorizationCode: null,
+      completionDispatched: true,
+    },
+    effects: [
+      {
+        type: "complete",
+        code: next.authorizationCode,
+        session: next.sessionCandidate,
+      },
+    ],
   };
 }
 
 export function embeddedSignupHandshakeComplete(
   state: EmbeddedSignupHandshakeState,
 ): boolean {
-  return state.exchangeAcknowledged && state.finishAcknowledged;
+  return state.completionDispatched && state.completionAcknowledged;
 }
 
 export function onboardingAttemptBlocksStart(value: unknown): boolean {

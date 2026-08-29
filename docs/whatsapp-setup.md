@@ -41,9 +41,12 @@ WHATSAPP_COEXISTENCE_INTERNAL_SECRET=
 WHATSAPP_COEXISTENCE_CLAIM_LIMIT=5
 WHATSAPP_COEXISTENCE_ITEMS_PER_RUN=100
 REMINDER_CRON_SECRET=
+OPENAI_API_KEY=
+OPENAI_ADMINISTRATIVE_ENABLED=false
 APP_ALLOWED_ORIGINS=https://URL_NUEVA_DE_VERCEL
 WHATSAPP_AUTOMATIONS_ENABLED=false
 WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false
+WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H=10
 WHATSAPP_TEST_MODE=true
 WHATSAPP_TEST_ALLOWED_NUMBERS=NUMERO_PROPIO_E164
 ```
@@ -57,9 +60,17 @@ Reglas:
   ser distinto del existente de automatización y de los secretos de cron;
 - usar orígenes HTTPS exactos, separados por coma, sin wildcard;
 - mantener test mode activo y una allowlist mínima durante toda la integración.
+- guardar `OPENAI_API_KEY` únicamente en Supabase Secrets. No copiarla a
+  Vercel, al navegador, SQL, logs ni archivos versionados. El asistente opcional
+  usa el modelo fijo `gpt-5.6-luna` y permanece apagado mientras
+  `OPENAI_ADMINISTRATIVE_ENABLED`, `ai_enabled` o
+  `WHATSAPP_AUTOMATIONS_ENABLED` sean falsos;
 - mantener `WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false` hasta la autorización
   específica del onboarding. Si falta o no vale literalmente `true`, backend y
   frontend deben fallar cerrado sin cargar Facebook Login;
+- mantener `WHATSAPP_EMBEDDED_SIGNUP_MAX_ATTEMPTS_24H` sólo en Supabase. El
+  default es `10`, el rango efectivo es `5`–`50` y la cuota se separa por ADMIN
+  y client scope sin desactivar el burst guard `3/15m`;
 - no crear un token global del Tech Provider. `/debug_token` se autentica con
   un App Access Token efímero generado server-side a partir de `META_APP_ID` y
   `META_APP_SECRET`; cada operación WABA usa el business token de ese cliente;

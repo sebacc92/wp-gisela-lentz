@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertWhatsAppRecipientSnapshot,
   existingWhatsAppDispatchDisposition,
   isAutomaticWhatsAppSource,
   isCausallyOwnedManualAutomationNotice,
@@ -12,22 +13,177 @@ import {
   operatorSourceForPurpose,
   parseSafetyBoolean,
   parseWhatsAppAllowedNumbers,
+  resolveWhatsAppRecipientIdentity,
   WhatsAppPolicyError,
   whatsAppPolicyCode,
   whatsappRecipient,
+  whatsappRecipientFingerprint,
+  whatsappRecipientIdentity,
 } from "./whatsapp.ts";
-import { WhatsAppCredentialResolutionError } from "./whatsapp-account-credentials.ts";
+import {
+  type WhatsAppAccountCredentials,
+  WhatsAppCredentialResolutionError,
+} from "./whatsapp-account-credentials.ts";
 
-test("prioriza el BSUID opaco como destinatario de Graph", () => {
-  assert.equal(
-    whatsappRecipient({
-      id: "contact-1",
-      phone_e164: null,
+test("usa el wa_id telefónico observado antes que un BSUID cuando ambos existen", () => {
+  const contact = {
+    id: "contact-1",
+    phone_e164: "+5492213000000",
+    whatsapp_id: "5492213000000",
+    whatsapp_user_id: "AR.syntheticrecipient1",
+    name: "Paciente",
+  };
+  assert.equal(whatsappRecipient(contact), "5492213000000");
+  assert.deepEqual(whatsappRecipientIdentity(contact), {
+    value: "5492213000000",
+    kind: "wa_id",
+  });
+});
+
+test("usa el teléfono antes que el BSUID si todavía no observó wa_id", () => {
+  assert.deepEqual(
+    whatsappRecipientIdentity({
+      id: "contact-2",
+      phone_e164: "+5492213000001",
       whatsapp_id: null,
-      whatsapp_user_id: "user.syntheticrecipient1",
+      whatsapp_user_id: "AR.syntheticrecipient2",
       name: "Paciente",
     }),
-    "user.syntheticrecipient1",
+    { value: "5492213000001", kind: "phone" },
+  );
+});
+
+test("conserva el BSUID como fallback cuando Meta no comparte teléfono", () => {
+  assert.deepEqual(
+    whatsappRecipientIdentity({
+      id: "contact-3",
+      phone_e164: null,
+      whatsapp_id: null,
+      whatsapp_user_id: "AR.syntheticrecipient3",
+      name: "Paciente",
+    }),
+    { value: "AR.syntheticrecipient3", kind: "bsuid" },
+  );
+});
+
+test("la identidad Coexistence proviene del resolvedor account-scoped", async () => {
+  const client = {
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      assert.equal(name, "resolve_whatsapp_coexistence_recipient");
+      assert.equal(args.p_account_id, "account-1");
+      assert.equal(args.p_conversation_id, "conversation-1");
+      assert.equal(args.p_contact_id, "contact-1");
+      return {
+        data: [
+          {
+            recipient_value: "5492213000000",
+            identity_kind: "wa_id",
+            identity_provenance: "recent_inbound",
+          },
+        ],
+        error: null,
+      };
+    },
+  };
+  const identity = await resolveWhatsAppRecipientIdentity({
+    client: client as never,
+    contact: {
+      id: "contact-1",
+      phone_e164: "+5492213000000",
+      whatsapp_id: "5492213000000",
+      whatsapp_user_id: "AR.syntheticrecipient1",
+      name: "Paciente",
+    },
+    conversation: {
+      id: "conversation-1",
+      contact_id: "contact-1",
+      coexistence_account_id: "account-1",
+      last_inbound_message_at: new Date().toISOString(),
+      automation_mode: "auto",
+      needs_human: false,
+    },
+    credentials: {
+      credentialMode: "coexistence",
+      accountId: "account-1",
+    } as WhatsAppAccountCredentials,
+  });
+  assert.deepEqual(identity, {
+    value: "5492213000000",
+    kind: "wa_id",
+    provenance: "recent_inbound",
+  });
+});
+
+test("el snapshot idempotente usa HMAC y nunca guarda el destinatario", async () => {
+  const identity = {
+    value: "5492213000000",
+    kind: "wa_id" as const,
+  };
+  const first = await whatsappRecipientFingerprint({
+    identity,
+    accountId: "account-1",
+    idempotencyKey: "operator:message:1",
+    secret: "synthetic-test-secret",
+  });
+  const same = await whatsappRecipientFingerprint({
+    identity,
+    accountId: "account-1",
+    idempotencyKey: "operator:message:1",
+    secret: "synthetic-test-secret",
+  });
+  const changed = await whatsappRecipientFingerprint({
+    identity: { ...identity, value: "5492213000001" },
+    accountId: "account-1",
+    idempotencyKey: "operator:message:1",
+    secret: "synthetic-test-secret",
+  });
+  assert.match(first, /^[0-9a-f]{64}$/);
+  assert.equal(first, same);
+  assert.notEqual(first, changed);
+  assert.equal(first.includes(identity.value), false);
+});
+
+test("un retry conserva y verifica el destinatario reservado", () => {
+  const metadata = {
+    recipient_identity_kind: "wa_id",
+    recipient_fingerprint_version: 1,
+    recipient_fingerprint: "a".repeat(64),
+  };
+  assert.doesNotThrow(() =>
+    assertWhatsAppRecipientSnapshot({
+      metadata,
+      fingerprint: "a".repeat(64),
+      kind: "wa_id",
+      required: true,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertWhatsAppRecipientSnapshot({
+        metadata,
+        fingerprint: "b".repeat(64),
+        kind: "wa_id",
+        required: true,
+      }),
+    /IDEMPOTENCY_CONFLICT/,
+  );
+  assert.throws(
+    () =>
+      assertWhatsAppRecipientSnapshot({
+        metadata: {},
+        fingerprint: "a".repeat(64),
+        kind: "wa_id",
+        required: true,
+      }),
+    /IDEMPOTENCY_RECIPIENT_UNVERIFIABLE/,
+  );
+  assert.doesNotThrow(() =>
+    assertWhatsAppRecipientSnapshot({
+      metadata: {},
+      fingerprint: "a".repeat(64),
+      kind: "wa_id",
+      required: false,
+    }),
   );
 });
 
@@ -125,6 +281,12 @@ test("reconoce la barrera SQL de modo manual como política no reintentable", ()
       message: "WHATSAPP_AUTOMATION_EFFECT_BLOCKED_MANUAL",
     }),
     "AUTOMATION_PAUSED",
+  );
+  assert.equal(
+    whatsAppPolicyCode({
+      message: "WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY",
+    }),
+    "AUTOMATION_SUPERSEDED_BY_HUMAN_REPLY",
   );
   assert.equal(whatsAppPolicyCode({ message: "DB_TIMEOUT" }), null);
 });

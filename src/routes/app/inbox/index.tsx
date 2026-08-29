@@ -37,6 +37,10 @@ import {
   createdAppointmentFromRpc,
   requestDepositAndNotify,
 } from "~/lib/deposit-request";
+import {
+  readWhatsAppSendFailure,
+  whatsappSendFailureNotice,
+} from "~/lib/whatsapp-send-error";
 
 interface InboxState {
   conversations: Conversation[];
@@ -453,7 +457,7 @@ export default component$(() => {
             selectedConversation.time = "Ahora";
 
             try {
-              const { data, error } =
+              const { data, error, response } =
                 await getSupabaseClient().functions.invoke("whatsapp-send", {
                   body: {
                     conversationId: selectedConversation.id,
@@ -464,21 +468,18 @@ export default component$(() => {
 
               if (error || data?.error) {
                 optimistic.status = "failed";
-                notice.value =
-                  data?.message ||
-                  "No pudimos enviar el mensaje. El mismo intento puede reintentarse sin duplicarlo.";
+                const failure = await readWhatsAppSendFailure(data, response);
+                notice.value = whatsappSendFailureNotice(failure);
                 return false;
               }
 
               optimistic.status = "sent";
-              selectedConversation.automationMode = "manual";
-              selectedConversation.needsHuman = false;
               reloadVersion.value += 1;
               return true;
             } catch {
               optimistic.status = "failed";
               notice.value =
-                "No pudimos confirmar el envío. Reintentá: conservaremos el identificador para evitar duplicados.";
+                "No pudimos confirmar el envío. Actualizá la conversación antes de volver a intentar.";
               return false;
             }
           }}
@@ -555,9 +556,6 @@ export default component$(() => {
               .from("conversations")
               .update({
                 needs_human: nextNeedsHuman,
-                automation_mode: nextNeedsHuman
-                  ? "manual"
-                  : selectedConversation.automationMode,
                 priority: nextNeedsHuman
                   ? selectedConversation.priority
                   : false,
@@ -569,7 +567,6 @@ export default component$(() => {
             }
             selectedConversation.needsHuman = nextNeedsHuman;
             if (!nextNeedsHuman) selectedConversation.priority = false;
-            if (nextNeedsHuman) selectedConversation.automationMode = "manual";
           }}
           onToggleClosed$={async () => {
             const nextStatus =
