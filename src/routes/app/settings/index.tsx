@@ -236,6 +236,7 @@ export default component$(() => {
     urgentMessage: "",
     generalInfoMessage: "",
     aiEnabled: false,
+    aiMediaEnabled: false,
     aiModel: "gpt-5.6-luna",
     whatsappStatus: "incomplete" as "incomplete" | "connected" | "error",
     whatsappPhone: "",
@@ -356,6 +357,7 @@ export default component$(() => {
         state.generalInfoMessage =
           (data.general_info_message as string | null) ?? "";
         state.aiEnabled = data.ai_enabled === true;
+        state.aiMediaEnabled = data.ai_media_enabled === true;
         state.aiModel = "gpt-5.6-luna";
       }
       if (whatsapp.data) {
@@ -2097,6 +2099,25 @@ export default component$(() => {
                     />
                     <span>Usar IA sólo para horarios y ubicación</span>
                   </label>
+                  <label class="settings-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={state.aiMediaEnabled}
+                      disabled={!state.isAdmin}
+                      onChange$={(_, element) =>
+                        (state.aiMediaEnabled = element.checked)
+                      }
+                    />
+                    <span>
+                      Transcribir audios y leer comprobantes con IA
+                      <small>
+                        Envía el audio o el comprobante recibido para
+                        transcribirlo o copiar sus datos. La seña la seguís
+                        confirmando vos: lo leído es sólo una ayuda para
+                        revisarlo más rápido.
+                      </small>
+                    </span>
+                  </label>
                   <label class="form-field">
                     <span>Modelo fijado por el backend</span>
                     <input
@@ -2153,6 +2174,7 @@ export default component$(() => {
                           general_info_message:
                             state.generalInfoMessage.trim() || null,
                           ai_enabled: state.aiEnabled,
+                          ai_media_enabled: state.aiMediaEnabled,
                           ai_model: "gpt-5.6-luna",
                         },
                         "Automatización guardada.",
