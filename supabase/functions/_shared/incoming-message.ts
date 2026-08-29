@@ -125,18 +125,22 @@ function consentDecision(
   return null;
 }
 
-function requiresHumanReview(message: NormalizedIncomingMessage): boolean {
+export function requiresHumanReview(
+  message: NormalizedIncomingMessage,
+): boolean {
   if (message.type === "image" || message.type === "document") return true;
   const phrase = normalizedPhrase(message.body);
-  return /\b(diagnostico|receta|medicacion|dosis|historia clinica|resultado de estudio|urgencia|emergencia|dolor intenso|dolor fuerte|sangrado|accidente|traumatismo)\b/.test(
+  return /\b(diagnostico|receta|medicacion|dosis|historia clinica|resultado de estudio|urgencias?|emergencias?|dolor intenso|dolor fuerte|sangrado|accidente|traumatismo)\b/.test(
     phrase,
   );
 }
 
-function requiresPriority(message: NormalizedIncomingMessage): boolean {
+/** Gisela agenda y cotiza las urgencias personalmente, así que un mensaje que
+ * las nombra nunca sigue el flujo automático de reserva. */
+export function requiresPriority(message: NormalizedIncomingMessage): boolean {
   if (message.type !== "text" && message.type !== "interactive") return false;
   const phrase = normalizedPhrase(message.body);
-  return /\b(urgencia|emergencia|dolor intenso|dolor fuerte|sangrado|accidente|traumatismo)\b/.test(
+  return /\b(urgencias?|emergencias?|dolor intenso|dolor fuerte|sangrado|accidente|traumatismo)\b/.test(
     phrase,
   );
 }

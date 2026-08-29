@@ -48,8 +48,38 @@ Los RPC históricos `get_available_slots`, `create_appointment` y `reschedule_ap
 
 `app_settings` centraliza nombre, subtítulo, contacto, zona horaria, duraciones
 por cobertura, monto/datos de seña, tiempo de pre-reserva, buffer, anticipación y
-mensajes configurables. Teléfono y email permanecen vacíos mientras no sean
-informados.
+mensajes configurables. Los datos que Gisela todavía no informó permanecen
+vacíos; hoy el email es el único que sigue así porque el contacto es únicamente
+por WhatsApp.
+
+## Configuración operativa del consultorio
+
+La migración `20260829120000_gisela_lentz_operational_configuration.sql` carga
+las respuestas de Gisela. Es sólo configuración: no toca pacientes, turnos,
+conversaciones ni credenciales, y todo puede editarse después desde
+**Configuración** sin volver a migrar.
+
+- Dirección, teléfono de WhatsApp e información general del consultorio.
+- Horario semanal real en `availability_rules`: lunes 9:30–15, martes
+  13:30–17, miércoles 9:30–12 y 16–21, jueves 10–15 y viernes 9:30–11, con
+  franjas cada 30 minutos. Las franjas de demostración anteriores quedan
+  desactivadas en lugar de borrarse.
+- Feriados nacionales pendientes de 2026 y 2027 que caen de lunes a viernes,
+  como bloqueos de día completo en `availability_exceptions`. Los puentes
+  turísticos se decretan año a año y las vacaciones dependen de Gisela: ambos se
+  cargan a mano desde **Configuración → Días y horarios cerrados**.
+- Motivos de atención activos: Restauraciones, Extracciones, Limpieza,
+  Blanqueamiento y Ortopedia y ortodoncia. Los motivos heredados que Gisela no
+  usa quedan desactivados, no eliminados, porque pueden tener turnos asociados.
+- IOMA 30 minutos, Particular 60, sin descanso entre pacientes y 12 horas de
+  anticipación mínima para reservar.
+- El aviso de fuera de horario queda apagado: Gisela responde durante todo el
+  día.
+
+Las urgencias no son un motivo reservable. Las agenda y cotiza ella de forma
+particular, así que `requiresPriority` en
+`supabase/functions/_shared/incoming-message.ts` las deriva a atención humana
+con prioridad, en singular y en plural.
 
 ## Seguridad
 

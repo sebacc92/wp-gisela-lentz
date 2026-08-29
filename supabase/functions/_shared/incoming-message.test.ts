@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
-import { processIncomingMessage } from "./incoming-message.ts";
+import {
+  processIncomingMessage,
+  requiresHumanReview,
+  requiresPriority,
+} from "./incoming-message.ts";
+import type { NormalizedIncomingMessage } from "./incoming-message.ts";
 
 function duplicateMessageClient(
   options: {
@@ -205,4 +210,42 @@ test("rejects a duplicate wamid owned by another account", async () => {
     }),
     /WHATSAPP_MESSAGE_ACCOUNT_CONFLICT/,
   );
+});
+
+function textMessage(body: string): NormalizedIncomingMessage {
+  return {
+    externalMessageId: "wamid.urgency",
+    phoneE164: "+5492291414102",
+    whatsappId: "5492291414102",
+    whatsappUserId: null,
+    profileName: "Paciente",
+    type: "text",
+    body,
+    metadata: {},
+    receivedAt: "2026-08-29T12:00:00.000Z",
+  };
+}
+
+test("urgencies reach Gisela in singular and plural", () => {
+  for (const body of [
+    "tengo una urgencia",
+    "atienden urgencias?",
+    "es una emergencia",
+    "hacen emergencias los viernes",
+    "tengo dolor intenso",
+  ]) {
+    assert.equal(requiresPriority(textMessage(body)), true, body);
+    assert.equal(requiresHumanReview(textMessage(body)), true, body);
+  }
+});
+
+test("an ordinary booking request keeps using the automated flow", () => {
+  for (const body of [
+    "hola, quiero sacar un turno",
+    "necesito una limpieza",
+    "queria consultar por ortodoncia",
+  ]) {
+    assert.equal(requiresPriority(textMessage(body)), false, body);
+    assert.equal(requiresHumanReview(textMessage(body)), false, body);
+  }
 });
