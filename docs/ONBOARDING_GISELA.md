@@ -63,6 +63,11 @@ pasos sin compartir credenciales, y la persona técnica sabe cuándo detenerse.
   resúmenes sanitizados `manual_status`.
 - Hasta ese despliegue controlado, el Manual no debe usarse como evidencia del
   estado remoto. Este archivo versionado sigue siendo la guía presencial.
+- **Orden obligatorio del despliegue: primero Supabase, después Vercel.**
+  Configuración → Mensajes automáticos guarda `ai_enabled` y `ai_model`, y el
+  flujo de Embedded Signup depende de la cuota configurable y de la validación
+  de BSUID. Promover el frontend a producción antes de aplicar las migraciones
+  pendientes rompe esas pantallas contra una base sin esas columnas.
 - El resumen de Google Calendar del Manual requiere además que exista la
   Function `google-calendar-status`. Hoy esa Function no está desplegada en la
   producción de Gisela; el Manual la marcará como no comprobable hasta que se
@@ -79,9 +84,13 @@ pasos sin compartir credenciales, y la persona técnica sabe cuándo detenerse.
 
 ## Bloqueantes que hay que resolver antes de habilitar automatización
 
-1. **No hay horarios activos.** Con cero franjas de atención, cualquier mensaje
-   automatizado se trataría como fuera de horario. Cargar y revisar horarios es
-   obligatorio antes de activar respuestas automáticas.
+1. **Los horarios reales todavía no están aplicados en producción.** La
+   migración `20260829120000_gisela_lentz_operational_configuration.sql` carga
+   el horario semanal de Gisela, los feriados nacionales y sus motivos de
+   atención, pero sigue pendiente de `supabase db push`. Hasta ese push la base
+   productiva tiene cero franjas y cualquier mensaje automatizado se trataría
+   como fuera de horario. Revisar el horario en pantalla después de aplicarla y
+   antes de activar respuestas automáticas.
 2. **Google Calendar no está preparado.** Las Functions, secrets y cron de
    Calendar no están desplegados/configurados. No intentar conectar Google
    durante el onboarding de WhatsApp; es una tarea técnica separada.
