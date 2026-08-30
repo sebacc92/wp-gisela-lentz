@@ -1,6 +1,6 @@
 import { component$, useSignal, useVisibleTask$ } from "@qwik.dev/core";
 import type { DocumentHead } from "@qwik.dev/router";
-import { useNavigate } from "@qwik.dev/router";
+import { useLocation, useNavigate } from "@qwik.dev/router";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
 import { Icon } from "~/components/ui/Icon";
 import {
@@ -10,24 +10,50 @@ import {
 } from "~/config/business";
 import { getSupabaseClient } from "~/lib/supabase/client";
 
+function safeLoginDestination(raw: string | null, currentUrl: URL): string {
+  if (!raw || raw.includes("\\")) return "/app";
+  try {
+    const candidate = new URL(raw, currentUrl);
+    const insideApp =
+      candidate.pathname === "/app" || candidate.pathname.startsWith("/app/");
+    if (candidate.origin !== currentUrl.origin || !insideApp) return "/app";
+    return `${candidate.pathname}${candidate.search}${candidate.hash}`;
+  } catch {
+    return "/app";
+  }
+}
+
 export default component$(() => {
   const navigate = useNavigate();
+  const location = useLocation();
   const email = useSignal("");
   const password = useSignal("");
   const visible = useSignal(false);
   const loading = useSignal(false);
   const error = useSignal("");
+  const destination = safeLoginDestination(
+    location.url.searchParams.get("next"),
+    location.url,
+  );
 
   useVisibleTask$(async () => {
+    if (location.url.searchParams.get("error") === "inactive") {
+      error.value =
+        "Tu acceso está inactivo. Consultá con la persona administradora.";
+    }
     const {
       data: { session },
     } = await getSupabaseClient().auth.getSession();
-    if (session) await navigate("/app");
+    if (session) await navigate(destination);
   });
 
   return (
     <main class="login-page">
-      <section class="login-panel" aria-labelledby="login-title">
+      <section
+        class="login-panel"
+        aria-labelledby="login-title"
+        aria-describedby="login-description"
+      >
         <div class="login-brand">
           <BusinessLogo />
         </div>
@@ -35,11 +61,14 @@ export default component$(() => {
         <div class="login-heading">
           <span class="eyebrow">Acceso al consultorio</span>
           <h1 id="login-title">Hola, {BUSINESS_CONFIG.name.split(" ")[0]}</h1>
-          <p>Ingresá con tu email y contraseña para empezar.</p>
+          <p id="login-description">
+            Ingresá con tu email y contraseña para empezar.
+          </p>
         </div>
 
         <form
           class="login-form"
+          aria-busy={loading.value}
           preventdefault:submit
           onSubmit$={async () => {
             loading.value = true;
@@ -59,33 +88,57 @@ export default component$(() => {
               return;
             }
 
-            await navigate("/app");
+            await navigate(destination);
           }}
         >
           <label>
             <span>Email</span>
             <input
+              id="login-email"
               required
               type="email"
               value={email.value}
               autocomplete="email"
+              autocapitalize="none"
+              inputMode="email"
+              spellcheck={false}
+              aria-invalid={
+                error.value === "El email o la contraseña no son correctos."
+              }
+              aria-describedby={error.value ? "login-error" : undefined}
               placeholder="tu@email.com"
-              onInput$={(_, element) => (email.value = element.value)}
+              onInput$={(_, element) => {
+                email.value = element.value;
+                if (error.value) error.value = "";
+              }}
             />
           </label>
           <label>
             <span>Contraseña</span>
             <div class="password-field">
               <input
+                id="login-password"
                 required
                 type={visible.value ? "text" : "password"}
                 value={password.value}
                 autocomplete="current-password"
+                aria-invalid={
+                  error.value === "El email o la contraseña no son correctos."
+                }
+                aria-describedby={error.value ? "login-error" : undefined}
                 placeholder="Ingresá tu contraseña"
-                onInput$={(_, element) => (password.value = element.value)}
+                onInput$={(_, element) => {
+                  password.value = element.value;
+                  if (error.value) error.value = "";
+                }}
               />
               <button
                 type="button"
+                aria-controls="login-password"
+                aria-label={
+                  visible.value ? "Ocultar contraseña" : "Mostrar contraseña"
+                }
+                aria-pressed={visible.value}
                 onClick$={() => (visible.value = !visible.value)}
               >
                 {visible.value ? "Ocultar" : "Ver"}
@@ -93,7 +146,7 @@ export default component$(() => {
             </div>
           </label>
           {error.value && (
-            <p class="login-error" role="alert">
+            <p id="login-error" class="login-error" role="alert">
               {error.value}
             </p>
           )}
@@ -102,6 +155,9 @@ export default component$(() => {
             type="submit"
             disabled={loading.value}
           >
+            {loading.value && (
+              <span class="button-spinner" aria-hidden="true" />
+            )}
             {loading.value ? "Ingresando…" : "Ingresar"}
           </button>
         </form>

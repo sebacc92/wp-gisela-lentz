@@ -37,6 +37,7 @@ interface AppointmentDrawerProps {
 }
 
 export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
+  const drawerRef = useSignal<HTMLElement>();
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const professionalId = useSignal(props.professionals[0]?.id ?? "");
@@ -54,6 +55,22 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
     loading: boolean;
     error: string;
   }>({ slots: [], loading: true, error: "" });
+
+  // Move focus into the drawer when it opens and return it to the control that
+  // opened it after the drawer closes.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+    drawerRef.value?.focus();
+    cleanup(() => {
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus();
+      }
+    });
+  });
 
   useVisibleTask$(async ({ track }) => {
     track(() => professionalId.value);
@@ -91,15 +108,35 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
   const selectedService =
     props.services.find((item) => item.id === serviceId.value) ??
     props.services[0];
+  const busy = saving.value || savingCoverage.value;
 
   return (
-    <div class="drawer-layer" role="presentation" onClick$={props.onClose$}>
+    <div
+      class="drawer-layer"
+      role="presentation"
+      onClick$={() => {
+        if (!saving.value && !savingCoverage.value) props.onClose$();
+      }}
+    >
       <aside
+        ref={drawerRef}
         class="drawer appointment-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="appointment-drawer-title"
+        aria-busy={busy}
+        tabIndex={-1}
         onClick$={(event) => event.stopPropagation()}
+        onKeyDown$={(event) => {
+          if (
+            event.key === "Escape" &&
+            !saving.value &&
+            !savingCoverage.value
+          ) {
+            event.preventDefault();
+            props.onClose$();
+          }
+        }}
       >
         <header class="drawer-header">
           <div>
@@ -110,7 +147,10 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
             class="icon-button"
             type="button"
             aria-label="Cerrar"
-            onClick$={props.onClose$}
+            disabled={busy}
+            onClick$={() => {
+              if (!saving.value && !savingCoverage.value) props.onClose$();
+            }}
           >
             <Icon name="x" size={20} />
           </button>
@@ -164,6 +204,7 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                   <button
                     key={value}
                     type="button"
+                    aria-pressed={coverage.value === value}
                     disabled={savingCoverage.value}
                     onClick$={async () => {
                       savingCoverage.value = true;
@@ -298,7 +339,11 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                 <button
                   class="secondary-button"
                   type="button"
-                  onClick$={props.onClose$}
+                  disabled={busy}
+                  onClick$={() => {
+                    if (!saving.value && !savingCoverage.value)
+                      props.onClose$();
+                  }}
                 >
                   Cancelar
                 </button>

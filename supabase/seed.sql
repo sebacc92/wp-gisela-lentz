@@ -34,7 +34,7 @@ values
   ('51000000-0000-4000-8000-000000000003', 'Limpieza', null, 45, true, 30),
   ('51000000-0000-4000-8000-000000000004', 'Urgencia / dolor', null, 30, true, 40),
   ('51000000-0000-4000-8000-000000000005', 'Extracción', null, 60, true, 50),
-  ('51000000-0000-4000-8000-000000000006', 'Blanqueamiento', null, 60, true, 60),
+  ('51000000-0000-4000-8000-000000000006', 'Limpieza dental', null, 60, true, 60),
   ('51000000-0000-4000-8000-000000000007', 'Ortodoncia', null, 45, true, 70)
 on conflict (id) do update
 set name = excluded.name,

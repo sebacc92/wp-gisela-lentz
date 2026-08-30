@@ -50,6 +50,7 @@ function normalizeSearch(value: string): string {
 
 export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
   (props) => {
+    const drawerRef = useSignal<HTMLElement>();
     const professionalId = useSignal(props.professionals[0]?.id ?? "");
     const serviceId = useSignal(props.services[0]?.id ?? "");
     const patientId = useSignal("");
@@ -77,6 +78,22 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
       loadingPatients: true,
       patientLoadError: false,
       loadingSlots: false,
+    });
+
+    // Move focus into the drawer when it opens and return it to the control that
+    // opened it after the drawer closes.
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ cleanup }) => {
+      const previousFocus =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : undefined;
+      drawerRef.value?.focus();
+      cleanup(() => {
+        if (previousFocus && document.contains(previousFocus)) {
+          previousFocus.focus();
+        }
+      });
     });
 
     useVisibleTask$(async () => {
@@ -141,15 +158,35 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
           (patient) => patient.phone_e164 === normalizedNewPatientPhone,
         )
       : undefined;
+    const busy = saving.value || savingCoverage.value;
 
     return (
-      <div class="drawer-layer" role="presentation" onClick$={props.onClose$}>
+      <div
+        class="drawer-layer"
+        role="presentation"
+        onClick$={() => {
+          if (!saving.value && !savingCoverage.value) props.onClose$();
+        }}
+      >
         <aside
+          ref={drawerRef}
           class="drawer appointment-drawer"
           role="dialog"
           aria-modal="true"
           aria-labelledby="manual-appointment-title"
+          aria-busy={busy}
+          tabIndex={-1}
           onClick$={(event) => event.stopPropagation()}
+          onKeyDown$={(event) => {
+            if (
+              event.key === "Escape" &&
+              !saving.value &&
+              !savingCoverage.value
+            ) {
+              event.preventDefault();
+              props.onClose$();
+            }
+          }}
         >
           <header class="drawer-header">
             <div>
@@ -160,7 +197,10 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
               class="icon-button"
               type="button"
               aria-label="Cerrar"
-              onClick$={props.onClose$}
+              disabled={busy}
+              onClick$={() => {
+                if (!saving.value && !savingCoverage.value) props.onClose$();
+              }}
             >
               <Icon name="x" size={20} />
             </button>
@@ -348,6 +388,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                             <button
                               key={coverage}
                               type="button"
+                              aria-pressed={selectedCoverage.value === coverage}
                               disabled={savingCoverage.value}
                               onClick$={async () => {
                                 savingCoverage.value = true;
@@ -503,6 +544,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                           selected: selectedCoverage.value === coverage,
                         }}
                         type="button"
+                        aria-pressed={selectedCoverage.value === coverage}
                         onClick$={() => (selectedCoverage.value = coverage)}
                       >
                         {coverage === "ioma"
@@ -518,6 +560,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     <button
                       class={{ selected: newPatientIsExisting.value === true }}
                       type="button"
+                      aria-pressed={newPatientIsExisting.value === true}
                       onClick$={() => (newPatientIsExisting.value = true)}
                     >
                       Sí
@@ -525,6 +568,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     <button
                       class={{ selected: newPatientIsExisting.value === false }}
                       type="button"
+                      aria-pressed={newPatientIsExisting.value === false}
                       onClick$={() => (newPatientIsExisting.value = false)}
                     >
                       No
@@ -619,7 +663,10 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
               <button
                 class="secondary-button"
                 type="button"
-                onClick$={props.onClose$}
+                disabled={busy}
+                onClick$={() => {
+                  if (!saving.value && !savingCoverage.value) props.onClose$();
+                }}
               >
                 Cancelar
               </button>

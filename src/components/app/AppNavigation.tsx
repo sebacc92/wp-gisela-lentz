@@ -1,8 +1,8 @@
-import { component$, useSignal, useVisibleTask$ } from "@qwik.dev/core";
+import { $, component$, useContext, useSignal } from "@qwik.dev/core";
 import { Link, useNavigate } from "@qwik.dev/router";
+import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
 import { BUSINESS_CONFIG } from "~/config/business";
-import { isAdminProfile } from "~/lib/admin-access";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import { Icon, type IconName } from "../ui/Icon";
 
@@ -90,41 +90,35 @@ const navItems: Array<{
 
 export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
   const navigate = useNavigate();
-  const fullName = useSignal(BUSINESS_CONFIG.name);
-  const profileInitials = useSignal("GL");
-  const isAdmin = useSignal(false);
+  const appUser = useContext(APP_USER_CONTEXT);
+  const mobileMoreOpen = useSignal(false);
+  const profileInitials = appUser.fullName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toLocaleUpperCase("es-AR") ?? "")
+    .join("");
 
-  // The profile is intentionally resolved only in the browser so the sidebar
-  // never renders an ADMIN-only link before the authenticated user is known.
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async () => {
-    const client = getSupabaseClient();
-    const {
-      data: { user },
-    } = await client.auth.getUser();
-    if (!user) return;
+  const openMobileMore = $(() => {
+    mobileMoreOpen.value = true;
+    requestAnimationFrame(() => {
+      document.getElementById("mobile-more-close")?.focus();
+    });
+  });
 
-    const { data: profile } = await client
-      .from("profiles")
-      .select("full_name,role,active")
-      .eq("id", user.id)
-      .single();
-    if (!profile) return;
-
-    isAdmin.value = isAdminProfile(profile);
-    if (!profile.full_name) return;
-
-    fullName.value = profile.full_name;
-    profileInitials.value = profile.full_name
-      .trim()
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((part: string) => part[0]?.toLocaleUpperCase("es-AR") ?? "")
-      .join("");
+  const closeMobileMore = $(() => {
+    mobileMoreOpen.value = false;
+    requestAnimationFrame(() => {
+      document.getElementById("mobile-more-trigger")?.focus();
+    });
   });
 
   return (
     <>
+      <a class="app-skip-link" href="#app-content">
+        Saltar al contenido principal
+      </a>
+
       <aside class="app-nav" aria-label="Navegación principal">
         <Link
           class="brand-mark"
@@ -136,7 +130,7 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
 
         <nav class="nav-items">
           {navItems
-            .filter((item) => !item.adminOnly || isAdmin.value)
+            .filter((item) => !item.adminOnly || appUser.isAdmin)
             .map((item) => (
               <Link
                 key={item.key}
@@ -163,11 +157,11 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
         </nav>
 
         <div class="nav-profile">
-          <div class="nav-user" title={fullName.value}>
-            <div class="profile-avatar">{profileInitials.value}</div>
+          <div class="nav-user" title={appUser.fullName}>
+            <div class="profile-avatar">{profileInitials}</div>
             <span class="nav-user-copy">
               <small>Sesión iniciada</small>
-              <strong>{fullName.value}</strong>
+              <strong>{appUser.fullName}</strong>
             </span>
           </div>
           <Link
@@ -186,15 +180,11 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
         </div>
       </aside>
 
-      <nav
-        class={{
-          "mobile-nav": true,
-          "mobile-nav-has-manual": isAdmin.value,
-        }}
-        aria-label="Navegación principal"
-      >
+      <nav class="mobile-nav" aria-label="Navegación principal">
         {navItems
-          .filter((item) => !item.adminOnly || isAdmin.value)
+          .filter((item) =>
+            ["home", "appointments", "inbox", "patients"].includes(item.key),
+          )
           .map((item) => (
             <Link
               key={item.key}
@@ -218,7 +208,161 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
               <span>{item.mobileLabel}</span>
             </Link>
           ))}
+
+        <button
+          id="mobile-more-trigger"
+          class={{
+            "mobile-nav-link": true,
+            active: ["odontogram", "settings", "templates", "manual"].includes(
+              active,
+            ),
+          }}
+          type="button"
+          aria-label="Abrir más opciones"
+          aria-haspopup="dialog"
+          aria-expanded={mobileMoreOpen.value}
+          aria-controls="mobile-more-menu"
+          onClick$={openMobileMore}
+        >
+          <Icon name="more" size={20} />
+          <span>Más</span>
+        </button>
       </nav>
+
+      {mobileMoreOpen.value && (
+        <div
+          class="mobile-more-layer"
+          role="presentation"
+          onClick$={closeMobileMore}
+        >
+          <section
+            id="mobile-more-menu"
+            class="mobile-more-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-more-title"
+            tabIndex={-1}
+            onClick$={(event) => event.stopPropagation()}
+            onKeyDown$={async (event, element) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                await closeMobileMore();
+                return;
+              }
+
+              if (event.key !== "Tab") return;
+              const focusable = Array.from(
+                element.querySelectorAll<HTMLElement>(
+                  'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                ),
+              );
+              if (!focusable.length) return;
+
+              const first = focusable[0];
+              const last = focusable[focusable.length - 1];
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+              }
+            }}
+          >
+            <span
+              class="focus-sentinel"
+              tabIndex={0}
+              aria-hidden="true"
+              onFocus$={() =>
+                document
+                  .querySelector<HTMLButtonElement>(".mobile-more-logout")
+                  ?.focus()
+              }
+            />
+            <header class="mobile-more-header">
+              <h2 id="mobile-more-title" class="sr-only">
+                Más opciones de navegación
+              </h2>
+              <div class="mobile-more-profile">
+                <div class="profile-avatar" aria-hidden="true">
+                  {profileInitials}
+                </div>
+                <span>
+                  <small>Sesión iniciada</small>
+                  <strong>{appUser.fullName}</strong>
+                </span>
+              </div>
+              <button
+                id="mobile-more-close"
+                class="icon-button"
+                type="button"
+                aria-label="Cerrar más opciones"
+                onClick$={closeMobileMore}
+              >
+                <Icon name="x" size={20} />
+              </button>
+            </header>
+
+            <nav class="mobile-more-links" aria-label="Más secciones">
+              {navItems
+                .filter(
+                  (item) =>
+                    ["odontogram", "settings", "manual"].includes(item.key) &&
+                    (!item.adminOnly || appUser.isAdmin),
+                )
+                .map((item) => {
+                  const isCurrentDestination = item.key === active;
+                  const isHighlighted =
+                    isCurrentDestination ||
+                    (active === "templates" && item.key === "settings");
+                  return (
+                    <Link
+                      key={item.key}
+                      class={{
+                        "mobile-more-link": true,
+                        active: isHighlighted,
+                      }}
+                      href={item.href}
+                      aria-current={isHighlighted ? "page" : undefined}
+                      onClick$={
+                        isCurrentDestination ? closeMobileMore : undefined
+                      }
+                    >
+                      <span class="mobile-more-link-icon">
+                        <Icon name={item.icon} size={21} />
+                      </span>
+                      <span>
+                        <strong>{item.label}</strong>
+                        <small>{item.description}</small>
+                      </span>
+                    </Link>
+                  );
+                })}
+            </nav>
+
+            <button
+              class="mobile-more-logout"
+              type="button"
+              onClick$={async () => {
+                mobileMoreOpen.value = false;
+                await getSupabaseClient().auth.signOut();
+                await navigate("/login");
+              }}
+            >
+              <Icon name="logout" size={20} />
+              Cerrar sesión
+            </button>
+            <span
+              class="focus-sentinel"
+              tabIndex={0}
+              aria-hidden="true"
+              onFocus$={() =>
+                document.getElementById("mobile-more-close")?.focus()
+              }
+            />
+          </section>
+        </div>
+      )}
     </>
   );
 });

@@ -1,8 +1,7 @@
-import { component$, useSignal, useVisibleTask$ } from "@qwik.dev/core";
+import { component$, useContext } from "@qwik.dev/core";
 import { Link } from "@qwik.dev/router";
-import { isAdminProfile } from "~/lib/admin-access";
+import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
 import { manualSectionHref, type ManualSectionId } from "~/lib/manual-status";
-import { getSupabaseClient } from "~/lib/supabase/client";
 import { Icon } from "../ui/Icon";
 
 interface ManualHelpLinkProps {
@@ -16,28 +15,9 @@ interface ManualHelpLinkProps {
  */
 export const ManualHelpLink = component$<ManualHelpLinkProps>(
   ({ section, label }) => {
-    const isAdmin = useSignal(false);
+    const appUser = useContext(APP_USER_CONTEXT);
 
-    // eslint-disable-next-line qwik/no-use-visible-task
-    useVisibleTask$(async () => {
-      try {
-        const client = getSupabaseClient();
-        const {
-          data: { user },
-        } = await client.auth.getUser();
-        if (!user) return;
-        const { data: profile } = await client
-          .from("profiles")
-          .select("role,active")
-          .eq("id", user.id)
-          .maybeSingle();
-        isAdmin.value = isAdminProfile(profile);
-      } catch {
-        isAdmin.value = false;
-      }
-    });
-
-    if (!isAdmin.value) return null;
+    if (!appUser.isAdmin) return null;
 
     return (
       <Link class="manual-context-link" href={manualSectionHref(section)}>

@@ -65,7 +65,7 @@ export default component$(() => {
   return (
     <main class="section-shell">
       <AppNavigation active="templates" />
-      <section class="section-page">
+      <section id="app-content" class="section-page" tabIndex={-1}>
         <header class="section-page-header">
           <div>
             <span class="eyebrow">WhatsApp</span>
@@ -73,18 +73,62 @@ export default component$(() => {
             <p>Mensajes frecuentes para responder más rápido.</p>
           </div>
         </header>
-        <div class="simple-tabs">
+        <div class="simple-tabs" role="tablist" aria-label="Tipo de mensaje">
           <button
+            id="templates-tab"
             class={{ active: activeTab.value === "templates" }}
             type="button"
+            role="tab"
+            aria-selected={activeTab.value === "templates"}
+            aria-controls={
+              !state.loading && !state.error ? "templates-panel" : undefined
+            }
+            tabIndex={activeTab.value === "templates" ? 0 : -1}
             onClick$={() => (activeTab.value = "templates")}
+            onKeyDown$={(event) => {
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              const next =
+                event.key === "ArrowRight" || event.key === "End"
+                  ? "quick-replies"
+                  : "templates";
+              activeTab.value = next;
+              requestAnimationFrame(() =>
+                document.getElementById(`${next}-tab`)?.focus(),
+              );
+            }}
           >
             Plantillas
           </button>
           <button
+            id="quick-replies-tab"
             class={{ active: activeTab.value === "quick-replies" }}
             type="button"
+            role="tab"
+            aria-selected={activeTab.value === "quick-replies"}
+            aria-controls={
+              !state.loading && !state.error ? "quick-replies-panel" : undefined
+            }
+            tabIndex={activeTab.value === "quick-replies" ? 0 : -1}
             onClick$={() => (activeTab.value = "quick-replies")}
+            onKeyDown$={(event) => {
+              if (
+                !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+              )
+                return;
+              event.preventDefault();
+              const next =
+                event.key === "ArrowLeft" || event.key === "Home"
+                  ? "templates"
+                  : "quick-replies";
+              activeTab.value = next;
+              requestAnimationFrame(() =>
+                document.getElementById(`${next}-tab`)?.focus(),
+              );
+            }}
           >
             Respuestas rápidas
           </button>
@@ -101,7 +145,13 @@ export default component$(() => {
             <p>{state.error}</p>
           </div>
         ) : activeTab.value === "templates" ? (
-          <div class="template-list">
+          <div
+            id="templates-panel"
+            class="template-list"
+            role="tabpanel"
+            aria-labelledby="templates-tab"
+            tabIndex={0}
+          >
             {state.templates.map((template) => (
               <button
                 class="template-item"
@@ -176,7 +226,13 @@ export default component$(() => {
             ))}
           </div>
         ) : (
-          <div class="template-list">
+          <div
+            id="quick-replies-panel"
+            class="template-list"
+            role="tabpanel"
+            aria-labelledby="quick-replies-tab"
+            tabIndex={0}
+          >
             {state.quickReplies.map((reply) => (
               <button
                 class="template-item"

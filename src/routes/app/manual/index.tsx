@@ -221,7 +221,7 @@ export default component$(() => {
   return (
     <main class="section-shell">
       <AppNavigation active="manual" />
-      <section class="section-page manual-page">
+      <section id="app-content" class="section-page manual-page" tabIndex={-1}>
         {access.loading ? (
           <div class="section-empty" aria-live="polite">
             <span class="small-spinner" aria-hidden="true" />

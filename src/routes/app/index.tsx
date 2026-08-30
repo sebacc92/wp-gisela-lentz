@@ -229,7 +229,11 @@ export default component$(() => {
   return (
     <main class="section-shell">
       <AppNavigation active="home" />
-      <section class="section-page dashboard-page">
+      <section
+        id="app-content"
+        class="section-page dashboard-page"
+        tabIndex={-1}
+      >
         <header class="section-page-header dashboard-header dashboard-welcome">
           <div class="dashboard-welcome-copy">
             <span class="eyebrow">Tu consultorio hoy</span>

@@ -1,4 +1,9 @@
-import { component$, type QRL } from "@qwik.dev/core";
+import {
+  component$,
+  type QRL,
+  useSignal,
+  useVisibleTask$,
+} from "@qwik.dev/core";
 import type { Conversation } from "~/lib/inbox-types";
 import { coverageAndDuration, coverageLabel } from "~/lib/booking";
 import {
@@ -8,6 +13,7 @@ import {
   getWhatsAppConsentStatus,
 } from "~/lib/whatsapp-compliance";
 import { Icon } from "../ui/Icon";
+import "./inbox.css";
 
 interface ContactDrawerProps {
   conversation: Conversation;
@@ -30,6 +36,7 @@ function appointmentStatusClass(status: string): string {
 }
 
 export const ContactDrawer = component$<ContactDrawerProps>((props) => {
+  const drawerRef = useSignal<HTMLElement>();
   const appointment = props.conversation.upcomingAppointment;
   const consentStatus = getWhatsAppConsentStatus(props.conversation);
   const serviceWindow = getCustomerServiceWindow(
@@ -53,15 +60,70 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
           : "Baja vigente; fecha de registro no disponible."
         : "No se debe iniciar una conversación ni programar recordatorios para este contacto.";
 
+  // Move keyboard focus into the newly opened surface, then return it to the
+  // control that opened the drawer when the surface closes.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+    drawerRef.value?.focus();
+    cleanup(() => {
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus();
+      }
+    });
+  });
+
   return (
-    <div class="drawer-layer" role="presentation" onClick$={props.onClose$}>
+    <div
+      class="drawer-layer inbox-drawer-layer"
+      role="presentation"
+      onClick$={props.onClose$}
+    >
       <aside
-        class="drawer contact-drawer"
+        ref={drawerRef}
+        class="drawer contact-drawer inbox-contact-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="contact-drawer-title"
+        aria-describedby="contact-drawer-description"
+        tabIndex={-1}
         onClick$={(event) => event.stopPropagation()}
+        onKeyDown$={(event, element) => {
+          if (event.key === "Escape") {
+            props.onClose$();
+            return;
+          }
+          if (event.key !== "Tab") return;
+
+          const focusableElements = Array.from(
+            element.querySelectorAll<HTMLElement>(
+              'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            ),
+          ).filter((item) => item.offsetParent !== null);
+          const first = focusableElements[0];
+          const last = focusableElements.at(-1);
+          if (!first || !last) return;
+
+          if (
+            event.shiftKey &&
+            (document.activeElement === first ||
+              document.activeElement === element)
+          ) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}
       >
+        <p id="contact-drawer-description" class="sr-only">
+          Ficha rápida, turnos y acciones de {props.conversation.name}. Presioná
+          Escape para cerrar.
+        </p>
         <header class="drawer-header">
           <div>
             <span class="eyebrow">Ficha rápida</span>
@@ -70,7 +132,8 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
           <button
             class="icon-button"
             type="button"
-            aria-label="Cerrar"
+            aria-label="Cerrar ficha del paciente"
+            title="Cerrar"
             onClick$={props.onClose$}
           >
             <Icon name="x" size={20} />
@@ -81,6 +144,7 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
           <section class="contact-overview">
             <span
               class={`contact-avatar large avatar-${props.conversation.avatarTone}`}
+              aria-hidden="true"
             >
               {props.conversation.initials}
             </span>
@@ -153,6 +217,7 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
               <button
                 class="text-button"
                 type="button"
+                title="Crear un nuevo turno"
                 onClick$={props.onNewAppointment$}
               >
                 <Icon name="plus" size={15} /> Nuevo turno
@@ -184,10 +249,15 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                 <div class="appointment-card-footer">
                   <span
                     class={`status-badge status-${appointmentStatusClass(appointment.status)}`}
+                    role="status"
                   >
                     {appointment.status}
                   </span>
-                  <button type="button" onClick$={props.onViewAppointment$}>
+                  <button
+                    type="button"
+                    title="Abrir el detalle de este turno"
+                    onClick$={props.onViewAppointment$}
+                  >
                     Ver turno
                   </button>
                 </div>
@@ -252,6 +322,7 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                   "action-dot": true,
                   warning: !props.conversation.needsHuman,
                 }}
+                aria-hidden="true"
               />
               <span>
                 <strong>
@@ -272,6 +343,12 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                 consentStatus === "opted_out" &&
                 props.conversation.automationMode === "manual"
               }
+              title={
+                consentStatus === "opted_out" &&
+                props.conversation.automationMode === "manual"
+                  ? "La baja de WhatsApp impide reactivar la automatización"
+                  : undefined
+              }
               onClick$={props.onToggleAutomation$}
             >
               <span
@@ -279,6 +356,7 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                   "action-dot": true,
                   active: props.conversation.automationMode === "auto",
                 }}
+                aria-hidden="true"
               />
               <span>
                 <strong>
@@ -296,7 +374,7 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
               </span>
             </button>
             <button type="button" onClick$={props.onToggleClosed$}>
-              <span class="action-dot neutral" />
+              <span class="action-dot neutral" aria-hidden="true" />
               <span>
                 <strong>
                   {props.conversation.status === "open"

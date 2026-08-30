@@ -15,6 +15,16 @@ import {
 } from "~/lib/whatsapp-compliance";
 import { Icon } from "../ui/Icon";
 import { MessageBubble } from "./MessageBubble";
+import "./inbox.css";
+
+const composerEmojis = [
+  { value: "😊", label: "Sonrisa" },
+  { value: "👍", label: "Pulgar arriba" },
+  { value: "🦷", label: "Diente" },
+  { value: "📅", label: "Calendario" },
+  { value: "✅", label: "Confirmado" },
+  { value: "❤️", label: "Corazón" },
+] as const;
 
 interface ChatPanelProps {
   conversation: Conversation;
@@ -38,6 +48,10 @@ interface ChatPanelProps {
 export const ChatPanel = component$<ChatPanelProps>((props) => {
   const draft = useSignal("");
   const quickRepliesOpen = useSignal(false);
+  const emojiPickerOpen = useSignal(false);
+  const quickRepliesTrigger = useSignal<HTMLButtonElement>();
+  const emojiPickerTrigger = useSignal<HTMLButtonElement>();
+  const composerInput = useSignal<HTMLTextAreaElement>();
   const isSending = useSignal(false);
   const idempotencyKey = useSignal("");
   const currentTime = useSignal(Date.now());
@@ -86,6 +100,8 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         draft.value = "";
         idempotencyKey.value = "";
         quickRepliesOpen.value = false;
+        emojiPickerOpen.value = false;
+        window.requestAnimationFrame(() => composerInput.value?.focus());
       }
     } finally {
       isSending.value = false;
@@ -122,7 +138,7 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
 
   return (
     <section
-      class="chat-panel"
+      class="chat-panel inbox-chat-panel"
       aria-label={`Conversación con ${props.conversation.name}`}
     >
       <header class="chat-header">
@@ -130,17 +146,23 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
           class="mobile-back"
           type="button"
           aria-label="Volver a conversaciones"
+          title="Volver a conversaciones"
           onClick$={props.onBack$}
         >
           <Icon name="arrow-left" size={23} />
         </button>
 
-        <span class={`contact-avatar avatar-${props.conversation.avatarTone}`}>
+        <span
+          class={`contact-avatar avatar-${props.conversation.avatarTone}`}
+          aria-hidden="true"
+        >
           {props.conversation.initials}
         </span>
         <button
           class="chat-contact"
           type="button"
+          aria-label={`Ver ficha de ${props.conversation.name}`}
+          title="Ver ficha del paciente"
           onClick$={props.onOpenContact$}
         >
           <strong>{props.conversation.name}</strong>
@@ -153,8 +175,14 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
               "automation-chip": true,
               manual: props.conversation.automationMode === "manual",
             }}
+            role="status"
+            aria-label={
+              props.conversation.automationMode === "auto"
+                ? "Automatización activa"
+                : "Atención manual"
+            }
           >
-            <span />
+            <span aria-hidden="true" />
             {props.conversation.automationMode === "auto"
               ? "Automatización activa"
               : "Atención manual"}
@@ -167,29 +195,54 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         aria-label="Acciones para este paciente"
       >
         {props.depositAppointment || props.conversation.upcomingAppointment ? (
-          <button type="button" onClick$={props.onViewAppointment$}>
+          <button
+            class="chat-action-button appointment-action"
+            type="button"
+            title="Abrir el turno de este paciente"
+            onClick$={props.onViewAppointment$}
+          >
             <Icon name="calendar" size={17} /> Ver turno
           </button>
         ) : (
-          <button type="button" onClick$={props.onNewAppointment$}>
+          <button
+            class="chat-action-button appointment-action"
+            type="button"
+            title="Crear un turno para este paciente"
+            onClick$={props.onNewAppointment$}
+          >
             <Icon name="plus" size={17} /> Crear turno
           </button>
         )}
         {props.depositAppointment?.depositStatus === "proof_received" && (
           <button
-            class="primary-button"
+            class="primary-button confirm-deposit-action"
             type="button"
             disabled={props.confirmingDeposit}
+            aria-busy={props.confirmingDeposit}
             onClick$={props.onConfirmDeposit$}
           >
-            <Icon name="check-circle" size={17} />
+            {props.confirmingDeposit ? (
+              <span class="small-spinner" aria-hidden="true" />
+            ) : (
+              <Icon name="check-circle" size={17} />
+            )}
             {props.confirmingDeposit ? "Confirmando…" : "Confirmar seña"}
           </button>
         )}
-        <button type="button" onClick$={props.onOpenContact$}>
+        <button
+          class="chat-action-button patient-action"
+          type="button"
+          title="Abrir la ficha rápida del paciente"
+          onClick$={props.onOpenContact$}
+        >
           <Icon name="user" size={17} /> Ver paciente
         </button>
         <button
+          class={{
+            "chat-action-button": true,
+            "automation-action": true,
+            active: props.conversation.automationMode === "auto",
+          }}
           type="button"
           disabled={
             consentStatus === "opted_out" &&
@@ -210,7 +263,12 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         </button>
         {props.conversation.automationMode === "manual" &&
           consentStatus !== "opted_out" && (
-            <button type="button" onClick$={props.onBotAnswerLast$}>
+            <button
+              class="chat-action-button bot-answer-action"
+              type="button"
+              title="Pedir al bot que responda el último mensaje"
+              onClick$={props.onBotAnswerLast$}
+            >
               <Icon name="send" size={17} /> Que responda el bot
             </button>
           )}
@@ -222,6 +280,7 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             "human-notice": true,
             priority: props.conversation.priority,
           }}
+          role={props.conversation.priority ? "alert" : "status"}
         >
           <span class="human-notice-icon">
             <Icon name="user" size={17} />
@@ -241,7 +300,13 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         </div>
       )}
 
-      <div class="messages-scroll">
+      <div
+        class="messages-scroll"
+        role="log"
+        aria-label={`Mensajes con ${props.conversation.name}`}
+        aria-live="polite"
+        aria-relevant="additions text"
+      >
         <div class="messages-inner">
           {props.conversation.hasOlderMessages && (
             <div class="messages-history-control">
@@ -249,15 +314,23 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
                 class="secondary-button small"
                 type="button"
                 disabled={props.loadingOlderMessages}
+                aria-busy={props.loadingOlderMessages}
                 onClick$={props.onLoadOlderMessages$}
               >
-                {props.loadingOlderMessages
-                  ? "Cargando mensajes…"
-                  : "Cargar mensajes anteriores"}
+                {props.loadingOlderMessages ? (
+                  <span class="small-spinner" aria-hidden="true" />
+                ) : (
+                  <Icon name="clock" size={16} />
+                )}
+                <span>
+                  {props.loadingOlderMessages
+                    ? "Cargando mensajes…"
+                    : "Cargar mensajes anteriores"}
+                </span>
               </button>
             </div>
           )}
-          <div class="date-divider">
+          <div class="date-divider" role="separator" aria-label="Hoy">
             <span>Hoy</span>
           </div>
           {props.conversation.messages.map((message) => (
@@ -270,7 +343,21 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         </div>
       </div>
 
-      <footer class="composer-wrap">
+      <footer
+        class="composer-wrap"
+        onKeyDown$={(event) => {
+          if (event.key === "Escape") {
+            const returnFocus = quickRepliesOpen.value
+              ? quickRepliesTrigger.value
+              : emojiPickerOpen.value
+                ? emojiPickerTrigger.value
+                : undefined;
+            quickRepliesOpen.value = false;
+            emojiPickerOpen.value = false;
+            window.requestAnimationFrame(() => returnFocus?.focus());
+          }
+        }}
+      >
         <div
           class={{
             "composer-policy": true,
@@ -281,42 +368,124 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         >
           <Icon name={canSendText ? "check-circle" : "alert"} size={16} />
           <span>
-            <strong>{policyTitle}</strong>
-            <small>{policyDetail}</small>
+            <strong id="composer-policy-title">{policyTitle}</strong>
+            <small id="composer-policy-detail">{policyDetail}</small>
           </span>
         </div>
 
         {quickRepliesOpen.value && canSendText && (
-          <div class="quick-replies-popover">
+          <div
+            id="quick-replies-popover"
+            class="quick-replies-popover"
+            role="dialog"
+            aria-labelledby="quick-replies-title"
+          >
             <div class="popover-title">
-              <strong>Respuestas rápidas</strong>
-              <span>Elegí una para insertarla</span>
-            </div>
-            {props.quickReplies.map((reply) => (
+              <div>
+                <strong id="quick-replies-title">Respuestas rápidas</strong>
+                <span>Elegí una para insertarla</span>
+              </div>
               <button
-                key={reply.shortcut}
+                class="popover-close"
                 type="button"
+                aria-label="Cerrar respuestas rápidas"
+                title="Cerrar"
                 onClick$={() => {
-                  draft.value = reply.body;
-                  idempotencyKey.value = "";
                   quickRepliesOpen.value = false;
+                  window.requestAnimationFrame(() =>
+                    quickRepliesTrigger.value?.focus(),
+                  );
                 }}
               >
-                <span>{reply.shortcut}</span>
-                <strong>{reply.title}</strong>
-                <small>{reply.body}</small>
+                <Icon name="x" size={16} />
               </button>
-            ))}
+            </div>
+            {props.quickReplies.length ? (
+              props.quickReplies.map((reply) => (
+                <button
+                  class="quick-reply-option"
+                  key={reply.shortcut}
+                  type="button"
+                  onClick$={() => {
+                    draft.value = reply.body;
+                    idempotencyKey.value = "";
+                    quickRepliesOpen.value = false;
+                    window.requestAnimationFrame(() =>
+                      composerInput.value?.focus(),
+                    );
+                  }}
+                >
+                  <span>{reply.shortcut}</span>
+                  <strong>{reply.title}</strong>
+                  <small>{reply.body}</small>
+                </button>
+              ))
+            ) : (
+              <p class="quick-replies-empty">
+                Todavía no hay respuestas rápidas configuradas.
+              </p>
+            )}
+          </div>
+        )}
+
+        {emojiPickerOpen.value && canSendText && (
+          <div
+            id="emoji-picker-popover"
+            class="emoji-picker-popover"
+            role="dialog"
+            aria-label="Elegir emoji"
+          >
+            <span>Elegí un emoji</span>
+            <div>
+              {composerEmojis.map((emoji) => (
+                <button
+                  key={emoji.value}
+                  type="button"
+                  aria-label={emoji.label}
+                  title={emoji.label}
+                  onClick$={() => {
+                    draft.value += emoji.value;
+                    idempotencyKey.value = "";
+                    emojiPickerOpen.value = false;
+                    window.requestAnimationFrame(() =>
+                      composerInput.value?.focus(),
+                    );
+                  }}
+                >
+                  {emoji.value}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
         <div class="composer-actions">
           <button
+            ref={quickRepliesTrigger}
             class={{ "composer-tool": true, active: quickRepliesOpen.value }}
             type="button"
             title="Respuestas rápidas"
             disabled={!canSendText || isSending.value}
-            onClick$={() => (quickRepliesOpen.value = !quickRepliesOpen.value)}
+            aria-haspopup="dialog"
+            aria-controls="quick-replies-popover"
+            aria-expanded={quickRepliesOpen.value}
+            onClick$={() => {
+              const willOpen = !quickRepliesOpen.value;
+              quickRepliesOpen.value = willOpen;
+              emojiPickerOpen.value = false;
+              if (willOpen) {
+                window.requestAnimationFrame(() =>
+                  (
+                    document.querySelector<HTMLButtonElement>(
+                      "#quick-replies-popover .quick-reply-option",
+                    ) ??
+                    document.querySelector<HTMLButtonElement>(
+                      "#quick-replies-popover .popover-close",
+                    )
+                  )?.focus(),
+                );
+              }
+            }}
           >
             <Icon name="spark" size={17} />
             <span>Respuesta rápida</span>
@@ -349,18 +518,44 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
 
         <div class={{ composer: true, blocked: !canSendText }}>
           <button
-            class="icon-button composer-emoji"
+            ref={emojiPickerTrigger}
+            class={{
+              "icon-button": true,
+              "composer-emoji": true,
+              active: emojiPickerOpen.value,
+            }}
             type="button"
-            aria-label="Agregar emoji"
+            aria-label="Elegir emoji"
+            title="Elegir emoji"
             disabled={!canSendText || isSending.value}
+            aria-haspopup="dialog"
+            aria-controls="emoji-picker-popover"
+            aria-expanded={emojiPickerOpen.value}
+            onClick$={() => {
+              const willOpen = !emojiPickerOpen.value;
+              emojiPickerOpen.value = willOpen;
+              quickRepliesOpen.value = false;
+              if (willOpen) {
+                window.requestAnimationFrame(() =>
+                  document
+                    .querySelector<HTMLButtonElement>(
+                      "#emoji-picker-popover button",
+                    )
+                    ?.focus(),
+                );
+              }
+            }}
           >
             <Icon name="smile" size={21} />
           </button>
           <textarea
+            ref={composerInput}
             aria-label="Escribir un mensaje"
             rows={1}
             value={draft.value}
             disabled={!canSendText || isSending.value}
+            aria-describedby="composer-policy-detail composer-hint"
+            aria-keyshortcuts="Enter"
             placeholder={
               canSendText
                 ? "Escribir un mensaje..."
@@ -395,6 +590,15 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             class="send-button"
             type="button"
             disabled={!draft.value.trim() || !canSendText || isSending.value}
+            aria-busy={isSending.value}
+            aria-label={isSending.value ? "Enviando mensaje" : "Enviar mensaje"}
+            title={
+              !canSendText
+                ? "El envío de texto libre está bloqueado"
+                : !draft.value.trim()
+                  ? "Escribí un mensaje para enviarlo"
+                  : "Enviar mensaje"
+            }
             onClick$={sendDraft}
           >
             <span>{isSending.value ? "Enviando…" : "Enviar"}</span>
@@ -405,7 +609,7 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             )}
           </button>
         </div>
-        <span class="composer-hint">
+        <span id="composer-hint" class="composer-hint">
           {canSendText
             ? "Enter para enviar · Shift + Enter para una nueva línea"
             : "El bloqueo también se valida en el servidor"}

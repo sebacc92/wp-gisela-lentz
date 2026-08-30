@@ -39,9 +39,11 @@ Estados adicionales:
 
 ## Perfil y reserva
 
-1. El remitente de WhatsApp ya aporta el teléfono principal. El bot recopila de
-   forma determinista nombre, paciente anterior y cobertura, y pregunta sólo lo
-   que falta.
+1. La primera respuesta es sólo el saludo configurado. Después el bot recopila
+   de forma determinista y de a un dato por mensaje: nombre y apellido, si ya se
+   atendió con Gisela, teléfono de contacto y cobertura. Si el teléfono del
+   remitente está disponible, puede confirmarlo con **Este WhatsApp**; si no,
+   escribe otro número con código de área.
 2. Se muestran únicamente servicios activos; el servicio expresa el motivo.
 3. IOMA usa inicialmente 30 minutos y Particular 60. Ambos valores se leen de
    configuración y `get_available_slots_for_coverage` los aplica realmente.

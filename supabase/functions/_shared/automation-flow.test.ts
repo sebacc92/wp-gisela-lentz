@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  APPOINTMENT_WELCOME_MESSAGE,
   MAIN_MENU_OPTIONS,
+  PATIENT_PROFILE_PROMPTS,
   isMainMenuRequest,
   formatDepositAmountArs,
   missingPatientProfileFields,
@@ -11,6 +13,7 @@ import {
   parseAlternatePhoneE164,
   parseAppointmentSelection,
   parseCoverageReply,
+  parseContactPhoneReply,
   parseExistingPatientReply,
   parsePatientProfileReply,
   parseProfessionalReply,
@@ -23,6 +26,34 @@ import {
   resolveRescheduleRequest,
   renderConfiguredMessage,
 } from "./automation-flow.ts";
+
+test("la bienvenida contiene sólo el saludo solicitado y ninguna lista", () => {
+  assert.equal(
+    APPOINTMENT_WELCOME_MESSAGE,
+    "Hola!!!☺️ Gracias por comunicarte con el Consultorio Odontológico Lentz Gisela. Para agendar tu turno envíanos:",
+  );
+  assert.doesNotMatch(
+    APPOINTMENT_WELCOME_MESSAGE,
+    /nombre y apellido|sos paciente|teléfono de contacto|ioma|particular|\n|\b[1-4][.)]/i,
+  );
+});
+
+test("cada paso del alta pide un solo dato", () => {
+  const fieldPattern = {
+    name: /nombre|apellido/i,
+    is_existing_patient: /atendiste|paciente/i,
+    contact_phone: /teléfono|whatsapp|número/i,
+    coverage: /cobertura|ioma|particular/i,
+  } as const;
+
+  for (const [field, prompt] of Object.entries(PATIENT_PROFILE_PROMPTS)) {
+    assert.match(prompt, fieldPattern[field as keyof typeof fieldPattern]);
+    for (const [otherField, otherPattern] of Object.entries(fieldPattern)) {
+      if (otherField !== field) assert.doesNotMatch(prompt, otherPattern);
+    }
+    assert.doesNotMatch(prompt, /\n|\b[1-4][.)]/);
+  }
+});
 
 test("todas las opciones del menú principal resuelven una intención", () => {
   assert.deepEqual(
@@ -136,6 +167,7 @@ test("extrae de forma determinista un perfil enviado en cuatro líneas", () => {
       values: {
         name: "María José Pérez",
         isExistingPatient: true,
+        contactPhoneConfirmed: true,
         coverage: "ioma",
         alternatePhoneE164: "+5492215550101",
       },
@@ -177,6 +209,7 @@ test("aprovecha una respuesta posicional completa o sin repetir el teléfono", (
     {
       name: "María López",
       isExistingPatient: false,
+      contactPhoneConfirmed: true,
       coverage: "particular",
       alternatePhoneE164: "+5492215550101",
     },
@@ -197,6 +230,28 @@ test("acepta respuestas paso a paso sólo para el campo esperado", () => {
   assert.equal(parseExistingPatientReply("primera vez"), false);
   assert.equal(parseCoverageReply("Tengo IOMA"), "ioma");
   assert.equal(parseCoverageReply("IOMA o Particular"), null);
+});
+
+test("confirma el teléfono de contacto actual o guarda uno distinto", () => {
+  assert.equal(
+    parseContactPhoneReply("profile:phone:whatsapp", "+5492291414102"),
+    "+5492291414102",
+  );
+  assert.equal(
+    parseContactPhoneReply("este mismo", "+5492291414102"),
+    "+5492291414102",
+  );
+  assert.equal(
+    parseContactPhoneReply("02291 15 555-101", "+5492291414102"),
+    "+5492291555101",
+  );
+  assert.deepEqual(
+    parsePatientProfileReply("este WhatsApp", {
+      expectedField: "contact_phone",
+      primaryPhoneE164: "+5492291414102",
+    }).values,
+    { contactPhoneConfirmed: true },
+  );
 });
 
 test("no confunde un teléfono principal ni un texto libre con datos faltantes", () => {
@@ -222,6 +277,7 @@ test("enumera únicamente los datos de perfil que todavía faltan", () => {
     missingPatientProfileFields({
       name: "María López",
       isExistingPatient: null,
+      contactPhoneConfirmed: true,
       coverage: "ioma",
     }),
     ["is_existing_patient"],
@@ -230,9 +286,28 @@ test("enumera únicamente los datos de perfil que todavía faltan", () => {
     missingPatientProfileFields({
       name: "Paciente",
       isExistingPatient: false,
+      contactPhoneConfirmed: true,
       coverage: null,
     }),
     ["name", "coverage"],
+  );
+  assert.deepEqual(
+    missingPatientProfileFields({
+      name: "María López",
+      isExistingPatient: true,
+      contactPhoneConfirmed: false,
+      coverage: "particular",
+    }),
+    ["contact_phone"],
+  );
+  assert.deepEqual(
+    missingPatientProfileFields({
+      name: null,
+      isExistingPatient: null,
+      contactPhoneConfirmed: false,
+      coverage: null,
+    }),
+    ["name", "is_existing_patient", "contact_phone", "coverage"],
   );
 });
 

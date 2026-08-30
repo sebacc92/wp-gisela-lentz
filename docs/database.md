@@ -71,7 +71,7 @@ conversaciones ni credenciales, y todo puede editarse después desde
   turísticos se decretan año a año y las vacaciones dependen de Gisela: ambos se
   cargan a mano desde **Configuración → Días y horarios cerrados**.
 - Motivos de atención activos: Consulta, Restauraciones, Extracciones,
-  Limpieza, Blanqueamiento y Ortopedia y ortodoncia. Consulta se reincorporó en
+  Limpieza, Limpieza dental y Ortopedia y ortodoncia. Consulta se reincorporó en
   `20260829234000_add_consulta_service.sql`. Los motivos heredados que Gisela no
   usa quedan desactivados, no eliminados, porque pueden tener turnos asociados.
 - IOMA 30 minutos, Particular 60, sin descanso entre pacientes y 12 horas de

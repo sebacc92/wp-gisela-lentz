@@ -1,4 +1,5 @@
 import {
+  PATIENT_PROFILE_PROMPTS,
   MAIN_MENU_OPTIONS,
   formatDepositAmountArs,
   isMainMenuRequest,
@@ -248,6 +249,7 @@ interface AutomationContext {
   appointmentId?: string;
   slots?: AutomationSlot[];
   expectedProfileField?: PatientProfileField;
+  contactPhoneConfirmed?: boolean;
   continueAfterProfile?: "services" | "reschedule";
 }
 
@@ -648,12 +650,18 @@ Deno.serve(async (request) => {
       });
     };
 
+    let contactPhoneConfirmed =
+      session.context.contactPhoneConfirmed === true ||
+      (typeof contact.alternate_phone_e164 === "string" &&
+        Boolean(contact.alternate_phone_e164));
+
     const currentProfile = () => ({
       name: typeof contact.name === "string" ? contact.name : null,
       isExistingPatient:
         typeof contact.is_existing_patient === "boolean"
           ? contact.is_existing_patient
           : null,
+      contactPhoneConfirmed,
       coverage:
         contact.coverage === "ioma" || contact.coverage === "particular"
           ? (contact.coverage as PatientCoverage)
@@ -672,9 +680,13 @@ Deno.serve(async (request) => {
       const structuredFieldCount = [
         parsed.values.name,
         parsed.values.isExistingPatient,
+        parsed.values.contactPhoneConfirmed,
         parsed.values.coverage,
       ].filter((field) => field !== undefined).length;
       if (requireStructuredReply && structuredFieldCount < 2) return false;
+      if (parsed.values.contactPhoneConfirmed) {
+        contactPhoneConfirmed = true;
+      }
       const updates: Record<string, unknown> = {};
       if (parsed.values.name) updates.name = parsed.values.name;
       if (typeof parsed.values.isExistingPatient === "boolean") {
@@ -684,7 +696,9 @@ Deno.serve(async (request) => {
       if (parsed.values.alternatePhoneE164) {
         updates.alternate_phone_e164 = parsed.values.alternatePhoneE164;
       }
-      if (!Object.keys(updates).length) return false;
+      if (!Object.keys(updates).length) {
+        return parsed.values.contactPhoneConfirmed === true;
+      }
 
       const lease = executionLease;
       if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
@@ -712,10 +726,10 @@ Deno.serve(async (request) => {
       if (!field) return false;
 
       if (field === "name") {
-        const message = "Para agendar, ¿cuál es tu nombre y apellido?";
+        const message = PATIENT_PROFILE_PROMPTS.name;
         await send(textPayload(message), message);
       } else if (field === "is_existing_patient") {
-        const message = "¿Ya te atendiste conmigo antes?";
+        const message = PATIENT_PROFILE_PROMPTS.is_existing_patient;
         await send(
           buttonsPayload(message, [
             { id: "profile:existing:yes", title: "Sí" },
@@ -723,8 +737,25 @@ Deno.serve(async (request) => {
           ]),
           message,
         );
+      } else if (field === "contact_phone") {
+        const hasWhatsAppPhone =
+          typeof contact.phone_e164 === "string" && Boolean(contact.phone_e164);
+        const message = hasWhatsAppPhone
+          ? PATIENT_PROFILE_PROMPTS.contact_phone
+          : "¿Cuál es tu teléfono de contacto? Escribilo con código de área.";
+        await send(
+          hasWhatsAppPhone
+            ? buttonsPayload(message, [
+                {
+                  id: "profile:phone:whatsapp",
+                  title: "Este WhatsApp",
+                },
+              ])
+            : textPayload(message),
+          message,
+        );
       } else {
-        const message = "¿Tu cobertura es IOMA o Particular?";
+        const message = PATIENT_PROFILE_PROMPTS.coverage;
         await send(
           buttonsPayload(message, [
             { id: "profile:coverage:ioma", title: "IOMA" },
@@ -738,6 +769,7 @@ Deno.serve(async (request) => {
         "collecting_patient_profile",
         {
           expectedProfileField: field,
+          contactPhoneConfirmed,
           continueAfterProfile,
           invalidAttempts,
         },
@@ -1917,8 +1949,13 @@ Deno.serve(async (request) => {
     }
 
     if (session.state === "idle") {
-      // El saludo ya salió como mensaje aparte; acá va sólo el pedido.
-      await showMainMenu(freshSession ? "Elegí una opción:" : undefined);
+      if (freshSession) {
+        // La bienvenida promete iniciar el alta: continuamos con un único dato
+        // en vez de volver a mostrar la lista completa o un menú intermedio.
+        await startNewAppointmentFlow();
+      } else {
+        await showMainMenu();
+      }
     } else if (session.state === "selecting_service") {
       if (inputValue === "services:next") {
         await showServices((session.context.professionalPage ?? 0) + 1);

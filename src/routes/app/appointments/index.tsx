@@ -415,11 +415,13 @@ export default component$(() => {
     <main class="section-shell">
       <AppNavigation active="appointments" />
       <section
+        id="app-content"
         class={{
           "section-page": true,
           "agenda-page": true,
           "future-deposit-mode": futureDepositMode.value,
         }}
+        tabIndex={-1}
       >
         <header class="section-page-header">
           <div>
@@ -526,12 +528,26 @@ export default component$(() => {
           </div>
           <label class="search-field compact-search">
             <Icon name="search" size={17} />
+            <span class="sr-only">Buscar paciente o servicio</span>
             <input
               type="search"
               value={query.value}
               placeholder="Buscar paciente o servicio"
+              autoComplete="off"
+              enterKeyHint="search"
               onInput$={(_, element) => (query.value = element.value)}
             />
+            {query.value && (
+              <button
+                class="search-clear"
+                type="button"
+                aria-label="Limpiar búsqueda"
+                title="Limpiar búsqueda"
+                onClick$={() => (query.value = "")}
+              >
+                <Icon name="x" size={16} />
+              </button>
+            )}
           </label>
           <label class="agenda-status-filter">
             <span>Mostrar</span>

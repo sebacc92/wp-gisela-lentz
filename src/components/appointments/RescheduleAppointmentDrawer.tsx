@@ -30,6 +30,7 @@ function businessDate(value = new Date()): string {
 }
 
 export const RescheduleAppointmentDrawer = component$<Props>((props) => {
+  const drawerRef = useSignal<HTMLElement>();
   const date = useSignal(businessDate(new Date(props.appointment.startsAt)));
   const selectedStartsAt = useSignal("");
   const coverage = useSignal<PatientCoverage | "">(
@@ -42,6 +43,23 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
     slots: [],
     loading: true,
   });
+
+  // Move focus into the drawer when it opens and return it to the control that
+  // opened it after the drawer closes.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+    drawerRef.value?.focus();
+    cleanup(() => {
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus();
+      }
+    });
+  });
+
   useVisibleTask$(async ({ track }) => {
     track(() => date.value);
     track(() => coverage.value);
@@ -65,15 +83,35 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
       state.loading = false;
     }
   });
+  const busy = saving.value || savingCoverage.value;
 
   return (
-    <div class="drawer-layer" role="presentation" onClick$={props.onClose$}>
+    <div
+      class="drawer-layer"
+      role="presentation"
+      onClick$={() => {
+        if (!saving.value && !savingCoverage.value) props.onClose$();
+      }}
+    >
       <aside
+        ref={drawerRef}
         class="drawer appointment-drawer"
         role="dialog"
         aria-modal="true"
         aria-labelledby="reschedule-title"
+        aria-busy={busy}
+        tabIndex={-1}
         onClick$={(event) => event.stopPropagation()}
+        onKeyDown$={(event) => {
+          if (
+            event.key === "Escape" &&
+            !saving.value &&
+            !savingCoverage.value
+          ) {
+            event.preventDefault();
+            props.onClose$();
+          }
+        }}
       >
         <header class="drawer-header">
           <div>
@@ -84,7 +122,10 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
             class="icon-button"
             type="button"
             aria-label="Cerrar"
-            onClick$={props.onClose$}
+            disabled={busy}
+            onClick$={() => {
+              if (!saving.value && !savingCoverage.value) props.onClose$();
+            }}
           >
             <Icon name="x" size={20} />
           </button>
@@ -152,6 +193,7 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
                   <button
                     key={value}
                     type="button"
+                    aria-pressed={coverage.value === value}
                     disabled={savingCoverage.value}
                     onClick$={async () => {
                       savingCoverage.value = true;
@@ -225,7 +267,10 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
             <button
               class="secondary-button"
               type="button"
-              onClick$={props.onClose$}
+              disabled={busy}
+              onClick$={() => {
+                if (!saving.value && !savingCoverage.value) props.onClose$();
+              }}
             >
               Conservar turno
             </button>

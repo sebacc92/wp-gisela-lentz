@@ -514,7 +514,11 @@ export default component$(() => {
   return (
     <main class="section-shell">
       <AppNavigation active="settings" />
-      <section class="section-page settings-page">
+      <section
+        id="app-content"
+        class="section-page settings-page"
+        tabIndex={-1}
+      >
         <header class="section-page-header">
           <div>
             <span class="eyebrow">Administración</span>

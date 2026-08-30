@@ -2,6 +2,7 @@ import { component$, type QRL } from "@qwik.dev/core";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import type { Conversation } from "~/lib/inbox-types";
 import { Icon } from "../ui/Icon";
+import "./inbox.css";
 
 export type InboxFilter = "all" | "unread" | "pending";
 
@@ -23,8 +24,27 @@ const filters: Array<{ key: InboxFilter; label: string }> = [
 ];
 
 export const ConversationList = component$<ConversationListProps>((props) => {
+  const hasQuery = Boolean(props.query.trim());
+  const emptyTitle = hasQuery
+    ? "No hay resultados para esta búsqueda"
+    : props.filter === "unread"
+      ? "No hay mensajes sin leer"
+      : props.filter === "pending"
+        ? "No hay conversaciones pendientes"
+        : "No hay conversaciones todavía";
+  const emptyDetail = hasQuery
+    ? "Revisá el nombre o teléfono e intentá de nuevo."
+    : props.filter === "all"
+      ? "Las conversaciones nuevas aparecerán acá."
+      : "Probá cambiando el filtro para ver más conversaciones.";
+
   return (
-    <section class="conversation-panel" aria-label="Conversaciones">
+    <section
+      id="app-content"
+      class="conversation-panel inbox-conversation-panel"
+      aria-label="Conversaciones"
+      tabIndex={-1}
+    >
       <header class="conversation-panel-header">
         <div>
           <span class="eyebrow">WhatsApp</span>
@@ -47,6 +67,8 @@ export const ConversationList = component$<ConversationListProps>((props) => {
             type="search"
             value={props.query}
             placeholder="Buscar conversación"
+            autoComplete="off"
+            enterKeyHint="search"
             onInput$={(_, element) => props.onQueryChange$(element.value)}
           />
           {props.query && (
@@ -54,6 +76,7 @@ export const ConversationList = component$<ConversationListProps>((props) => {
               type="button"
               class="search-clear"
               aria-label="Limpiar búsqueda"
+              title="Limpiar búsqueda"
               onClick$={() => props.onQueryChange$("")}
             >
               <Icon name="x" size={15} />
@@ -61,12 +84,17 @@ export const ConversationList = component$<ConversationListProps>((props) => {
           )}
         </label>
 
-        <div class="filter-pills" aria-label="Filtrar conversaciones">
+        <div
+          class="filter-pills"
+          role="group"
+          aria-label="Filtrar conversaciones"
+        >
           {filters.map((item) => (
             <button
               key={item.key}
               type="button"
               class={{ "filter-pill": true, active: props.filter === item.key }}
+              aria-pressed={props.filter === item.key}
               onClick$={() => props.onFilterChange$(item.key)}
             >
               {item.label}
@@ -76,11 +104,16 @@ export const ConversationList = component$<ConversationListProps>((props) => {
       </div>
 
       <div class="conversation-list">
+        <span class="sr-only" aria-live="polite">
+          {props.conversations.length === 1
+            ? "1 conversación visible"
+            : `${props.conversations.length} conversaciones visibles`}
+        </span>
         {props.conversations.length === 0 ? (
           <div class="list-empty">
             <Icon name="search" size={22} />
-            <p>No encontramos conversaciones.</p>
-            <span>Probá con otro nombre o teléfono.</span>
+            <p>{emptyTitle}</p>
+            <span>{emptyDetail}</span>
           </div>
         ) : (
           props.conversations.map((conversation) => (
@@ -90,10 +123,17 @@ export const ConversationList = component$<ConversationListProps>((props) => {
               class={{
                 "conversation-item": true,
                 selected: conversation.id === props.selectedId,
+                "has-unread": conversation.unreadCount > 0,
               }}
+              aria-current={
+                conversation.id === props.selectedId ? "true" : undefined
+              }
               onClick$={() => props.onSelect$(conversation.id)}
             >
-              <span class={`contact-avatar avatar-${conversation.avatarTone}`}>
+              <span
+                class={`contact-avatar avatar-${conversation.avatarTone}`}
+                aria-hidden="true"
+              >
                 {conversation.initials}
                 {conversation.needsHuman && <i aria-hidden="true" />}
               </span>

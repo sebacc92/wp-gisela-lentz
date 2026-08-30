@@ -9,6 +9,7 @@ function source(path: string): string {
 
 test("la ruta Manual y sus enlaces conservan el control de acceso ADMIN", () => {
   const page = source("src/routes/app/manual/index.tsx");
+  const appLayout = source("src/routes/app/layout.tsx");
   const navigation = source("src/components/app/AppNavigation.tsx");
   const contextualHelp = source("src/components/app/ManualHelpLink.tsx");
 
@@ -17,9 +18,11 @@ test("la ruta Manual y sus enlaces conservan el control de acceso ADMIN", () => 
   assert.match(page, /!access\.allowed/);
   assert.match(navigation, /key: "manual"/);
   assert.match(navigation, /adminOnly: true/);
-  assert.match(navigation, /!item\.adminOnly \|\| isAdmin\.value/);
-  assert.match(navigation, /mobile-nav-has-manual/);
-  assert.match(contextualHelp, /isAdminProfile\(profile\)/);
+  assert.match(appLayout, /select\("full_name,role,active"\)/);
+  assert.match(appLayout, /appUser\.isAdmin = isAdminProfile\(profile\)/);
+  assert.match(navigation, /!item\.adminOnly \|\| appUser\.isAdmin/);
+  assert.match(navigation, /"odontogram", "settings", "manual"/);
+  assert.match(contextualHelp, /if \(!appUser\.isAdmin\) return null/);
 });
 
 test("el Manual integra estado simple, enlaces internos y diseño móvil", () => {

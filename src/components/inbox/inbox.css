@@ -1,0 +1,1013 @@
+/*
+ * Inbox-only interaction layer.
+ *
+ * These selectors are deliberately rooted in the three inbox surfaces so the
+ * improved controls do not alter shared buttons elsewhere in the application.
+ */
+
+/* Conversation list ------------------------------------------------------- */
+
+.inbox-conversation-panel .conversation-panel-header {
+  border-bottom: 1px solid rgb(220 228 227 / 72%);
+  background: linear-gradient(180deg, #fff 0%, #fcfdfd 100%);
+}
+
+.inbox-conversation-panel .conversation-tools {
+  padding-bottom: 14px;
+  background: #fff;
+}
+
+.inbox-conversation-panel .search-field {
+  border-color: #dce5e4;
+  border-radius: 12px;
+  background: #f7f9f9;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.inbox-conversation-panel .search-field:hover {
+  border-color: #c7d6d4;
+  background: #fff;
+}
+
+.inbox-conversation-panel .search-field:focus-within {
+  border-color: var(--brand-600);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgb(147 106 127 / 13%);
+}
+
+.inbox-conversation-panel .search-clear {
+  border: 1px solid transparent;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.inbox-conversation-panel .search-clear:hover {
+  border-color: #d6e1e0;
+  background: #fff;
+  color: var(--ink-900);
+}
+
+.inbox-conversation-panel .search-clear:focus-visible,
+.inbox-conversation-panel .filter-pill:focus-visible {
+  outline: 3px solid rgb(147 106 127 / 20%);
+  outline-offset: 2px;
+}
+
+.inbox-conversation-panel .filter-pills {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 3px;
+  border: 1px solid #e1e8e7;
+  border-radius: 12px;
+  background: #f5f8f7;
+}
+
+.inbox-conversation-panel .filter-pill {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 9px;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.inbox-conversation-panel .filter-pill:hover {
+  background: rgb(255 255 255 / 78%);
+  color: var(--ink-900);
+}
+
+.inbox-conversation-panel .filter-pill.active {
+  border-color: #d6e4e2;
+  background: #fff;
+  color: var(--brand-800);
+  box-shadow: 0 1px 4px rgb(75 52 66 / 10%);
+}
+
+.inbox-conversation-panel .conversation-list {
+  scrollbar-color: #c8d4d3 transparent;
+  scrollbar-width: thin;
+}
+
+.inbox-conversation-panel .conversation-item {
+  min-height: 86px;
+  border-bottom-color: #edf1f0;
+  transition: background-color 140ms ease;
+}
+
+.inbox-conversation-panel .conversation-item::before {
+  border: 1px solid transparent;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.inbox-conversation-panel .conversation-item:hover::before {
+  border-color: #e5eceb;
+  background: #f8faf9;
+}
+
+.inbox-conversation-panel .conversation-item.selected::before {
+  border-color: #cfe2df;
+  background: #eaf5f3;
+  box-shadow: 0 2px 8px rgb(75 52 66 / 7%);
+}
+
+.inbox-conversation-panel .conversation-item:active::before {
+  transform: scale(0.99);
+}
+
+.inbox-conversation-panel .conversation-item:focus-visible {
+  outline: none;
+}
+
+.inbox-conversation-panel .conversation-item:focus-visible::before {
+  border-color: var(--brand-600);
+  box-shadow: 0 0 0 3px rgb(147 106 127 / 18%);
+}
+
+.inbox-conversation-panel
+  .conversation-item.has-unread
+  .conversation-row
+  strong {
+  color: var(--ink-900);
+  font-weight: 760;
+}
+
+.inbox-conversation-panel .conversation-item.has-unread .conversation-preview {
+  color: var(--ink-700);
+  font-weight: 620;
+}
+
+.inbox-conversation-panel .unread-count {
+  min-width: 22px;
+  height: 22px;
+  padding-inline: 5px;
+  box-shadow: 0 2px 6px rgb(118 81 102 / 18%);
+}
+
+.inbox-conversation-panel .list-empty svg {
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  border-radius: 13px;
+  background: var(--brand-50);
+  color: var(--brand-600);
+}
+
+.inbox-conversation-panel .list-empty p {
+  max-width: 260px;
+  margin-top: 14px;
+}
+
+.inbox-conversation-panel .list-empty span:not(.sr-only) {
+  max-width: 260px;
+  line-height: 1.45;
+}
+
+/* Chat header and context actions ---------------------------------------- */
+
+.inbox-chat-panel .chat-header {
+  min-height: 76px;
+  box-shadow: 0 1px 0 rgb(75 52 66 / 3%);
+}
+
+.inbox-chat-panel .chat-contact {
+  min-height: 44px;
+  justify-content: center;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.inbox-chat-panel .chat-contact:hover {
+  border-color: #e0e8e7;
+  background: #f7faf9;
+}
+
+.inbox-chat-panel .chat-contact:focus-visible,
+.inbox-chat-panel .mobile-back:focus-visible,
+.inbox-chat-panel .icon-button:focus-visible,
+.inbox-chat-panel .composer-tool:focus-visible,
+.inbox-chat-panel .send-button:focus-visible,
+.inbox-chat-panel .messages-history-control button:focus-visible,
+.inbox-contact-drawer button:focus-visible {
+  outline: 3px solid rgb(147 106 127 / 21%);
+  outline-offset: 2px;
+}
+
+.inbox-chat-panel .automation-chip {
+  min-height: 30px;
+  border: 1px solid #d5eadf;
+  border-radius: 999px;
+  padding-inline: 11px;
+}
+
+.inbox-chat-panel .automation-chip.manual {
+  border-color: #f0ddbd;
+}
+
+.inbox-chat-panel .chat-context-actions {
+  min-height: 58px;
+  gap: 7px;
+  padding-block: 9px;
+  scroll-padding-inline: 16px;
+  scroll-snap-type: x proximity;
+  scrollbar-color: #c9d5d4 transparent;
+}
+
+.inbox-chat-panel .chat-context-actions button {
+  min-height: 40px;
+  scroll-snap-align: start;
+  border-color: #d9e2e1;
+  border-radius: 10px;
+  padding-inline: 12px;
+  box-shadow: 0 1px 2px rgb(75 52 66 / 4%);
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.inbox-chat-panel .chat-context-actions button svg {
+  flex: 0 0 auto;
+  color: var(--brand-700);
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.inbox-chat-panel .chat-context-actions button:hover:not(:disabled) {
+  border-color: #91b9b7;
+  background: #f3f9f8;
+  color: var(--brand-900);
+  box-shadow: 0 3px 9px rgb(75 52 66 / 9%);
+}
+
+.inbox-chat-panel .chat-context-actions button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.inbox-chat-panel .chat-context-actions button:focus-visible {
+  border-color: var(--brand-600);
+  outline: 3px solid rgb(147 106 127 / 20%);
+}
+
+.inbox-chat-panel .chat-context-actions .automation-action.active {
+  border-color: #bfdcd2;
+  background: #f1f9f5;
+  color: #286d55;
+}
+
+.inbox-chat-panel .chat-context-actions .bot-answer-action {
+  border-color: #bedbd8;
+  background: var(--brand-50);
+  color: var(--brand-800);
+}
+
+.inbox-chat-panel .chat-context-actions .confirm-deposit-action {
+  border-color: var(--brand-700);
+  background: var(--brand-700);
+  color: #fff;
+  box-shadow: 0 4px 10px rgb(118 81 102 / 18%);
+}
+
+.inbox-chat-panel .chat-context-actions .confirm-deposit-action svg {
+  color: #fff;
+}
+
+.inbox-chat-panel .chat-context-actions .confirm-deposit-action .small-spinner {
+  width: 14px;
+  height: 14px;
+  border-color: rgb(255 255 255 / 42%);
+  border-top-color: #fff;
+}
+
+.inbox-chat-panel
+  .chat-context-actions
+  .confirm-deposit-action:hover:not(:disabled) {
+  border-color: var(--brand-800);
+  background: var(--brand-800);
+  color: #fff;
+}
+
+.inbox-chat-panel .chat-context-actions button:disabled {
+  border-color: #e3e8e7;
+  background: #f5f7f6;
+  box-shadow: none;
+  color: var(--ink-400);
+  opacity: 0.72;
+}
+
+.inbox-chat-panel .human-notice {
+  min-height: 46px;
+  padding-block: 9px;
+}
+
+.inbox-chat-panel .human-notice p {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Messages and attachment controls -------------------------------------- */
+
+.inbox-chat-panel .messages-scroll {
+  scrollbar-color: #c3d1d0 transparent;
+  scrollbar-width: thin;
+}
+
+.inbox-chat-panel .messages-history-control button {
+  min-height: 40px;
+  gap: 7px;
+  border-color: #d6e1e0;
+  border-radius: 999px;
+  padding-inline: 14px;
+  background: rgb(255 255 255 / 88%);
+  color: var(--ink-700);
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgb(75 52 66 / 7%);
+}
+
+.inbox-chat-panel .messages-history-control button:hover:not(:disabled) {
+  border-color: #9dbfbd;
+  background: #fff;
+  color: var(--brand-800);
+}
+
+.inbox-chat-panel .messages-history-control button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.inbox-chat-panel .message-bubble {
+  box-shadow: 0 1px 3px rgb(75 52 66 / 5%);
+}
+
+.inbox-chat-panel .message-line.outbound .message-bubble {
+  box-shadow: 0 1px 3px rgb(118 81 102 / 7%);
+}
+
+.inbox-chat-panel .message-attachment-open {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 4px;
+  border-color: rgb(118 81 102 / 32%);
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 1px 3px rgb(75 52 66 / 7%);
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.inbox-chat-panel .message-attachment-open svg,
+.inbox-chat-panel .popover-close svg {
+  flex: 0 0 auto;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.inbox-chat-panel .message-attachment-open:hover:not(:disabled) {
+  box-shadow: 0 3px 8px rgb(75 52 66 / 12%);
+}
+
+.inbox-chat-panel .message-attachment-open:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.inbox-chat-panel .message-attachment-open .small-spinner,
+.inbox-chat-panel .messages-history-control .small-spinner {
+  width: 14px;
+  height: 14px;
+  border-top-color: var(--brand-700);
+}
+
+/* Composer and popovers -------------------------------------------------- */
+
+.inbox-chat-panel .composer-wrap {
+  box-shadow: 0 -4px 16px rgb(75 52 66 / 4%);
+}
+
+.inbox-chat-panel .composer-policy {
+  border-radius: 10px;
+}
+
+.inbox-chat-panel .composer-policy > svg {
+  margin-top: 2px;
+}
+
+.inbox-chat-panel .composer-actions {
+  gap: 6px;
+}
+
+.inbox-chat-panel .composer-tool {
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.inbox-chat-panel .composer-tool:hover:not(:disabled) {
+  border-color: #d8e5e3;
+  background: #f3f8f7;
+}
+
+.inbox-chat-panel .composer-tool.active {
+  border-color: #bddad7;
+  background: var(--brand-50);
+  color: var(--brand-800);
+}
+
+.inbox-chat-panel .composer-tool:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.inbox-chat-panel .composer {
+  min-height: 54px;
+  align-items: center;
+  border-color: #d3dfde;
+  border-radius: 14px;
+  padding: 4px 5px;
+  box-shadow: 0 2px 8px rgb(75 52 66 / 4%);
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.inbox-chat-panel .composer:focus-within {
+  border-color: var(--brand-600);
+  box-shadow:
+    0 0 0 3px rgb(147 106 127 / 12%),
+    0 3px 10px rgb(75 52 66 / 6%);
+}
+
+.inbox-chat-panel .composer.blocked:focus-within {
+  border-color: #dfc69f;
+  box-shadow: none;
+}
+
+.inbox-chat-panel .composer .icon-button {
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.inbox-chat-panel .composer .icon-button:hover:not(:disabled),
+.inbox-chat-panel .composer .icon-button.active {
+  border-color: #d9e5e4;
+  background: #eff6f5;
+  color: var(--brand-800);
+}
+
+.inbox-chat-panel .composer .icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.inbox-chat-panel .send-button {
+  min-width: 94px;
+  min-height: 44px;
+  justify-content: center;
+  border-radius: 10px;
+  box-shadow: 0 3px 8px rgb(118 81 102 / 18%);
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.inbox-chat-panel .send-button:hover:not(:disabled) {
+  box-shadow: 0 5px 12px rgb(118 81 102 / 24%);
+}
+
+.inbox-chat-panel .send-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.inbox-chat-panel .send-button:disabled {
+  cursor: not-allowed;
+  background: #d3dcdb;
+  color: #667476;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.inbox-chat-panel .quick-replies-popover,
+.inbox-chat-panel .emoji-picker-popover {
+  border-color: #ccd9d8;
+  box-shadow: 0 18px 42px rgb(75 52 66 / 18%);
+}
+
+.inbox-chat-panel .quick-replies-popover {
+  max-height: min(430px, 64vh);
+  overflow-y: auto;
+  scrollbar-color: #c7d3d2 transparent;
+  scrollbar-width: thin;
+}
+
+.inbox-chat-panel .popover-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  align-items: center;
+  padding: 11px 11px 10px 14px;
+  background: #fff;
+}
+
+.inbox-chat-panel .popover-title > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inbox-chat-panel .popover-title strong {
+  color: var(--ink-900);
+  font-size: 13px;
+}
+
+.inbox-chat-panel .popover-title span {
+  color: var(--ink-500);
+  font-size: 11px;
+}
+
+.inbox-chat-panel .popover-close {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-500);
+}
+
+.inbox-chat-panel .popover-close:hover {
+  border-color: #dce5e4;
+  background: #f4f7f7;
+  color: var(--ink-900);
+}
+
+.inbox-chat-panel .popover-close:focus-visible,
+.inbox-chat-panel .quick-reply-option:focus-visible,
+.inbox-chat-panel .emoji-picker-popover button:focus-visible {
+  position: relative;
+  z-index: 2;
+  outline: 3px solid rgb(147 106 127 / 20%);
+  outline-offset: -3px;
+}
+
+.inbox-chat-panel .quick-replies-popover > .quick-reply-option {
+  min-height: 62px;
+  grid-template-columns: 88px minmax(0, 1fr);
+  padding: 11px 14px;
+  transition: background-color 130ms ease;
+}
+
+.inbox-chat-panel .quick-replies-popover > .quick-reply-option:hover {
+  background: #f1f7f6;
+}
+
+.inbox-chat-panel .quick-reply-option span {
+  width: fit-content;
+  max-width: 84px;
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: var(--brand-50);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.inbox-chat-panel .quick-reply-option strong {
+  font-size: 12px;
+}
+
+.inbox-chat-panel .quick-reply-option small {
+  font-size: 11px;
+}
+
+.inbox-chat-panel .quick-replies-empty {
+  margin: 0;
+  padding: 22px 16px;
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.inbox-chat-panel .emoji-picker-popover {
+  position: absolute;
+  bottom: calc(100% - 2px);
+  left: 18px;
+  z-index: 20;
+  width: min(310px, calc(100% - 36px));
+  padding: 12px;
+  border: 1px solid #ccd9d8;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.inbox-chat-panel .emoji-picker-popover > span {
+  display: block;
+  margin: 0 0 9px 2px;
+  color: var(--ink-700);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.inbox-chat-panel .emoji-picker-popover > div {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.inbox-chat-panel .emoji-picker-popover button {
+  display: grid;
+  min-width: 40px;
+  min-height: 40px;
+  cursor: pointer;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #f7f9f9;
+  font-size: 20px;
+  transition:
+    border-color 130ms ease,
+    background-color 130ms ease,
+    transform 100ms ease;
+}
+
+.inbox-chat-panel .emoji-picker-popover button:hover {
+  border-color: #cde0de;
+  background: var(--brand-50);
+}
+
+.inbox-chat-panel .emoji-picker-popover button:active {
+  transform: scale(0.96);
+}
+
+/* Contact drawer --------------------------------------------------------- */
+
+.inbox-drawer-layer {
+  background: rgb(52 43 49 / 32%);
+  backdrop-filter: blur(2px);
+}
+
+.inbox-contact-drawer {
+  width: min(420px, 100%);
+  outline: none;
+  box-shadow: -18px 0 48px rgb(52 43 49 / 20%);
+}
+
+.inbox-contact-drawer .drawer-header {
+  background: linear-gradient(180deg, #fff 0%, #fbfdfc 100%);
+}
+
+.inbox-contact-drawer .drawer-header .icon-button {
+  border: 1px solid #e0e7e6;
+  background: #fff;
+}
+
+.inbox-contact-drawer .drawer-header .icon-button:hover {
+  border-color: #b9cecc;
+  background: #f3f8f7;
+}
+
+.inbox-contact-drawer .drawer-content {
+  scrollbar-color: #c4d1d0 transparent;
+  scrollbar-width: thin;
+}
+
+.inbox-contact-drawer .contact-overview {
+  background: #fbfdfc;
+}
+
+.inbox-contact-drawer .contact-overview h3 {
+  font-size: 17px;
+}
+
+.inbox-contact-drawer .contact-overview p,
+.inbox-contact-drawer .contact-overview small {
+  font-size: 13px;
+}
+
+.inbox-contact-drawer .consent-card {
+  padding: 13px 14px;
+  border-radius: 10px;
+}
+
+.inbox-contact-drawer .consent-card strong {
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.inbox-contact-drawer .consent-card p,
+.inbox-contact-drawer .consent-readonly-note {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.inbox-contact-drawer .consent-details > div {
+  padding-block: 9px;
+  font-size: 11px;
+}
+
+.inbox-contact-drawer .section-heading h3 {
+  font-size: 14px;
+}
+
+.inbox-contact-drawer .text-button {
+  min-height: 40px;
+  padding-inline: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.inbox-contact-drawer .text-button:hover {
+  border-color: #d7e3e2;
+  background: #f3f8f7;
+}
+
+.inbox-contact-drawer .appointment-card-footer button {
+  min-height: 40px;
+  padding-inline: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.inbox-contact-drawer .appointment-card-footer button:hover {
+  border-color: #d1dfdd;
+  background: #fff;
+}
+
+.inbox-contact-drawer .appointment-date-block strong {
+  font-size: 13px;
+}
+
+.inbox-contact-drawer .appointment-date-block span,
+.inbox-contact-drawer .appointment-doctor {
+  font-size: 12px;
+}
+
+.inbox-contact-drawer .empty-appointment .secondary-button {
+  min-height: 40px;
+  font-size: 12px;
+}
+
+.inbox-contact-drawer .empty-appointment p,
+.inbox-contact-drawer .muted-copy {
+  font-size: 12px;
+}
+
+.inbox-contact-drawer .previous-item strong {
+  font-size: 13px;
+}
+
+.inbox-contact-drawer .previous-item span {
+  font-size: 12px;
+}
+
+.inbox-contact-drawer .contact-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.inbox-contact-drawer .contact-actions > .section-heading {
+  margin-bottom: 5px;
+}
+
+.inbox-contact-drawer .contact-actions > button {
+  min-height: 62px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #e0e7e6;
+  border-radius: 10px;
+  background: #fff;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 100ms ease;
+}
+
+.inbox-contact-drawer .contact-actions > button:last-child {
+  border-bottom: 1px solid #e0e7e6;
+}
+
+.inbox-contact-drawer .contact-actions > button:hover:not(:disabled) {
+  border-color: #b9cecc;
+  background: #f7faf9;
+  box-shadow: 0 3px 9px rgb(75 52 66 / 7%);
+}
+
+.inbox-contact-drawer .contact-actions > button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.inbox-contact-drawer .contact-actions > button:disabled {
+  border-color: #e5e9e8;
+  background: #f5f7f6;
+  opacity: 0.72;
+}
+
+.inbox-contact-drawer .contact-actions strong {
+  font-size: 13px;
+}
+
+.inbox-contact-drawer .contact-actions small {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.inbox-contact-drawer .action-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 0;
+  box-shadow: 0 0 0 4px rgb(132 148 150 / 10%);
+}
+
+.inbox-contact-drawer .action-dot.warning {
+  box-shadow: 0 0 0 4px rgb(216 139 41 / 12%);
+}
+
+.inbox-contact-drawer .action-dot.active {
+  box-shadow: 0 0 0 4px rgb(72 151 115 / 12%);
+}
+
+/* Responsive and input-specific refinements ------------------------------ */
+
+@media (pointer: coarse) {
+  .inbox-chat-panel .chat-context-actions button,
+  .inbox-chat-panel .message-attachment-open,
+  .inbox-chat-panel .messages-history-control button,
+  .inbox-chat-panel .popover-close,
+  .inbox-chat-panel .emoji-picker-popover button,
+  .inbox-contact-drawer .text-button,
+  .inbox-contact-drawer .appointment-card-footer button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 680px) {
+  .inbox-conversation-panel .conversation-panel-header {
+    min-height: 72px;
+  }
+
+  .inbox-conversation-panel .filter-pill {
+    min-height: 40px;
+  }
+
+  .inbox-conversation-panel .conversation-item {
+    min-height: 88px;
+  }
+
+  .inbox-chat-panel .chat-header {
+    min-height: 64px;
+  }
+
+  .inbox-chat-panel .mobile-back {
+    width: 44px;
+    height: 44px;
+  }
+
+  .inbox-chat-panel .chat-contact {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .inbox-chat-panel .chat-context-actions {
+    min-height: 62px;
+    scroll-padding-inline: 11px;
+  }
+
+  .inbox-chat-panel .chat-context-actions button {
+    min-height: 44px;
+    padding-inline: 13px;
+  }
+
+  .inbox-chat-panel .messages-inner {
+    padding-top: 17px;
+  }
+
+  .inbox-chat-panel .message-bubble {
+    max-width: 91%;
+  }
+
+  .inbox-chat-panel .composer-policy {
+    margin-bottom: 4px;
+  }
+
+  .inbox-chat-panel .composer-policy small {
+    line-height: 1.3;
+  }
+
+  .inbox-chat-panel .composer-actions {
+    overflow-x: auto;
+    padding: 1px;
+    scrollbar-width: none;
+  }
+
+  .inbox-chat-panel .composer-tool {
+    min-height: 40px;
+    flex: 0 0 auto;
+    padding-inline: 9px;
+  }
+
+  .inbox-chat-panel .composer {
+    min-height: 54px;
+    gap: 2px;
+  }
+
+  .inbox-chat-panel .composer-emoji {
+    display: grid;
+  }
+
+  .inbox-chat-panel .send-button {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .inbox-chat-panel .send-button .small-spinner {
+    display: block;
+  }
+
+  .inbox-chat-panel .quick-replies-popover {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: min(390px, 58vh);
+  }
+
+  .inbox-chat-panel .quick-replies-popover > .quick-reply-option {
+    grid-template-columns: 80px minmax(0, 1fr);
+    min-height: 68px;
+  }
+
+  .inbox-chat-panel .emoji-picker-popover {
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+
+  .inbox-chat-panel .emoji-picker-popover button {
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .inbox-contact-drawer {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .inbox-contact-drawer .drawer-header {
+    min-height: 74px;
+  }
+
+  .inbox-contact-drawer .contact-actions > button {
+    min-height: 68px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inbox-conversation-panel *,
+  .inbox-chat-panel *,
+  .inbox-contact-drawer * {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .inbox-conversation-panel .conversation-item.selected::before,
+  .inbox-conversation-panel .filter-pill.active,
+  .inbox-chat-panel .composer-tool.active,
+  .inbox-chat-panel .composer .icon-button.active {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}

@@ -7,11 +7,27 @@ export type MainMenuIntent =
   | "human";
 
 export type PatientCoverage = "ioma" | "particular";
-export type PatientProfileField = "name" | "is_existing_patient" | "coverage";
+export type PatientProfileField =
+  | "name"
+  | "is_existing_patient"
+  | "contact_phone"
+  | "coverage";
+
+export const APPOINTMENT_WELCOME_MESSAGE =
+  "Hola!!!☺️ Gracias por comunicarte con el Consultorio Odontológico Lentz Gisela. Para agendar tu turno envíanos:";
+
+export const PATIENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
+  name: "¿Cuál es tu nombre y apellido?",
+  is_existing_patient: "¿Ya te atendiste conmigo antes?",
+  contact_phone:
+    "¿Cuál es tu teléfono de contacto? Podés escribir otro número o elegir este WhatsApp.",
+  coverage: "¿Tu cobertura es IOMA o Particular?",
+};
 
 export interface PatientProfileDraft {
   name?: string;
   isExistingPatient?: boolean;
+  contactPhoneConfirmed?: boolean;
   coverage?: PatientCoverage;
   alternatePhoneE164?: string;
 }
@@ -140,6 +156,66 @@ export function parseAlternatePhoneE164(
   return uniqueValue(normalized);
 }
 
+/**
+ * Normaliza el teléfono que el paciente elige para el contacto del turno.
+ * Acepta el E.164 que llega desde WhatsApp y los formatos argentinos usuales.
+ */
+export function normalizeContactPhoneE164(value: string): string | null {
+  const trimmed = value.trim();
+  const explicitInternational =
+    trimmed.startsWith("+") || trimmed.startsWith("00");
+  let digits = trimmed.replace(/\D/g, "");
+  if (!digits) return null;
+
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (explicitInternational && !digits.startsWith("54")) {
+    return /^[1-9][0-9]{7,14}$/.test(digits) ? `+${digits}` : null;
+  }
+
+  let national = digits.startsWith("54") ? digits.slice(2) : digits;
+  national = national.replace(/^0+/, "");
+  if (national.length === 12) {
+    for (let areaLength = 2; areaLength <= 4; areaLength += 1) {
+      if (national.slice(areaLength, areaLength + 2) === "15") {
+        national =
+          national.slice(0, areaLength) + national.slice(areaLength + 2);
+        break;
+      }
+    }
+  }
+  if (national.length === 10) national = `9${national}`;
+  digits = `54${national}`;
+
+  return /^[1-9][0-9]{7,14}$/.test(digits) ? `+${digits}` : null;
+}
+
+export function parseContactPhoneReply(
+  value: string,
+  primaryPhoneE164?: string | null,
+): string | null {
+  const normalizedPrimary = primaryPhoneE164
+    ? normalizeContactPhoneE164(primaryPhoneE164)
+    : null;
+  if (value === "profile:phone:whatsapp") return normalizedPrimary;
+
+  const input = normalizeUserInput(value);
+  if (
+    /^(?:si(?: este)?|este(?: mismo)?(?: numero| whatsapp)?|el mismo(?: numero)?|este whatsapp|por aca)$/.test(
+      input,
+    )
+  ) {
+    return normalizedPrimary;
+  }
+
+  const candidate = value
+    .replace(
+      /^\s*(?:3[.)-]?\s*)?(?:(?:tel[eé]fono|celular)(?:\s+de\s+contacto)?\s*[:=-]\s*)?/i,
+      "",
+    )
+    .trim();
+  return normalizeContactPhoneE164(candidate);
+}
+
 function numberedResponseParts(value: string): Map<number, string> {
   const parts = new Map<number, string>();
   for (const line of value.split(/[\n;|]+/)) {
@@ -172,6 +248,13 @@ function labelledExistingPatient(value: string): boolean | null {
     /(?:^|[\n;|])\s*(?:2[.)-]?\s*)?(?:sos|soy|era|ya sos|ya soy)?\s*paciente(?: de (?:la )?odont[oó]loga| de gisela)?\s*[:=-]?\s*(s[ií]|no)\b/i,
   );
   return match ? normalizeUserInput(match[1]) === "si" : null;
+}
+
+function labelledContactPhone(value: string): string | null {
+  const match = value.match(
+    /(?:^|[\n;|])\s*(?:3[.)-]?\s*)?(?:(?:tel[eé]fono|celular)(?:\s+de\s+contacto)?)\s*[:=-]\s*([^\n;|]+)/i,
+  );
+  return match ? match[1].trim() : null;
 }
 
 /**
@@ -221,6 +304,27 @@ export function parsePatientProfileReply(
   if (existing !== null) values.isExistingPatient = existing;
   else if (existingCandidates.length > 1) ambiguous.add("is_existing_patient");
 
+  const phoneCandidates = [
+    labelledContactPhone(value),
+    numbered.has(3) ? (numbered.get(3) ?? null) : null,
+    positional.length === 4 ? positional[2] : null,
+    expected === "contact_phone" ? value : null,
+  ]
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .map((candidate) =>
+      parseContactPhoneReply(candidate, options.primaryPhoneE164),
+    )
+    .filter((candidate): candidate is string => Boolean(candidate));
+  const contactPhone = uniqueValue(phoneCandidates);
+  if (contactPhone) {
+    values.contactPhoneConfirmed = true;
+    if (contactPhone !== options.primaryPhoneE164) {
+      values.alternatePhoneE164 = contactPhone;
+    }
+  } else if (phoneCandidates.length > 1) {
+    ambiguous.add("contact_phone");
+  }
+
   const coverageCandidates: PatientCoverage[] = [];
   const coverage = parseCoverageReply(value);
   if (coverage) coverageCandidates.push(coverage);
@@ -241,18 +345,13 @@ export function parsePatientProfileReply(
     ambiguous.add("coverage");
   }
 
-  const alternatePhone = parseAlternatePhoneE164(
-    numbered.get(3) ?? (positional.length === 4 ? positional[2] : value),
-    options.primaryPhoneE164,
-  );
-  if (alternatePhone) values.alternatePhoneE164 = alternatePhone;
-
   return { values, ambiguous: [...ambiguous] };
 }
 
 export function missingPatientProfileFields(profile: {
   name?: string | null;
   isExistingPatient?: boolean | null;
+  contactPhoneConfirmed?: boolean | null;
   coverage?: PatientCoverage | null;
 }): PatientProfileField[] {
   const missing: PatientProfileField[] = [];
@@ -262,6 +361,9 @@ export function missingPatientProfileFields(profile: {
     profile.isExistingPatient === undefined
   ) {
     missing.push("is_existing_patient");
+  }
+  if (profile.contactPhoneConfirmed !== true) {
+    missing.push("contact_phone");
   }
   if (profile.coverage !== "ioma" && profile.coverage !== "particular") {
     missing.push("coverage");

@@ -24,7 +24,11 @@ export const MessageBubble = component$<MessageBubbleProps>(
     const isAudio = message.type === "audio";
 
     if (message.direction === "system") {
-      return <div class="system-message">{message.body}</div>;
+      return (
+        <div class="system-message" role="note">
+          {message.body}
+        </div>
+      );
     }
 
     return (
@@ -35,7 +39,14 @@ export const MessageBubble = component$<MessageBubbleProps>(
           outbound: message.direction === "outbound",
           "proof-highlight": highlighted,
         }}
+        role="article"
       >
+        <span class="sr-only">
+          {message.direction === "outbound"
+            ? "Mensaje enviado"
+            : "Mensaje recibido"}{" "}
+          a las {message.time}:
+        </span>
         <div class="message-bubble">
           {message.type === "image" ||
           message.type === "document" ||
@@ -65,6 +76,7 @@ export const MessageBubble = component$<MessageBubbleProps>(
                       class="message-attachment-open"
                       type="button"
                       disabled={openingMedia.value}
+                      aria-busy={openingMedia.value}
                       onClick$={async () => {
                         if (openingMedia.value) return;
                         openingMedia.value = true;
@@ -115,13 +127,23 @@ export const MessageBubble = component$<MessageBubbleProps>(
                         }
                       }}
                     >
-                      {openingMedia.value
-                        ? "Abriendo…"
-                        : message.type === "image"
-                          ? "Ver imagen"
-                          : isAudio
-                            ? "Escuchar audio"
-                            : "Abrir comprobante"}
+                      {openingMedia.value ? (
+                        <>
+                          <span class="small-spinner" aria-hidden="true" />
+                          <span>Abriendo…</span>
+                        </>
+                      ) : (
+                        <>
+                          <Icon name={isAudio ? "message" : "file"} size={15} />
+                          <span>
+                            {message.type === "image"
+                              ? "Ver imagen"
+                              : isAudio
+                                ? "Escuchar audio"
+                                : "Abrir comprobante"}
+                          </span>
+                        </>
+                      )}
                     </button>
                   )}
                 {audioUrl.value && (
@@ -130,6 +152,7 @@ export const MessageBubble = component$<MessageBubbleProps>(
                     controls
                     preload="metadata"
                     src={audioUrl.value}
+                    aria-label={message.filename || "Nota de voz recibida"}
                   />
                 )}
                 {mediaError.value && (
@@ -152,6 +175,8 @@ export const MessageBubble = component$<MessageBubbleProps>(
                   failed: message.status === "failed",
                 }}
                 title={statusLabel[message.status]}
+                role="status"
+                aria-live="polite"
               >
                 {message.status === "pending" ? (
                   <Icon name="clock" size={13} />

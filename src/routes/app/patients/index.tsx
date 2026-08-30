@@ -206,11 +206,20 @@ export default component$(() => {
   const selected = state.patients.find(
     (patient) => patient.id === selectedId.value,
   );
+  const editorOriginalPatient = state.patients.find(
+    (patient) => patient.id === editor.id,
+  );
+  const editorPhoneIsRequired =
+    !editor.id || Boolean(editorOriginalPatient?.phone_e164);
 
   return (
     <main class="section-shell">
       <AppNavigation active="patients" />
-      <section class="section-page patients-page">
+      <section
+        id="app-content"
+        class="section-page patients-page"
+        tabIndex={-1}
+      >
         <header class="section-page-header">
           <div>
             <span class="eyebrow">Agenda administrativa</span>
@@ -239,9 +248,30 @@ export default component$(() => {
             type="search"
             value={query.value}
             placeholder="Buscar por nombre, teléfono o email"
+            autoComplete="off"
+            enterKeyHint="search"
             onInput$={(_, element) => (query.value = element.value)}
           />
+          {query.value && (
+            <button
+              class="search-clear"
+              type="button"
+              aria-label="Limpiar búsqueda"
+              title="Limpiar búsqueda"
+              onClick$={() => (query.value = "")}
+            >
+              <Icon name="x" size={16} />
+            </button>
+          )}
         </label>
+
+        {query.value && !state.loading && !state.error && (
+          <p class="search-result-summary" aria-live="polite">
+            {patients.length === 1
+              ? "1 paciente encontrado"
+              : `${patients.length} pacientes encontrados`}
+          </p>
+        )}
 
         {state.loading ? (
           <div class="section-empty">
@@ -489,19 +519,15 @@ export default component$(() => {
               onSubmit$={async () => {
                 const name = editor.name.trim();
                 const phone = normalizePhoneE164(editor.phone);
-                const originalPatient = state.patients.find(
-                  (patient) => patient.id === editor.id,
-                );
-                const phoneIsRequired =
-                  !editor.id || Boolean(originalPatient?.phone_e164);
                 if (
                   !name ||
-                  (phoneIsRequired && !phone) ||
+                  (editorPhoneIsRequired && !phone) ||
                   !editor.coverage ||
                   editor.isExistingPatient === null
                 ) {
-                  editor.error =
-                    "Completá nombre, WhatsApp, cobertura y si ya era paciente.";
+                  editor.error = editorPhoneIsRequired
+                    ? "Completá nombre, WhatsApp, cobertura y si ya era paciente."
+                    : "Completá nombre, cobertura y si ya era paciente.";
                   return;
                 }
                 editor.saving = true;
@@ -564,12 +590,17 @@ export default component$(() => {
               </label>
               <fieldset class="coverage-picker">
                 <legend>Cobertura</legend>
-                <div class="coverage-options">
+                <div
+                  class="coverage-options"
+                  role="group"
+                  aria-label="Cobertura"
+                >
                   {(["ioma", "particular"] as const).map((coverage) => (
                     <button
                       key={coverage}
                       class={{ selected: editor.coverage === coverage }}
                       type="button"
+                      aria-pressed={editor.coverage === coverage}
                       onClick$={() => (editor.coverage = coverage)}
                     >
                       {coverage === "ioma" ? "IOMA" : "Particular"}
@@ -579,10 +610,15 @@ export default component$(() => {
               </fieldset>
               <fieldset class="coverage-picker">
                 <legend>¿Ya era paciente de Gisela?</legend>
-                <div class="coverage-options">
+                <div
+                  class="coverage-options"
+                  role="group"
+                  aria-label="Paciente previo"
+                >
                   <button
                     class={{ selected: editor.isExistingPatient === true }}
                     type="button"
+                    aria-pressed={editor.isExistingPatient === true}
                     onClick$={() => (editor.isExistingPatient = true)}
                   >
                     Sí
@@ -590,6 +626,7 @@ export default component$(() => {
                   <button
                     class={{ selected: editor.isExistingPatient === false }}
                     type="button"
+                    aria-pressed={editor.isExistingPatient === false}
                     onClick$={() => (editor.isExistingPatient = false)}
                   >
                     No
@@ -610,14 +647,25 @@ export default component$(() => {
                 />
               </label>
               <label class="form-field">
-                <span>Teléfono WhatsApp</span>
+                <span>
+                  Teléfono WhatsApp
+                  {!editorPhoneIsRequired && <em>Opcional en esta ficha</em>}
+                </span>
                 <input
-                  required
+                  required={editorPhoneIsRequired}
                   inputMode="tel"
                   placeholder="+54 9…"
                   value={editor.phone}
+                  aria-describedby={
+                    editorPhoneIsRequired ? undefined : "legacy-phone-help"
+                  }
                   onInput$={(_, element) => (editor.phone = element.value)}
                 />
+                {!editorPhoneIsRequired && (
+                  <small id="legacy-phone-help" class="form-field-help">
+                    Podés agregarlo más adelante si la persona usa WhatsApp.
+                  </small>
+                )}
               </label>
               <label class="form-field">
                 <span>
