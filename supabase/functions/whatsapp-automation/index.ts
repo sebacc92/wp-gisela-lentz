@@ -36,6 +36,12 @@ import {
   requestAdministrativeOpenAIAnswer,
   resolveDurableAdministrativeAnswer,
 } from "../_shared/openai-administrative.ts";
+import { downloadInboundWhatsAppMedia } from "../_shared/whatsapp-media-download.ts";
+import { whatsappMediaMaxBytes } from "../_shared/whatsapp-media.ts";
+import {
+  mediaOpenAIEnabled,
+  requestAudioTranscription,
+} from "../_shared/openai-media.ts";
 import {
   OWNER_HELP_MESSAGE,
   detectOwnerRequest,
@@ -500,7 +506,60 @@ Deno.serve(async (request) => {
       typeof metadata.interactive_reply_id === "string"
         ? metadata.interactive_reply_id
         : "";
-    const inboundBody = typeof inbound.body === "string" ? inbound.body : "";
+    let inboundBody = typeof inbound.body === "string" ? inbound.body : "";
+
+    // Una nota de voz llega con el cuerpo "Nota de voz": para el bot es opaca.
+    // Si la transcripción está habilitada, el texto dicho reemplaza ese cuerpo
+    // y el resto del flujo lo trata como si el paciente lo hubiera escrito.
+    if (
+      inbound.type === "audio" &&
+      mediaOpenAIEnabled({
+        globalAutomationsEnabled: whatsappAutomationsEnabled(),
+        serverEnabled:
+          Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED")?.trim() === "true",
+        aiEnabled: appSettings?.ai_enabled,
+        aiMediaEnabled: appSettings?.ai_media_enabled,
+        model: appSettings?.ai_model,
+      })
+    ) {
+      try {
+        const media = await downloadInboundWhatsAppMedia({
+          client,
+          message: inbound as Record<string, unknown>,
+          fetchImpl: fetch,
+          maxBytes: whatsappMediaMaxBytes(
+            Deno.env.get("WHATSAPP_MEDIA_MAX_BYTES"),
+          ),
+        });
+        const transcription = await requestAudioTranscription({
+          apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
+          bytes: media.bytes,
+          mimeType: media.descriptor.mimeType,
+          safetyIdentifier: await administrativeSafetyIdentifier(
+            contact.id as string,
+          ),
+        });
+        if (transcription.audible) {
+          inboundBody = transcription.transcript;
+          await client
+            .from("messages")
+            .update({
+              metadata: {
+                ...((inbound.metadata ?? {}) as Record<string, unknown>),
+                transcript: transcription.transcript,
+              },
+            })
+            .eq("id", inbound.id);
+        }
+      } catch (error) {
+        // Una transcripción fallida no interrumpe la conversación: el audio
+        // sigue su camino como adjunto que una persona tiene que escuchar.
+        console.warn("whatsapp-automation", "AUDIO_TRANSCRIPTION_FAILED", {
+          code: error instanceof Error ? error.message : "UNKNOWN",
+        });
+      }
+    }
+
     const normalizedInboundBody = normalizeUserInput(inboundBody);
     const inputValue = replyId || inboundBody;
     const configuredWelcomeMessage =
@@ -656,7 +715,7 @@ Deno.serve(async (request) => {
         const message = "Para agendar, ¿cuál es tu nombre y apellido?";
         await send(textPayload(message), message);
       } else if (field === "is_existing_patient") {
-        const message = "¿Ya sos paciente de Gisela?";
+        const message = "¿Ya te atendiste conmigo antes?";
         await send(
           buttonsPayload(message, [
             { id: "profile:existing:yes", title: "Sí" },
@@ -931,7 +990,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    const showMainMenu = async (message = "¿En qué más podemos ayudarte?") => {
+    const showMainMenu = async (message = "¿En qué más te puedo ayudar?") => {
       await send(
         listPayload(message, "Ver opciones", MAIN_MENU_OPTIONS),
         message,
@@ -1412,7 +1471,7 @@ Deno.serve(async (request) => {
       const intent = administrativeInfoIntent(inputValue);
       if (!intent || !isAllowedAdministrativeQuestion(inputValue)) {
         await handoff(
-          "Para cuidar tu privacidad, esa consulta necesita que la revise Gisela.",
+          "Para cuidar tu privacidad, esa consulta la reviso yo personalmente.",
         );
         return;
       }
@@ -1729,7 +1788,7 @@ Deno.serve(async (request) => {
         if (appointment.status !== "confirmed") {
           await send(
             textPayload(
-              "Ese turno todavía no está confirmado. Gisela revisará la seña antes de confirmarlo.",
+              "Ese turno todavía no está confirmado. Reviso la seña antes de confirmarlo.",
             ),
             "Ese turno todavía no está confirmado.",
           );
@@ -2369,12 +2428,12 @@ Deno.serve(async (request) => {
         : null;
       if (!appointment || appointment.status !== "scheduled") {
         await showMainMenu(
-          "Esa pre-reserva ya no está activa. Podemos buscarte otro horario.",
+          "Esa pre-reserva ya no está activa. Si querés, te busco otro horario.",
         );
       } else {
         const message =
           appointment.depositStatus === "proof_received"
-            ? "Ya recibimos tu comprobante. Gisela lo va a revisar personalmente y te confirmaremos el turno."
+            ? "Ya recibí tu comprobante. Lo reviso y te confirmo el turno."
             : "Tu horario sigue pre-reservado. Mandame el comprobante como imagen o PDF y lo reviso.";
         await send(textPayload(message), message, {
           appointment_id: appointment.id,

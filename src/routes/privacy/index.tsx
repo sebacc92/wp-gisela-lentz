@@ -151,6 +151,19 @@ export default component$(() => {
           a una persona.
         </p>
         <p>
+          Si además se habilita la lectura de adjuntos —un interruptor
+          independiente—, el contenido de una nota de voz, una imagen o un PDF
+          enviados por el paciente puede transmitirse a OpenAI para
+          transcribirlo o para copiar los datos visibles de un comprobante. Ese
+          envío también se hace con almacenamiento desactivado y con un
+          identificador seudónimo, nunca con el nombre ni el teléfono del
+          paciente. La lectura de un comprobante es un dato auxiliar para
+          revisarlo más rápido: no acredita un pago ni confirma un turno, que
+          siguen dependiendo de una persona. La información clínica del
+          odontograma nunca se envía a ningún proveedor de inteligencia
+          artificial.
+        </p>
+        <p>
           Si el consultorio habilita Google Calendar, Google procesa la copia
           administrativa de nombre, fecha y horario necesaria para mostrar los
           turnos en un calendario privado. La conexión puede revocarse desde la
