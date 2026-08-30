@@ -1,4 +1,10 @@
-import { $, component$, useContext, useSignal } from "@qwik.dev/core";
+import {
+  $,
+  component$,
+  useContext,
+  useSignal,
+  useVisibleTask$,
+} from "@qwik.dev/core";
 import { Link, useNavigate } from "@qwik.dev/router";
 import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
@@ -91,6 +97,21 @@ const navItems: Array<{
 export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
   const navigate = useNavigate();
   const appUser = useContext(APP_USER_CONTEXT);
+  // null mientras no se sabe: el switch no debe mostrar "apagado" antes de
+  // leer el estado real.
+  const botEnabled = useSignal<boolean | null>(null);
+  const botSaving = useSignal(false);
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async () => {
+    if (!appUser.isAdmin) return;
+    const { data } = await getSupabaseClient()
+      .from("app_settings")
+      .select("automations_enabled")
+      .eq("id", true)
+      .single();
+    if (data) botEnabled.value = data.automations_enabled === true;
+  });
   const mobileMoreOpen = useSignal(false);
   const profileInitials = appUser.fullName
     .trim()
@@ -127,6 +148,42 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
         >
           <BusinessLogo inverse />
         </Link>
+
+        {appUser.isAdmin && (
+          <label
+            class={{ "nav-bot-switch": true, on: botEnabled.value === true }}
+            title="Encender o apagar las respuestas automáticas"
+          >
+            <input
+              type="checkbox"
+              checked={botEnabled.value === true}
+              disabled={botEnabled.value === null || botSaving.value}
+              onChange$={async (_, element) => {
+                const next = element.checked;
+                botSaving.value = true;
+                const { error } = await getSupabaseClient()
+                  .from("app_settings")
+                  .update({ automations_enabled: next })
+                  .eq("id", true);
+                botSaving.value = false;
+                if (error) {
+                  element.checked = !next;
+                  return;
+                }
+                botEnabled.value = next;
+              }}
+            />
+            <span class="nav-bot-switch-track" aria-hidden="true" />
+            <span class="nav-bot-switch-label">
+              <Icon name="bot" size={16} />
+              {botEnabled.value === null
+                ? "Bot…"
+                : botEnabled.value
+                  ? "Bot encendido"
+                  : "Bot apagado"}
+            </span>
+          </label>
+        )}
 
         <nav class="nav-items">
           {navItems

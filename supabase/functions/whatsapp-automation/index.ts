@@ -1,6 +1,8 @@
 import {
   PATIENT_PROFILE_PROMPTS,
   MAIN_MENU_OPTIONS,
+  MAX_SLOTS_OFFERED_PER_DAY,
+  depositProofReviewMessage,
   formatDepositAmountArs,
   isMainMenuRequest,
   missingPatientProfileFields,
@@ -11,6 +13,7 @@ import {
   parseServiceReply,
   parseSlotIndex,
   renderConfiguredMessage,
+  selectSlotsForOffer,
   resolveAppointmentConfirmation,
   resolveCancellationConfirmation,
   resolveMainMenuIntent,
@@ -20,11 +23,18 @@ import {
   type PatientCoverage,
   type PatientProfileField,
 } from "../_shared/automation-flow.ts";
+import { validateDepositProofForAutoConfirmation } from "../_shared/deposit-proof.ts";
 import {
   jsonResponse,
   optionsResponse,
   safeErrorMessage,
 } from "../_shared/http.ts";
+import {
+  requiresHumanReview,
+  requiresPriority,
+  whatsappConsentDecisionFromText,
+  type NormalizedIncomingMessage,
+} from "../_shared/incoming-message.ts";
 import {
   administrativeInfoIntent,
   administrativeInfoRoute,
@@ -41,7 +51,11 @@ import { downloadInboundWhatsAppMedia } from "../_shared/whatsapp-media-download
 import { whatsappMediaMaxBytes } from "../_shared/whatsapp-media.ts";
 import {
   mediaOpenAIEnabled,
+  mediaSha256Hex,
   requestAudioTranscription,
+  requestDepositProofReading,
+  type AudioTranscription,
+  type DepositProofReading,
 } from "../_shared/openai-media.ts";
 import {
   OWNER_HELP_MESSAGE,
@@ -83,6 +97,7 @@ interface InboundSnapshot {
   contact_id: string;
   coexistence_account_id: string | null;
   body: string | null;
+  type: "text" | "interactive" | "image" | "document" | "audio";
   direction: "inbound";
   metadata: Record<string, unknown> | null;
 }
@@ -109,10 +124,12 @@ interface ContactSnapshot {
 }
 
 interface AppSettingsSnapshot {
+  automations_enabled?: boolean;
   automation_welcome_message?: string | null;
   urgent_message?: string | null;
   general_info_message?: string | null;
   ai_enabled?: boolean;
+  ai_media_enabled?: boolean;
   ai_model?: string | null;
   out_of_hours_enabled?: boolean;
   out_of_hours_message?: string | null;
@@ -123,6 +140,171 @@ interface AppSettingsSnapshot {
   deposit_holder?: string | null;
   booking_hold_minutes?: number;
   deposit_request_message_template?: string | null;
+  deposit_proof_received_message_template?: string | null;
+  deposit_confirmed_message_template?: string | null;
+}
+
+type DurableMediaUnderstanding =
+  | { kind: "audio"; transcription: AudioTranscription }
+  | {
+      kind: "deposit_proof";
+      reading: DepositProofReading;
+      mediaSha256: string;
+    };
+
+type DepositProofMediaFailureReason =
+  | "MEDIA_DISABLED"
+  | "DOWNLOAD_FAILED"
+  | "READING_FAILED"
+  | "UNREADABLE";
+
+interface AutomatedDepositProofResult {
+  status: "confirmed" | "already_confirmed" | "review" | "late" | "superseded";
+  appointmentId: string;
+  startsAt: string;
+  originalStatus: "confirmed" | "review" | "late" | null;
+  confirmationActor: "automatic_system" | "human_operator" | null;
+  reviewReasons: string[];
+}
+
+function normalizeAutomatedDepositProofResult(
+  value: unknown,
+): AutomatedDepositProofResult | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (!candidate || typeof candidate !== "object") return null;
+  const row = candidate as Record<string, unknown>;
+  if (
+    ![
+      "confirmed",
+      "already_confirmed",
+      "review",
+      "late",
+      "superseded",
+    ].includes(String(row.status)) ||
+    typeof row.appointment_id !== "string" ||
+    !UUID_PATTERN.test(row.appointment_id) ||
+    typeof row.starts_at !== "string" ||
+    !Number.isFinite(new Date(row.starts_at).getTime())
+  ) {
+    return null;
+  }
+  return {
+    status: row.status as AutomatedDepositProofResult["status"],
+    appointmentId: row.appointment_id,
+    startsAt: row.starts_at,
+    originalStatus: ["confirmed", "review", "late"].includes(
+      String(row.original_status),
+    )
+      ? (row.original_status as "confirmed" | "review" | "late")
+      : null,
+    confirmationActor:
+      row.confirmation_actor === "automatic_system" ||
+      row.confirmation_actor === "human_operator"
+        ? row.confirmation_actor
+        : null,
+    reviewReasons: Array.isArray(row.review_reasons)
+      ? row.review_reasons
+          .filter(
+            (reason): reason is string =>
+              typeof reason === "string" && reason.trim().length > 0,
+          )
+          .map((reason) => reason.trim())
+          .slice(0, 16)
+      : typeof row.reason === "string" && row.reason.trim()
+        ? [row.reason.trim()]
+        : [],
+  };
+}
+
+function isDepositProofReviewableRpcError(error: unknown): boolean {
+  const message =
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message ?? "")
+      : error instanceof Error
+        ? error.message
+        : "";
+  const normalized = message.toUpperCase();
+  return [
+    "AUTOMATED_DEPOSIT_PROOF_INVALID",
+    "AUTOMATED_DEPOSIT_REVIEW_ROUTE_INVALID",
+    "AUTOMATED_DEPOSIT_PROOF_POLICY_UNSUPPORTED",
+    "AUTOMATED_DEPOSIT_PROOF_REQUEST_CONFLICT",
+    "APPOINTMENT_NOT_FOUND",
+    "APP_SETTINGS_NOT_FOUND",
+    "DEPOSIT_PROOF_MESSAGE_NOT_FOUND",
+    "DEPOSIT_PROOF_MESSAGE_INVALID",
+    "DEPOSIT_PROOF_CONTEXT_MISMATCH",
+    "DEPOSIT_PROOF_PREDATES_HOLD",
+    "DEPOSIT_PROOF_MEDIA_HASH_MISMATCH",
+    "DEPOSIT_PROOF_READING_MISMATCH",
+    "DEPOSIT_PROOF_ROUTE_REASON_MISMATCH",
+    "DEPOSIT_PROOF_APPOINTMENT_METADATA_MISMATCH",
+    "DEPOSIT_PROOF_ALREADY_USED",
+    "APPOINTMENT_PROOF_MESSAGE_CONFLICT",
+    "APPOINTMENT_DEPOSIT_STATE_INVALID",
+    "APPOINTMENT_DEPOSIT_HOLD_INVALID",
+    "APPOINTMENT_DEPOSIT_EXPECTATION_MISSING",
+    "WHATSAPP_AUTOMATION_DEPOSIT_EFFECT_CONTEXT_MISMATCH",
+    "WHATSAPP_AUTOMATION_EFFECT_CONFLICT",
+  ].some((code) => normalized.includes(code));
+}
+
+function normalizeDurableMediaUnderstanding(
+  value: unknown,
+): DurableMediaUnderstanding | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind === "audio") {
+    const transcription = candidate.transcription as
+      | Record<string, unknown>
+      | undefined;
+    if (
+      !transcription ||
+      typeof transcription.transcript !== "string" ||
+      typeof transcription.audible !== "boolean"
+    ) {
+      return null;
+    }
+    return {
+      kind: "audio",
+      transcription: {
+        transcript: transcription.transcript.slice(0, 4000),
+        audible: transcription.audible,
+      },
+    };
+  }
+  if (candidate.kind !== "deposit_proof") return null;
+  const reading = candidate.reading as Record<string, unknown> | undefined;
+  if (
+    !reading ||
+    typeof reading.legible !== "boolean" ||
+    typeof candidate.mediaSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(candidate.mediaSha256)
+  ) {
+    return null;
+  }
+  const optionalText = (field: string, maxLength: number) => {
+    const fieldValue = reading[field];
+    return typeof fieldValue === "string"
+      ? fieldValue.trim().slice(0, maxLength) || null
+      : null;
+  };
+  return {
+    kind: "deposit_proof",
+    mediaSha256: candidate.mediaSha256,
+    reading: {
+      legible: reading.legible,
+      amount:
+        typeof reading.amount === "number" && Number.isFinite(reading.amount)
+          ? reading.amount
+          : null,
+      currency: optionalText("currency", 32),
+      date: optionalText("date", 10),
+      destination: optionalText("destination", 120),
+      holder: optionalText("holder", 120),
+      operationId: optionalText("operationId", 160),
+    },
+  };
 }
 
 interface AutomationExecutionClaim {
@@ -149,7 +331,7 @@ interface AutomationExecutionLease {
 interface CommittedAutomationDomainEffect {
   conversationId: string;
   appointmentId: string;
-  type: "create" | "reschedule" | "cancel";
+  type: "create" | "reschedule" | "cancel" | "deposit_confirm";
 }
 
 async function completeExecution(
@@ -212,13 +394,15 @@ async function handoffCommittedExecution(
 async function claimInboundHandoff(
   client: SupabaseClient,
   messageId: string,
+  priority = false,
+  currentFlow: string | null = null,
 ): Promise<void> {
   const result = await client.rpc(
     "pause_whatsapp_automation_for_inbound_handoff",
     {
       p_message_id: messageId,
-      p_priority: false,
-      p_current_flow: null,
+      p_priority: priority,
+      p_current_flow: currentFlow,
     },
   );
   if (result.error) throw result.error;
@@ -343,7 +527,7 @@ Deno.serve(async (request) => {
     const { data: inboundLookup, error: messageError } = await client
       .from("messages")
       .select(
-        "id,conversation_id,contact_id,coexistence_account_id,body,direction,metadata",
+        "id,conversation_id,contact_id,coexistence_account_id,body,type,direction,metadata",
       )
       .eq("id", input.messageId)
       .single();
@@ -406,6 +590,12 @@ Deno.serve(async (request) => {
     const conversation = execution.conversation_snapshot;
     const contact = execution.contact_snapshot;
     const appSettings = execution.settings_snapshot;
+
+    // Interruptor operativo del bot. El kill switch de servidor sigue vigente
+    // aparte; acá se respeta el que Gisela maneja desde la aplicación.
+    if (appSettings?.automations_enabled === false) {
+      return await finish({ ignored: true, reason: "AUTOMATIONS_DISABLED" });
+    }
     const executionNow = new Date(execution.snapshot_at);
     if (!Number.isFinite(executionNow.getTime())) {
       throw new Error("AUTOMATION_EXECUTION_SNAPSHOT_INVALID");
@@ -418,6 +608,7 @@ Deno.serve(async (request) => {
         "appointment_create",
         "appointment_reschedule",
         "appointment_cancel",
+        "appointment_deposit_process",
       ])
       .order("created_at", { ascending: false })
       .limit(1)
@@ -428,16 +619,25 @@ Deno.serve(async (request) => {
       appointment_id: string | null;
       result: Record<string, unknown>;
     } | null;
+    const priorDepositProofResult =
+      priorEffect?.effect_type === "appointment_deposit_process" &&
+      priorEffect.result?.effect_status === "applied"
+        ? normalizeAutomatedDepositProofResult(priorEffect.result)
+        : null;
     if (
       priorEffect?.appointment_id &&
-      priorEffect.result?.effect_status !== "rejected"
+      priorEffect.result?.effect_status !== "rejected" &&
+      (priorEffect.effect_type !== "appointment_deposit_process" ||
+        priorEffect.result?.status === "confirmed")
     ) {
       const type =
         priorEffect.effect_type === "appointment_create"
           ? "create"
           : priorEffect.effect_type === "appointment_reschedule"
             ? "reschedule"
-            : "cancel";
+            : priorEffect.effect_type === "appointment_cancel"
+              ? "cancel"
+              : "deposit_confirm";
       committedDomainEffect = {
         conversationId: conversation.id,
         appointmentId: priorEffect.appointment_id,
@@ -509,73 +709,12 @@ Deno.serve(async (request) => {
         ? metadata.interactive_reply_id
         : "";
     let inboundBody = typeof inbound.body === "string" ? inbound.body : "";
-    let inboundTranscribed = false;
-
-    // Una nota de voz llega con el cuerpo "Nota de voz": para el bot es opaca.
-    // Si la transcripción está habilitada, el texto dicho reemplaza ese cuerpo
-    // y el resto del flujo lo trata como si el paciente lo hubiera escrito.
-    if (
-      inbound.type === "audio" &&
-      mediaOpenAIEnabled({
-        globalAutomationsEnabled: whatsappAutomationsEnabled(),
-        serverEnabled:
-          Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED")?.trim() === "true",
-        aiEnabled: appSettings?.ai_enabled,
-        aiMediaEnabled: appSettings?.ai_media_enabled,
-        model: appSettings?.ai_model,
-      })
-    ) {
-      try {
-        const media = await downloadInboundWhatsAppMedia({
-          client,
-          message: inbound as Record<string, unknown>,
-          fetchImpl: fetch,
-          maxBytes: whatsappMediaMaxBytes(
-            Deno.env.get("WHATSAPP_MEDIA_MAX_BYTES"),
-          ),
-        });
-        const transcription = await requestAudioTranscription({
-          apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
-          bytes: media.bytes,
-          mimeType: media.descriptor.mimeType,
-          safetyIdentifier: await administrativeSafetyIdentifier(
-            contact.id as string,
-          ),
-        });
-        if (transcription.audible) {
-          inboundBody = transcription.transcript;
-          inboundTranscribed = true;
-          await client
-            .from("messages")
-            .update({
-              metadata: {
-                ...((inbound.metadata ?? {}) as Record<string, unknown>),
-                transcript: transcription.transcript,
-              },
-            })
-            .eq("id", inbound.id);
-        }
-      } catch (error) {
-        // Una transcripción fallida no interrumpe la conversación: el audio
-        // sigue su camino como adjunto que una persona tiene que escuchar.
-        console.warn("whatsapp-automation", "AUDIO_TRANSCRIPTION_FAILED", {
-          code: error instanceof Error ? error.message : "UNKNOWN",
-        });
-      }
-    }
-
-    /** Un adjunto que no se pudo leer llega con un cuerpo de relleno —"Nota de
-     * voz", "Imagen", "Documento"—. Ese texto no lo escribió el paciente y no
-     * puede tomarse como una respuesta: así fue como un audio terminó guardado
-     * como el nombre de un paciente. */
-    const unreadableMedia =
-      !inboundTranscribed &&
-      (inbound.type === "audio" ||
-        inbound.type === "image" ||
-        inbound.type === "document");
-
-    const normalizedInboundBody = normalizeUserInput(inboundBody);
-    const inputValue = replyId || inboundBody;
+    let mediaUnderstanding: DurableMediaUnderstanding | null = null;
+    let unreadableMedia = false;
+    let transcribedAudioPriority = false;
+    let transcribedAudioNeedsHuman = false;
+    let normalizedInboundBody = "";
+    let inputValue = replyId || inboundBody;
 
     const configuredWelcomeMessage =
       typeof appSettings?.automation_welcome_message === "string"
@@ -643,6 +782,7 @@ Deno.serve(async (request) => {
       bodyPreview: string,
       extraMetadata: Record<string, unknown> = {},
       source = "automation",
+      appointmentId: string | null = null,
     ) => {
       const sequence = sendSequence;
       sendSequence += 1;
@@ -653,6 +793,7 @@ Deno.serve(async (request) => {
         payload,
         bodyPreview,
         idempotencyKey: `automation:${inbound.id}:${sequence}`,
+        appointmentId,
         coexistenceAccountId: inbound.coexistence_account_id,
         metadata: {
           ...extraMetadata,
@@ -660,6 +801,358 @@ Deno.serve(async (request) => {
           inbound_message_id: inbound.id,
           automation_sequence: sequence,
         },
+      });
+    };
+
+    const mediaMessage =
+      inbound.type === "audio" ||
+      inbound.type === "image" ||
+      inbound.type === "document";
+    const depositProofMediaMessage =
+      inbound.type === "image" || inbound.type === "document";
+    const snapshotAppointmentId =
+      typeof session.context.appointmentId === "string" &&
+      UUID_PATTERN.test(session.context.appointmentId)
+        ? session.context.appointmentId
+        : null;
+    const depositProofMediaContextReady =
+      depositProofMediaMessage &&
+      session.state === "waiting_deposit" &&
+      snapshotAppointmentId !== null;
+    const mediaContextReady =
+      inbound.type === "audio" || depositProofMediaContextReady;
+    const snapshotMediaEnabled =
+      mediaContextReady &&
+      mediaOpenAIEnabled({
+        globalAutomationsEnabled: whatsappAutomationsEnabled(),
+        serverEnabled:
+          Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED")?.trim() === "true",
+        aiEnabled: appSettings?.ai_enabled,
+        aiMediaEnabled: appSettings?.ai_media_enabled,
+        model: appSettings?.ai_model,
+      });
+
+    /** Los switches del snapshot dan causalidad al intento, pero no autorizan
+     * una carga después de que Gisela los apagó. Cada llamada de media vuelve a
+     * leer el control vivo y cualquier error falla cerrado. */
+    const readLiveMediaOpenAIEnabled = async (): Promise<boolean> => {
+      const globalAutomationsEnabled = whatsappAutomationsEnabled();
+      const serverEnabled =
+        Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED")?.trim() === "true";
+      if (!globalAutomationsEnabled || !serverEnabled) return false;
+
+      const liveSettings = await client
+        .from("app_settings")
+        .select("ai_enabled,ai_media_enabled,ai_model")
+        .eq("id", true)
+        .single();
+      if (liveSettings.error || !liveSettings.data) {
+        console.warn(
+          "whatsapp-automation",
+          "OPENAI_MEDIA_CONTROL_UNAVAILABLE",
+          {
+            code: liveSettings.error?.message ?? "NO_SETTINGS",
+          },
+        );
+        return false;
+      }
+
+      return mediaOpenAIEnabled({
+        globalAutomationsEnabled,
+        serverEnabled,
+        aiEnabled: liveSettings.data.ai_enabled,
+        aiMediaEnabled: liveSettings.data.ai_media_enabled,
+        model: liveSettings.data.ai_model,
+      });
+    };
+
+    // La decisión durable no transmite bytes y debe sobrevivir a un apagado
+    // posterior de los switches. Sólo una lectura todavía inexistente exige
+    // tanto el permiso del snapshot como los controles vivos.
+    const mediaDecisionEligible =
+      priorDepositProofResult === null && mediaMessage && mediaContextReady;
+    let depositProofMediaFailureReason: DepositProofMediaFailureReason | null =
+      depositProofMediaContextReady &&
+      priorDepositProofResult === null &&
+      !mediaDecisionEligible
+        ? "MEDIA_DISABLED"
+        : null;
+
+    if (mediaDecisionEligible) {
+      const lease = executionLease;
+      if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+      const sequence = decisionSequence;
+      decisionSequence += 1;
+      try {
+        const recalled = await client.rpc(
+          "recall_whatsapp_automation_decision",
+          {
+            p_message_id: lease.messageId,
+            p_lease_token: lease.leaseToken,
+            p_sequence: sequence,
+            p_key: "openai_media_understanding",
+          },
+        );
+        if (recalled.error) throw recalled.error;
+        const remembered = recalled.data as { value?: unknown } | null;
+        if (remembered && "value" in remembered) {
+          mediaUnderstanding = normalizeDurableMediaUnderstanding(
+            remembered.value,
+          );
+          if (!mediaUnderstanding) {
+            throw new Error("OPENAI_MEDIA_DURABLE_RESPONSE_INVALID");
+          }
+        } else {
+          // Consultar la decisión durable no transmite contenido. Los
+          // switches vivos se exigen recién antes de descargar y enviar un
+          // archivo que todavía no fue procesado.
+          if (!snapshotMediaEnabled || !(await readLiveMediaOpenAIEnabled())) {
+            throw new Error("OPENAI_MEDIA_DISABLED_LIVE");
+          }
+          const media = await downloadInboundWhatsAppMedia({
+            client,
+            message: inbound as unknown as Record<string, unknown>,
+            fetchImpl: fetch,
+            maxBytes: whatsappMediaMaxBytes(
+              Deno.env.get("WHATSAPP_MEDIA_MAX_BYTES"),
+            ),
+          });
+          // La descarga puede tardar. Revalidar inmediatamente antes de enviar
+          // bytes evita que un apagado ocurrido durante ella quede ignorado.
+          if (!(await readLiveMediaOpenAIEnabled())) {
+            throw new Error("OPENAI_MEDIA_DISABLED_LIVE");
+          }
+          if (inbound.type === "audio") {
+            mediaUnderstanding = {
+              kind: "audio",
+              transcription: await requestAudioTranscription({
+                apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
+                bytes: media.bytes,
+                mimeType: media.descriptor.mimeType,
+                safetyIdentifier: await administrativeSafetyIdentifier(
+                  contact.id as string,
+                ),
+              }),
+            };
+          } else {
+            mediaUnderstanding = {
+              kind: "deposit_proof",
+              reading: await requestDepositProofReading({
+                apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
+                bytes: media.bytes,
+                mimeType: media.descriptor.mimeType,
+                safetyIdentifier: await administrativeSafetyIdentifier(
+                  contact.id as string,
+                ),
+              }),
+              mediaSha256: await mediaSha256Hex(media.bytes),
+            };
+          }
+
+          const stored = await client.rpc(
+            "remember_whatsapp_automation_decision",
+            {
+              p_message_id: lease.messageId,
+              p_lease_token: lease.leaseToken,
+              p_sequence: sequence,
+              p_key: "openai_media_understanding",
+              p_value: { value: mediaUnderstanding },
+            },
+          );
+          if (stored.error) throw stored.error;
+          const storedValue = stored.data as { value?: unknown } | null;
+          mediaUnderstanding = normalizeDurableMediaUnderstanding(
+            storedValue?.value,
+          );
+          if (!mediaUnderstanding) {
+            throw new Error("OPENAI_MEDIA_DURABLE_RESPONSE_INVALID");
+          }
+        }
+      } catch (error) {
+        const failureCode = error instanceof Error ? error.message : "UNKNOWN";
+        console.warn("whatsapp-automation", "MEDIA_UNDERSTANDING_FAILED", {
+          code: failureCode,
+        });
+        if (depositProofMediaContextReady) {
+          depositProofMediaFailureReason = failureCode.includes(
+            "OPENAI_MEDIA_DISABLED",
+          )
+            ? "MEDIA_DISABLED"
+            : /^(MEDIA_|WHATSAPP_MEDIA_)/.test(failureCode)
+              ? "DOWNLOAD_FAILED"
+              : "READING_FAILED";
+        }
+        mediaUnderstanding = null;
+      }
+    }
+
+    if (
+      mediaUnderstanding?.kind === "audio" &&
+      mediaUnderstanding.transcription.audible
+    ) {
+      inboundBody = mediaUnderstanding.transcription.transcript;
+      const transcribedMessage: NormalizedIncomingMessage = {
+        externalMessageId: inbound.id,
+        phoneE164: contact.phone_e164,
+        whatsappId: contact.whatsapp_id,
+        whatsappUserId: contact.whatsapp_user_id,
+        profileName: contact.name,
+        type: "text",
+        body: inboundBody,
+        metadata,
+        receivedAt: execution.snapshot_at,
+      };
+      transcribedAudioPriority = requiresPriority(transcribedMessage);
+      transcribedAudioNeedsHuman = requiresHumanReview(transcribedMessage);
+      await client
+        .from("messages")
+        .update({
+          metadata: {
+            ...metadata,
+            transcript: mediaUnderstanding.transcription.transcript,
+          },
+        })
+        .eq("id", inbound.id);
+
+      // Una baja explícita vale igual por texto que por nota de voz. La RPC
+      // vincula la transcripción al mensaje/lease exactos y deja la
+      // conversación en manual sin enviar una respuesta posterior.
+      if (whatsappConsentDecisionFromText(inboundBody) === "opt_out") {
+        const lease = executionLease;
+        if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+        const optOut = await client.rpc("record_transcribed_whatsapp_opt_out", {
+          p_message_id: inbound.id,
+          p_lease_token: lease.leaseToken,
+        });
+        if (optOut.error || optOut.data !== true) {
+          throw new Error(
+            `TRANSCRIBED_OPT_OUT_FAILED:${optOut.error?.message ?? "NOT_APPLIED"}`,
+          );
+        }
+        return await finish({
+          processed: true,
+          state: "opted_out",
+          reason: "TRANSCRIBED_OPT_OUT",
+        });
+      }
+    }
+
+    /** Un adjunto opaco nunca se interpreta usando su cuerpo de relleno
+     * ("Nota de voz", "Imagen" o "Documento"). */
+    unreadableMedia =
+      mediaMessage &&
+      (mediaUnderstanding === null ||
+        (mediaUnderstanding.kind === "audio" &&
+          !mediaUnderstanding.transcription.audible));
+    normalizedInboundBody = normalizeUserInput(inboundBody);
+    inputValue = replyId || inboundBody;
+
+    const handoff = async (reason = "", context: AutomationContext = {}) => {
+      await claimInboundHandoff(client, inbound.id);
+      const handoffMessage =
+        `${reason ? `${reason.trim()} ` : ""}` +
+        "Sigo yo desde acá. Te respondo por este mismo chat.";
+      await send(
+        textPayload(handoffMessage),
+        handoffMessage,
+        { human_handoff: true },
+        "handoff",
+      );
+      await saveSession("human_handoff", context);
+    };
+
+    const respondToDepositProofResult = async (
+      proof: AutomatedDepositProofResult,
+    ): Promise<Response> => {
+      if (proof.status === "superseded") {
+        await handoff(
+          "Recibí tu comprobante, pero necesito revisar el estado actual del turno.",
+          { appointmentId: proof.appointmentId },
+        );
+        return await finish({
+          processed: true,
+          reason: "DEPOSIT_PROOF_SUPERSEDED",
+          state: "human_handoff",
+          appointmentId: proof.appointmentId,
+        });
+      }
+
+      if (
+        proof.status === "confirmed" ||
+        proof.status === "already_confirmed"
+      ) {
+        const automaticallyConfirmed =
+          proof.status === "confirmed" ||
+          proof.confirmationActor === "automatic_system" ||
+          proof.originalStatus === "confirmed";
+        if (proof.status === "confirmed") {
+          committedDomainEffect = {
+            conversationId: conversation.id,
+            appointmentId: proof.appointmentId,
+            type: "deposit_confirm",
+          };
+        }
+        const template = appSettings.deposit_confirmed_message_template?.trim();
+        const defaultConfirmationMessage = `¡Listo! Recibí el comprobante y confirmé tu turno para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)}.`;
+        const renderedConfirmationMessage = template
+          ? renderConfiguredMessage(template, {
+              date: formatDate(proof.startsAt),
+              time: formatTime(proof.startsAt),
+            })
+          : "";
+        const validRenderedConfirmation =
+          renderedConfirmationMessage.length > 0 &&
+          renderedConfirmationMessage.length <= 4096 &&
+          !/\{[A-Za-z][A-Za-z0-9_]*\}/.test(renderedConfirmationMessage);
+        const message = automaticallyConfirmed
+          ? validRenderedConfirmation
+            ? renderedConfirmationMessage
+            : defaultConfirmationMessage
+          : `Tu turno para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)} ya estaba confirmado.`;
+        await send(
+          textPayload(message),
+          message,
+          {
+            appointment_id: proof.appointmentId,
+            proof_message_id: inbound.id,
+            deposit_auto_confirmed: automaticallyConfirmed,
+            deposit_confirmation_actor: automaticallyConfirmed
+              ? "automatic_system"
+              : "human_operator",
+            deposit_policy: "deposit-proof-basic/v1",
+          },
+          "deposit_confirmation",
+          proof.appointmentId,
+        );
+        return await finish({
+          processed: true,
+          state: "deposit_confirmed",
+          appointmentId: proof.appointmentId,
+        });
+      }
+
+      const message = depositProofReviewMessage(
+        appSettings.deposit_proof_received_message_template,
+        proof.status === "late",
+      );
+      await send(
+        textPayload(message),
+        message,
+        {
+          appointment_id: proof.appointmentId,
+          proof_message_id: inbound.id,
+          deposit_review_required: true,
+          deposit_validation_reasons: proof.reviewReasons,
+        },
+        proof.status === "late"
+          ? "late_proof_acknowledgement"
+          : "proof_acknowledgement",
+        proof.appointmentId,
+      );
+      return await finish({
+        processed: true,
+        state: proof.status === "late" ? "late_deposit_proof" : "human_handoff",
+        appointmentId: proof.appointmentId,
       });
     };
 
@@ -907,7 +1400,152 @@ Deno.serve(async (request) => {
       return await finish({ processed: true, state: "owner_access" });
     }
 
-    if (conversation.priority === true) {
+    // El efecto transaccional es la decisión durable. Si el envío falló después
+    // del commit, un retry reutiliza el resultado sin volver a descargar el
+    // archivo, llamar a OpenAI ni cambiar una revisión por una confirmación.
+    if (priorDepositProofResult) {
+      return await respondToDepositProofResult(priorDepositProofResult);
+    }
+
+    if (depositProofMediaContextReady && mediaUnderstanding === null) {
+      const proofLease = executionLease;
+      if (!proofLease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+      const reviewResult = await client.rpc(
+        "route_automated_deposit_proof_to_review",
+        {
+          p_message_id: inbound.id,
+          p_lease_token: proofLease.leaseToken,
+          p_appointment_id: snapshotAppointmentId,
+          p_reason: depositProofMediaFailureReason ?? "UNREADABLE",
+        },
+      );
+      if (reviewResult.error) {
+        if (isDepositProofReviewableRpcError(reviewResult.error)) {
+          await handoff(
+            "No pude asociar el comprobante automáticamente y necesito revisarlo.",
+            { appointmentId: snapshotAppointmentId },
+          );
+          return await finish({
+            processed: true,
+            state: "human_handoff",
+            appointmentId: snapshotAppointmentId,
+          });
+        }
+        throw new Error(
+          `AUTOMATED_DEPOSIT_PROOF_REVIEW_FAILED:${reviewResult.error.message}`,
+        );
+      }
+      const proof = normalizeAutomatedDepositProofResult(reviewResult.data);
+      if (!proof) {
+        throw new Error("AUTOMATED_DEPOSIT_PROOF_REVIEW_RESULT_INVALID");
+      }
+      return await respondToDepositProofResult(proof);
+    }
+
+    if (unreadableMedia) {
+      const reason =
+        inbound.type === "audio"
+          ? "No pude escuchar el audio automáticamente y necesito revisarlo."
+          : session.state === "waiting_deposit"
+            ? "No pude leer el comprobante automáticamente y necesito revisarlo."
+            : "Recibí el archivo y necesito revisarlo.";
+      await handoff(reason);
+      return await finish({ processed: true, state: "human_handoff" });
+    }
+
+    if (
+      inbound.type !== "audio" &&
+      (inbound.type === "image" || inbound.type === "document") &&
+      mediaUnderstanding?.kind === "deposit_proof"
+    ) {
+      const appointmentId = session.context.appointmentId;
+      if (session.state !== "waiting_deposit" || !appointmentId) {
+        await handoff(
+          "No pude asociar este archivo a una pre-reserva activa y necesito revisarlo.",
+        );
+        return await finish({ processed: true, state: "human_handoff" });
+      }
+
+      const proofAppointmentResult = await client
+        .from("appointments")
+        .select(
+          "deposit_expected_amount_ars,deposit_expected_alias,deposit_expected_holder",
+        )
+        .eq("id", appointmentId)
+        .eq("contact_id", contact.id)
+        .maybeSingle();
+      if (proofAppointmentResult.error) throw proofAppointmentResult.error;
+      const proofAppointment = proofAppointmentResult.data;
+      const expectedAmount = Number(
+        proofAppointment?.deposit_expected_amount_ars,
+      );
+      const expectedAlias =
+        typeof proofAppointment?.deposit_expected_alias === "string"
+          ? proofAppointment.deposit_expected_alias.trim()
+          : "";
+      const expectedHolder =
+        typeof proofAppointment?.deposit_expected_holder === "string"
+          ? proofAppointment.deposit_expected_holder.trim()
+          : "";
+      const configured =
+        Number.isSafeInteger(expectedAmount) &&
+        expectedAmount > 0 &&
+        Boolean(expectedAlias) &&
+        Boolean(expectedHolder);
+      const validation = configured
+        ? validateDepositProofForAutoConfirmation({
+            reading: mediaUnderstanding.reading,
+            expectedAmountArs: expectedAmount,
+            expectedAlias,
+            expectedHolder,
+          })
+        : {
+            approved: false,
+            reasons: ["CONFIGURATION_INCOMPLETE"],
+          };
+
+      const proofLease = executionLease;
+      if (!proofLease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+      const proofResult = await client.rpc("process_automated_deposit_proof", {
+        p_message_id: inbound.id,
+        p_lease_token: proofLease.leaseToken,
+        p_appointment_id: appointmentId,
+        p_reading: {
+          legible: mediaUnderstanding.reading.legible,
+          amount: mediaUnderstanding.reading.amount,
+          currency: mediaUnderstanding.reading.currency,
+          date: mediaUnderstanding.reading.date,
+          destination: mediaUnderstanding.reading.destination,
+          holder: mediaUnderstanding.reading.holder,
+          operationId: mediaUnderstanding.reading.operationId,
+        },
+        p_media_sha256: mediaUnderstanding.mediaSha256,
+        p_policy_version: "deposit-proof-basic/v1",
+        p_auto_approve: validation.approved,
+      });
+      if (proofResult.error) {
+        if (isDepositProofReviewableRpcError(proofResult.error)) {
+          await handoff(
+            "No pude confirmar este comprobante automáticamente y necesito revisarlo.",
+            { appointmentId },
+          );
+          return await finish({
+            processed: true,
+            state: "human_handoff",
+            appointmentId,
+          });
+        }
+        throw new Error(
+          `AUTOMATED_DEPOSIT_PROOF_FAILED:${proofResult.error.message}`,
+        );
+      }
+      const proof = normalizeAutomatedDepositProofResult(proofResult.data);
+      if (!proof) throw new Error("AUTOMATED_DEPOSIT_PROOF_RESULT_INVALID");
+      return await respondToDepositProofResult(proof);
+    }
+
+    if (conversation.priority === true || transcribedAudioPriority) {
+      await claimInboundHandoff(client, inbound.id, true, "urgent_handoff");
       const urgentMessage =
         typeof appSettings?.urgent_message === "string" &&
         appSettings.urgent_message.trim()
@@ -926,16 +1564,18 @@ Deno.serve(async (request) => {
       });
     }
 
-    if (conversation.automation_mode !== "auto") {
-      return await finish({ ignored: true });
+    if (transcribedAudioNeedsHuman) {
+      await handoff(
+        "Por el contenido del audio, necesito revisarlo personalmente.",
+      );
+      return await finish({
+        processed: true,
+        state: "human_handoff",
+      });
     }
 
-    if (!freshSession && session.state === "out_of_hours") {
-      return await finish({
-        processed: false,
-        ignored: true,
-        reason: "OUT_OF_HOURS_COOLDOWN",
-      });
+    if (conversation.automation_mode !== "auto") {
+      return await finish({ ignored: true });
     }
 
     if (
@@ -1043,20 +1683,6 @@ Deno.serve(async (request) => {
         message,
       );
       await saveSession("idle");
-    };
-
-    const handoff = async (reason = "") => {
-      await claimInboundHandoff(client, inbound.id);
-      const handoffMessage =
-        `${reason ? `${reason.trim()} ` : ""}` +
-        "Sigo yo desde acá. Te respondo por este mismo chat.";
-      await send(
-        textPayload(handoffMessage),
-        handoffMessage,
-        { human_handoff: true },
-        "handoff",
-      );
-      await saveSession("human_handoff");
     };
 
     const invalid = async (repeat: (attempts: number) => Promise<void>) => {
@@ -1192,7 +1818,7 @@ Deno.serve(async (request) => {
       const slotCoverage = currentProfile().coverage;
       if (!slotCoverage) {
         await handoff(
-          "Necesitamos revisar la cobertura de este turno antes de reprogramarlo.",
+          "Necesito revisar la cobertura de este turno antes de reprogramarlo.",
         );
         return;
       }
@@ -1204,7 +1830,7 @@ Deno.serve(async (request) => {
         slotCoverage,
       );
       if (!slots.length) {
-        await handoff("No encontramos horarios disponibles.");
+        await handoff("No encontré horarios disponibles.");
         return;
       }
       const rows: Array<{ id: string; title: string; description?: string }> =
@@ -1354,7 +1980,7 @@ Deno.serve(async (request) => {
 
     const showNoAppointments = async () => {
       const message =
-        "No encontramos próximos turnos activos asociados a este WhatsApp.";
+        "No encontré próximos turnos activos asociados a este WhatsApp.";
       await send(textPayload(message), message);
       await showMainMenu("Podés sacar un turno nuevo o hacerme otra consulta.");
     };
@@ -1366,7 +1992,7 @@ Deno.serve(async (request) => {
       const message =
         `Tu turno es:\n\n📅 ${formatDate(appointment.startsAt)}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n` +
-        `${appointment.serviceName} · ${appointment.professionalName}\n\n¿Querés elegir otro horario?`;
+        `${appointment.serviceName}\n\n¿Querés elegir otro horario?`;
       await send(
         buttonsPayload(message, [
           { id: "reschedule:yes", title: "Reprogramar" },
@@ -1391,7 +2017,7 @@ Deno.serve(async (request) => {
       const message =
         `Vas a cancelar este turno:\n\n📅 ${formatDate(appointment.startsAt)}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n` +
-        `${appointment.serviceName} · ${appointment.professionalName}\n\n¿Confirmás la cancelación?`;
+        `${appointment.serviceName}\n\n¿Confirmás la cancelación?`;
       await send(
         buttonsPayload(message, [
           { id: "cancel:yes", title: "Sí, cancelar" },
@@ -1470,7 +2096,7 @@ Deno.serve(async (request) => {
           : "Tus próximos turnos son:",
         ...appointments.map(
           (appointment, index) =>
-            `\n${index + 1}. ${formatDate(appointment.startsAt)} a las ${formatTime(appointment.startsAt)}\n${appointment.serviceName} · ${appointment.professionalName}`,
+            `\n${index + 1}. ${formatDate(appointment.startsAt)} a las ${formatTime(appointment.startsAt)}\n${appointment.serviceName}`,
         ),
         "\n¿Qué querés hacer?",
       ].join("\n");
@@ -1493,7 +2119,7 @@ Deno.serve(async (request) => {
       const showConfiguredInfo = async () => {
         if (!configuredInfo) {
           await handoff(
-            "Todavía no tenemos esa información configurada para responder automáticamente.",
+            "Todavía no tengo esa información configurada para responder automáticamente.",
           );
           return;
         }
@@ -1610,7 +2236,12 @@ Deno.serve(async (request) => {
       };
 
       const beforeCall = await readLiveAIControl();
-      if (!beforeCall.automationsEnabled) return;
+      if (!beforeCall.automationsEnabled) {
+        await handoff(
+          "La respuesta automática se pausó y necesito continuar personalmente.",
+        );
+        return;
+      }
 
       let answer: Awaited<ReturnType<typeof requestAdministrativeOpenAIAnswer>>;
       try {
@@ -1713,12 +2344,27 @@ Deno.serve(async (request) => {
         console.warn("whatsapp-automation openai", {
           code: "OPENAI_DURABILITY_UNAVAILABLE",
         });
+        if (!whatsappAutomationsEnabled()) {
+          await handoff(
+            "La respuesta automática se pausó y necesito continuar personalmente.",
+          );
+          return;
+        }
+        await showConfiguredInfo();
         return;
       }
 
       const beforeSend = await readLiveAIControl();
-      if (!beforeSend.automationsEnabled) return;
-      if (answer.source === "openai" && !beforeSend.aiEnabled) return;
+      if (!beforeSend.automationsEnabled) {
+        await handoff(
+          "La respuesta automática se pausó y necesito continuar personalmente.",
+        );
+        return;
+      }
+      if (answer.source === "openai" && !beforeSend.aiEnabled) {
+        await showConfiguredInfo();
+        return;
+      }
       if (answer.handoff) {
         await claimInboundHandoff(client, inbound.id);
         await send(
@@ -1756,7 +2402,7 @@ Deno.serve(async (request) => {
       invalidAttempts = 0,
     ) => {
       const message =
-        `Revisá los datos antes de pre-reservar:\n\n${slot.serviceName}\n${slot.professionalName}\n` +
+        `Revisá los datos antes de pre-reservar:\n\n${slot.serviceName}\n` +
         `📅 ${formatDate(slot.startsAt)}\n` +
         `🕐 ${formatTime(slot.startsAt)}\n\n` +
         "⚠️ Este horario todavía no está reservado.\n" +
@@ -1786,7 +2432,7 @@ Deno.serve(async (request) => {
     ) => {
       const message =
         `Revisá el cambio antes de reprogramar:\n\n` +
-        `Turno actual:\n${appointment.serviceName} · ${appointment.professionalName}\n` +
+        `Turno actual:\n${appointment.serviceName}\n` +
         `📅 ${formatDate(appointment.startsAt)}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n\n` +
         `Nuevo horario:\n` +
@@ -1846,7 +2492,7 @@ Deno.serve(async (request) => {
         if (appointment.status !== "confirmed") {
           await send(
             textPayload(
-              "Ese turno todavía no está confirmado. Reviso la seña antes de confirmarlo.",
+              "Ese turno todavía espera la seña. Mandame el comprobante como imagen o PDF; si se leen el monto exacto y el destinatario, confirmo el turno.",
             ),
             "Ese turno todavía no está confirmado.",
           );
@@ -1859,8 +2505,8 @@ Deno.serve(async (request) => {
           });
         }
         await send(
-          textPayload("¡Gracias! Anotamos que vas a asistir."),
-          "¡Gracias! Anotamos que vas a asistir.",
+          textPayload("¡Gracias! Anoté que vas a asistir."),
+          "¡Gracias! Anoté que vas a asistir.",
         );
         await saveSession("idle");
         return await finish({
@@ -2154,15 +2800,21 @@ Deno.serve(async (request) => {
                 ? appSettings.deposit_request_message_template.trim()
                 : "";
             const alias =
-              typeof appSettings.deposit_alias === "string"
-                ? appSettings.deposit_alias.trim()
+              typeof appointment.deposit_expected_alias === "string"
+                ? appointment.deposit_expected_alias.trim()
                 : "";
             const holder =
-              typeof appSettings.deposit_holder === "string"
-                ? appSettings.deposit_holder.trim()
+              typeof appointment.deposit_expected_holder === "string"
+                ? appointment.deposit_expected_holder.trim()
                 : "";
-            const amount = Number(appSettings.deposit_amount_ars);
-            const holdMinutes = Number(appSettings.booking_hold_minutes);
+            const amount = Number(appointment.deposit_expected_amount_ars);
+            const holdExpiresAt =
+              typeof appointment.hold_expires_at === "string"
+                ? new Date(appointment.hold_expires_at).getTime()
+                : Number.NaN;
+            const holdMinutes = Math.ceil(
+              (holdExpiresAt - executionNow.getTime()) / 60_000,
+            );
             if (
               !template ||
               !alias ||
@@ -2173,7 +2825,7 @@ Deno.serve(async (request) => {
               holdMinutes <= 0
             ) {
               await handoff(
-                "El horario quedó pre-reservado, pero necesitamos enviarte los datos de la seña personalmente.",
+                "El horario quedó pre-reservado, pero necesito enviarte personalmente los datos de la seña.",
               );
             } else {
               const message = renderConfiguredMessage(template, {
@@ -2187,7 +2839,7 @@ Deno.serve(async (request) => {
                 /\{[a-z][a-z0-9_]*\}/.test(message)
               ) {
                 await handoff(
-                  "El horario quedó pre-reservado, pero necesitamos enviarte los datos de la seña personalmente.",
+                  "El horario quedó pre-reservado, pero necesito enviarte personalmente los datos de la seña.",
                 );
                 return await finish({
                   processed: true,
@@ -2245,15 +2897,11 @@ Deno.serve(async (request) => {
             appointment.deposit_status === "not_required"
           ) {
             const message =
-              `¡Listo! Tu turno quedó agendado.\n\n📅 ${formatDate(slot.startsAt)}\n` +
-              `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName} · ${slot.professionalName}`;
-            await send(
-              textPayload(message),
-              "¡Listo! Tu turno quedó agendado.",
-              {
-                appointment_id: appointmentId,
-              },
-            );
+              `¡Listo! Reservé tu turno.\n\n📅 ${formatDate(slot.startsAt)}\n` +
+              `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName}`;
+            await send(textPayload(message), "¡Listo! Reservé tu turno.", {
+              appointment_id: appointmentId,
+            });
             await saveSession("idle");
           } else {
             throw new Error("APPOINTMENT_STATE_INVALID");
@@ -2281,8 +2929,7 @@ Deno.serve(async (request) => {
       }
     } else if (session.state === "confirming_reschedule_request") {
       const action = resolveRescheduleRequest(inputValue);
-      if (action === "no")
-        await showMainMenu("Conservamos tu turno sin cambios.");
+      if (action === "no") await showMainMenu("Tu turno queda sin cambios.");
       else if (action === "yes") {
         const appointmentId = session.context.appointmentId;
         const appointment = appointmentId
@@ -2310,7 +2957,7 @@ Deno.serve(async (request) => {
       }
     } else if (session.state === "selecting_new_slot") {
       if (inputValue === "reschedule:back") {
-        await showMainMenu("Conservamos tu turno sin cambios.");
+        await showMainMenu("Tu turno queda sin cambios.");
       } else {
         const index = parseSlotIndex(
           inputValue,
@@ -2341,7 +2988,7 @@ Deno.serve(async (request) => {
     } else if (session.state === "confirming_new_slot") {
       const action = resolveRescheduleConfirmation(inputValue);
       if (action === "back") {
-        await showMainMenu("Conservamos tu turno sin cambios.");
+        await showMainMenu("Tu turno queda sin cambios.");
       } else if (action === "other") {
         await showSlots(
           session.context.professionalId ?? "",
@@ -2405,11 +3052,49 @@ Deno.serve(async (request) => {
               appointmentId,
               type: "reschedule",
             };
+            const rescheduledAppointment =
+              rescheduleResult &&
+              !Array.isArray(rescheduleResult) &&
+              typeof rescheduleResult === "object"
+                ? (rescheduleResult as Record<string, unknown>)
+                : null;
+            const depositStatus =
+              typeof rescheduledAppointment?.deposit_status === "string"
+                ? rescheduledAppointment.deposit_status
+                : null;
+            const holdExpiresAt =
+              typeof rescheduledAppointment?.hold_expires_at === "string"
+                ? rescheduledAppointment.hold_expires_at
+                : null;
+            const waitingForDeposit =
+              depositStatus === "pending" &&
+              holdExpiresAt !== null &&
+              Number.isFinite(new Date(holdExpiresAt).getTime());
             const message =
-              `¡Listo! Tu turno quedó reprogramado.\n\n📅 ${formatDate(slot.startsAt)}\n` +
-              `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName} · ${slot.professionalName}`;
-            await send(textPayload(message), "Tu turno quedó reprogramado.");
-            await saveSession("idle");
+              `¡Listo! Reprogramé tu turno.\n\n📅 ${formatDate(slot.startsAt)}\n` +
+              `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName}` +
+              (waitingForDeposit
+                ? "\n\nLa pre-reserva sigue esperando la seña. Mandame el comprobante como imagen o PDF; si se leen el monto exacto y el destinatario, confirmo el turno."
+                : "");
+            await send(textPayload(message), "Reprogramé tu turno.", {
+              appointment_id: appointmentId,
+            });
+            if (waitingForDeposit) {
+              const remainingMinutes = Math.max(
+                1,
+                Math.ceil(
+                  (new Date(holdExpiresAt).getTime() - executionNow.getTime()) /
+                    60_000,
+                ),
+              );
+              await saveSession(
+                "waiting_deposit",
+                { appointmentId },
+                remainingMinutes,
+              );
+            } else {
+              await saveSession("idle");
+            }
           }
         }
       } else {
@@ -2438,7 +3123,7 @@ Deno.serve(async (request) => {
     } else if (session.state === "confirming_cancellation") {
       const action = resolveCancellationConfirmation(inputValue);
       if (action === "no") {
-        await showMainMenu("Conservamos tu turno sin cambios.");
+        await showMainMenu("Tu turno queda sin cambios.");
       } else if (action === "yes") {
         const appointmentId = session.context.appointmentId;
         if (!appointmentId) await showNoAppointments();
@@ -2474,9 +3159,9 @@ Deno.serve(async (request) => {
             };
             await send(
               textPayload(
-                "Tu turno fue cancelado. Si necesitás uno nuevo, podés solicitarlo desde este chat.",
+                "Cancelé tu turno. Si necesitás uno nuevo, podés solicitarlo desde este chat.",
               ),
-              "Tu turno fue cancelado.",
+              "Cancelé tu turno.",
             );
             await saveSession("idle");
           }
@@ -2496,15 +3181,24 @@ Deno.serve(async (request) => {
       const appointment = session.context.appointmentId
         ? await activeAppointmentById(session.context.appointmentId)
         : null;
-      if (!appointment || appointment.status !== "scheduled") {
+      if (
+        appointment?.status === "confirmed" ||
+        appointment?.depositStatus === "confirmed"
+      ) {
+        const message = "Ya confirmé tu turno.";
+        await send(textPayload(message), message, {
+          appointment_id: appointment.id,
+        });
+        await saveSession("idle");
+      } else if (!appointment || appointment.status !== "scheduled") {
         await showMainMenu(
           "Esa pre-reserva ya no está activa. Si querés, te busco otro horario.",
         );
       } else {
         const message =
           appointment.depositStatus === "proof_received"
-            ? "Ya recibí tu comprobante. Lo reviso y te confirmo el turno."
-            : "Tu horario sigue pre-reservado. Mandame el comprobante como imagen o PDF y lo reviso.";
+            ? "Ya recibí tu comprobante y quedó pendiente de mi revisión."
+            : "Tu horario sigue pre-reservado. Mandame el comprobante como imagen o PDF; si se leen el monto exacto y el destinatario, confirmo el turno.";
         await send(textPayload(message), message, {
           appointment_id: appointment.id,
         });
