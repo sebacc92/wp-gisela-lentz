@@ -509,6 +509,7 @@ Deno.serve(async (request) => {
         ? metadata.interactive_reply_id
         : "";
     let inboundBody = typeof inbound.body === "string" ? inbound.body : "";
+    let inboundTranscribed = false;
 
     // Una nota de voz llega con el cuerpo "Nota de voz": para el bot es opaca.
     // Si la transcripción está habilitada, el texto dicho reemplaza ese cuerpo
@@ -543,6 +544,7 @@ Deno.serve(async (request) => {
         });
         if (transcription.audible) {
           inboundBody = transcription.transcript;
+          inboundTranscribed = true;
           await client
             .from("messages")
             .update({
@@ -561,6 +563,16 @@ Deno.serve(async (request) => {
         });
       }
     }
+
+    /** Un adjunto que no se pudo leer llega con un cuerpo de relleno —"Nota de
+     * voz", "Imagen", "Documento"—. Ese texto no lo escribió el paciente y no
+     * puede tomarse como una respuesta: así fue como un audio terminó guardado
+     * como el nombre de un paciente. */
+    const unreadableMedia =
+      !inboundTranscribed &&
+      (inbound.type === "audio" ||
+        inbound.type === "image" ||
+        inbound.type === "document");
 
     const normalizedInboundBody = normalizeUserInput(inboundBody);
     const inputValue = replyId || inboundBody;
@@ -672,6 +684,8 @@ Deno.serve(async (request) => {
       expectedField: PatientProfileField | null = null,
       requireStructuredReply = false,
     ): Promise<boolean> => {
+      // El relleno de un adjunto ilegible nunca completa un dato del perfil.
+      if (!replyId && unreadableMedia) return false;
       const parsed = parsePatientProfileReply(inputValue, {
         expectedField,
         primaryPhoneE164:
