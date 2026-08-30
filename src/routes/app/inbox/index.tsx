@@ -394,6 +394,31 @@ export default component$(() => {
               confirmingDeposit.value = false;
             }
           }}
+          onBotAnswerLast$={async () => {
+            const { data, error } = await getSupabaseClient().rpc(
+              "resume_whatsapp_automation_for_last_inbound",
+              { p_conversation_id: selectedConversation.id },
+            );
+            if (error) {
+              notice.value =
+                "No pudimos reactivar el bot en esta conversación.";
+              return;
+            }
+            selectedConversation.automationMode = "auto";
+            selectedConversation.needsHuman = false;
+            selectedConversation.priority = false;
+            reloadVersion.value += 1;
+            notice.value =
+              data === "DISPATCHED"
+                ? "El bot va a responder el último mensaje en menos de un minuto."
+                : data === "ALREADY_ANSWERED"
+                  ? "El bot quedó activo. El último mensaje ya tenía respuesta."
+                  : data === "ALREADY_PROCESSED"
+                    ? "El bot quedó activo. Ese mensaje ya lo había procesado."
+                    : data === "CONTACT_OPTED_OUT"
+                      ? "No se puede: el contacto solicitó la baja de WhatsApp."
+                      : "El bot quedó activo en esta conversación.";
+          }}
           onToggleAutomation$={async () => {
             const nextMode =
               selectedConversation.automationMode === "auto"

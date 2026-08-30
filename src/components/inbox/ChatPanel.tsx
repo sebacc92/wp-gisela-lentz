@@ -23,6 +23,7 @@ interface ChatPanelProps {
   onBack$: QRL<() => void>;
   onOpenContact$: QRL<() => void>;
   onToggleAutomation$: QRL<() => void>;
+  onBotAnswerLast$: QRL<() => void>;
   onNewAppointment$: QRL<() => void>;
   onViewAppointment$: QRL<() => void>;
   onConfirmDeposit$: QRL<() => void>;
@@ -207,6 +208,12 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             ? "Pausar bot"
             : "Reactivar bot"}
         </button>
+        {props.conversation.automationMode === "manual" &&
+          consentStatus !== "opted_out" && (
+            <button type="button" onClick$={props.onBotAnswerLast$}>
+              <Icon name="send" size={17} /> Que responda el bot
+            </button>
+          )}
       </nav>
 
       {props.conversation.needsHuman && (
