@@ -83,7 +83,8 @@ Comprobar:
 - el horario estaba dentro de la agenda configurada;
 - el turno conserva servicio y duración;
 - aparece en Agenda, Inicio y la ficha del paciente;
-- B recibe fecha, hora, servicio y Gisela Lentz;
+- B recibe fecha, hora y servicio, sin presentar a Gisela como una profesional
+  ajena a quien escribe;
 - un segundo intento simultáneo sobre el mismo slot recibe una alternativa y no
   crea solapamiento.
 
@@ -123,7 +124,7 @@ Debe ocurrir una sola vez:
 - respuesta administrativa configurable, sin diagnóstico ni tratamiento;
 - conversación marcada **Atención prioritaria**;
 - automatización pausada;
-- derivación a Gisela.
+- pase a atención manual prioritaria.
 
 Para fuera de horario, configurar un mensaje y una franja que deje el momento de
 prueba fuera. El primer mensaje recibe el aviso; mensajes sucesivos durante el

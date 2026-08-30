@@ -10,6 +10,7 @@ import {
   buildAdministrativeOpenAIRequest,
   canonicalAdministrativeQuestion,
   formatStructuredBusinessHours,
+  hasDisallowedGiselaVoice,
   isAllowedAdministrativeQuestion,
   isAdministrativeOpenAIAnswer,
   OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE,
@@ -159,6 +160,8 @@ describe("OpenAI administrative privacy boundary", () => {
     assert.equal(request.max_output_tokens, 360);
     assert.equal(request.input, canonicalAdministrativeQuestion("location"));
     assert.equal(request.text.format.strict, true);
+    assert.match(request.instructions, /primera persona singular/i);
+    assert.match(request.instructions, /nunca uses primera persona plural/i);
     assert.equal(
       JSON.stringify(request).includes("mensaje original de paciente"),
       false,
@@ -253,7 +256,7 @@ describe("OpenAI administrative transport", () => {
 
   it("usa Responses API y valida la salida estructurada", async () => {
     let observedUrl = "";
-    let observedBody: Record<string, unknown> | null = null;
+    const observedBodies: Record<string, unknown>[] = [];
     const result = await requestAdministrativeOpenAIAnswer({
       apiKey: TEST_KEY,
       intent: "location",
@@ -261,16 +264,16 @@ describe("OpenAI administrative transport", () => {
       safetyIdentifier: TEST_SAFETY_ID,
       fetchImpl: (async (url, init) => {
         observedUrl = String(url);
-        observedBody = JSON.parse(String(init?.body)) as Record<
-          string,
-          unknown
-        >;
+        observedBodies.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
         return new Response(
           JSON.stringify(responseBody("El consultorio queda en Miramar.")),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }) as typeof fetch,
     });
+    const observedBody = observedBodies[0];
     assert.equal(observedUrl, "https://api.openai.com/v1/responses");
     assert.equal(observedBody?.model, OPENAI_ADMINISTRATIVE_MODEL);
     assert.equal(observedBody?.store, false);
@@ -299,6 +302,61 @@ describe("OpenAI administrative transport", () => {
     assert.equal(isAdministrativeOpenAIAnswer(result), true);
   });
 
+  it("fuerza handoff si la IA habla como una recepción o sobre Gisela", async () => {
+    for (const generatedAnswer of [
+      "Podemos atenderte el lunes de 9 a 15.",
+      "Te ayudamos a encontrar el consultorio.",
+      "Te responderemos en breve.",
+      "Confirmaremos tu turno cuando llegue el comprobante.",
+      "Te enviaremos la ubicación.",
+      "Tendremos disponibilidad mañana.",
+      "Te responderíamos mañana.",
+      "Cuando podamos, te confirmo.",
+      "Te respondimos ayer.",
+      "Te contestamos en breve.",
+      "Podés escribirnos por WhatsApp.",
+      "Podés contactarnos cuando quieras.",
+      "Dejanos ayudarte.",
+      "Escríbenos por WhatsApp.",
+      "Contáctenos por WhatsApp.",
+      "Confirmémoslo ahora.",
+      "Gisela te responde cuando vuelva al consultorio.",
+      "La odontóloga atiende los lunes de 9 a 15.",
+      "La dentista te responde mañana.",
+      "La Dra. te responde mañana.",
+      "La Dra. Lentz te responde mañana.",
+    ]) {
+      const result = await requestAdministrativeOpenAIAnswer({
+        apiKey: TEST_KEY,
+        intent: "business_hours",
+        knowledge: "Horarios: lunes de 9 a 15.",
+        safetyIdentifier: TEST_SAFETY_ID,
+        fetchImpl: (async () =>
+          new Response(JSON.stringify(responseBody(generatedAnswer)), {
+            status: 200,
+          })) as typeof fetch,
+      });
+      assert.equal(result.handoff, true, generatedAnswer);
+      assert.equal(
+        result.answer,
+        OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE,
+        generatedAnswer,
+      );
+    }
+
+    for (const answer of [
+      "Mi consultorio está en Miramar.",
+      "Mi consultorio está entre dos puntos extremos.",
+      "Los próximos horarios disponibles son el lunes y el martes.",
+      "Atiendo consultas sobre traumatismos dentales.",
+      "Trabajo con insumos descartables.",
+      "Realizo pernos y coronas.",
+      "Soy Gisela y atiendo los lunes de 9 a 15.",
+    ]) {
+      assert.equal(hasDisallowedGiselaVoice(answer), false, answer);
+    }
+  });
+
   it("valida decisiones recuperadas antes de reutilizarlas", () => {
     assert.equal(
       isAdministrativeOpenAIAnswer({
@@ -308,6 +366,24 @@ describe("OpenAI administrative transport", () => {
         source: "fallback",
       }),
       true,
+    );
+    assert.equal(
+      isAdministrativeOpenAIAnswer({
+        answer: "Te respondemos en breve.",
+        handoff: false,
+        responseId: null,
+        source: "fallback",
+      }),
+      false,
+    );
+    assert.equal(
+      isAdministrativeOpenAIAnswer({
+        answer: "Te responderemos en breve.",
+        handoff: false,
+        responseId: null,
+        source: "fallback",
+      }),
+      false,
     );
     assert.equal(
       isAdministrativeOpenAIAnswer({

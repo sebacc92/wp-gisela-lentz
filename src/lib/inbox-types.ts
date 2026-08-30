@@ -58,6 +58,8 @@ export interface AppointmentSummary {
   depositStatus?: DepositStatus;
   holdExpiresAt?: string;
   depositProofMessageId?: string;
+  depositConfirmationActor?: "automatic_system";
+  depositConfirmationPolicyVersion?: string;
 }
 
 export interface Conversation {

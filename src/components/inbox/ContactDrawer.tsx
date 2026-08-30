@@ -246,6 +246,13 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                     Comprobante recibido: falta que Gisela confirme la seña.
                   </p>
                 )}
+                {appointment.depositConfirmationActor ===
+                  "automatic_system" && (
+                  <p class="appointment-proof-notice">
+                    Seña confirmada automáticamente. El comprobante queda
+                    disponible para revisión.
+                  </p>
+                )}
                 <div class="appointment-card-footer">
                   <span
                     class={`status-badge status-${appointmentStatusClass(appointment.status)}`}

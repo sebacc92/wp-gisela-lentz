@@ -66,8 +66,9 @@ export default component$(() => {
           </li>
           <li>
             <strong>Señas:</strong> comprobante que la persona decida enviar,
-            estado de su revisión, vencimiento de la pre-reserva y registro de
-            la confirmación efectuada por personal autorizado.
+            lectura estructurada de sus datos visibles, hash del archivo,
+            evidencia técnica, estado de su revisión, vencimiento de la
+            pre-reserva y registro de su confirmación automática o manual.
           </li>
           <li>
             <strong>Datos técnicos y de seguridad:</strong> identificadores de
@@ -119,7 +120,8 @@ export default component$(() => {
           <li>identificar contactos y mantener su información actualizada;</li>
           <li>solicitar, asignar, confirmar, reprogramar o cancelar turnos;</li>
           <li>
-            gestionar pre-reservas, señas y su revisión administrativa humana;
+            gestionar pre-reservas, señas, su comprobación administrativa básica
+            y su revisión humana cuando corresponda;
           </li>
           <li>
             enviar confirmaciones o recordatorios administrativos cuando
@@ -199,17 +201,47 @@ export default component$(() => {
         <h2>8. Comprobantes y señas</h2>
         <p>
           Cuando corresponda, la persona puede enviar voluntariamente por
-          WhatsApp un comprobante relacionado con una seña. La plataforma
-          registra el mensaje y las referencias técnicas asociadas para que
-          personal autorizado pueda revisar el comprobante y registrar el
-          resultado. El archivo se obtiene de Meta cuando se visualiza y no se
-          guarda como archivo en el almacenamiento de Supabase.
+          WhatsApp una imagen o un PDF de un comprobante relacionado con una
+          seña. Si la opción de lectura de medios con inteligencia artificial
+          está habilitada, el archivo se envía temporalmente a OpenAI con{" "}
+          <code>store=false</code> para extraer el monto, la moneda, la fecha,
+          el destino, el titular y el identificador de la operación que sean
+          visibles.
         </p>
         <p>
-          La revisión es humana: la plataforma no analiza ni valida
-          automáticamente el comprobante y no procesa ni acredita la
-          transferencia. Antes de enviarlo, recomendamos ocultar la información
-          que no sea necesaria para identificar la operación.
+          <code>store=false</code> evita que Responses conserve estado de la
+          solicitud. Según la política vigente de OpenAI, los registros de
+          prevención de abuso pueden contener datos de la solicitud y
+          conservarse por hasta 30 días, salvo que el proyecto tenga habilitado
+          Zero Data Retention. Los datos enviados a la API no se usan para
+          entrenar modelos por defecto. La política actual puede consultarse en
+          los{" "}
+          <a
+            href="https://platform.openai.com/docs/models/default-usage-policies-by-endpoint"
+            target="_blank"
+            rel="noreferrer"
+          >
+            controles de datos de OpenAI
+          </a>
+          .
+        </p>
+        <p>
+          El modelo sólo extrae datos: no valida el comprobante, no concilia la
+          operación con un banco y no acredita la transferencia. Una regla
+          básica local y transaccional en la base de datos puede utilizar esa
+          lectura para confirmar automáticamente únicamente la pre-reserva
+          exacta asociada al mensaje si el archivo es legible y coinciden el
+          monto exacto y el alias o titular. Moneda, fecha e identificador son
+          auxiliares y no bloquean. Los casos que no cumplen la regla o llegan
+          tarde quedan para revisión manual; Gisela puede revisar y, si
+          corresponde, cancelar después un turno autoconfirmado.
+        </p>
+        <p>
+          La plataforma conserva la evidencia técnica, la lectura estructurada,
+          el hash del archivo y los registros de auditoría, pero no persiste
+          localmente los bytes de la imagen o del PDF. Antes de enviarlo,
+          recomendamos ocultar la información que no sea necesaria para
+          identificar la operación.
         </p>
       </section>
 
@@ -236,10 +268,16 @@ export default component$(() => {
             asistente administrativo opcional. Recibe una pregunta canónica
             sobre horarios o ubicación, la dirección y las reglas estructuradas
             de horarios del consultorio, y un identificador técnico seudónimo.
-            No recibe el mensaje original, nombre o teléfono del paciente,
-            cobertura, turnos, comprobantes ni información clínica. La solicitud
-            se realiza con almacenamiento desactivado y las consultas dudosas se
-            derivan a una persona.
+            En este uso no recibe el mensaje original, nombre o teléfono del
+            paciente, cobertura, turnos, comprobantes ni información clínica. Si
+            se habilita por separado la lectura de medios, puede recibir
+            temporalmente una nota de voz para transcribirla o una imagen o un
+            PDF de un comprobante para extraer los datos indicados en la sección
+            anterior. Las solicitudes a Responses se realizan con{" "}
+            <code>store=false</code>; las notas usan el endpoint de
+            transcripción de audio, que según la tabla vigente del proveedor no
+            conserva estado de aplicación ni logs de prevención de abuso. Las
+            consultas dudosas se derivan a una persona.
           </li>
           <li>
             <strong>Google:</strong> únicamente cuando el consultorio habilita

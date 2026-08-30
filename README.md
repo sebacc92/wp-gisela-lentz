@@ -14,8 +14,8 @@ WhatsApp jamás lo lee ni lo envía. Ver [odontograma](docs/odontograma.md).
 
 - Inicio centrado en el próximo turno, comprobantes para revisar, reservas que
   esperan seña y mensajes sin leer.
-- Agenda diaria con pre-reservas, confirmación humana de la seña, cancelación,
-  reprogramación, atención y ausencia.
+- Agenda diaria con pre-reservas, autoconfirmación básica opcional de la seña,
+  revisión manual, cancelación, reprogramación, atención y ausencia.
 - Pacientes administrativos, búsqueda por teléfono normalizado y relación con
   turnos y conversaciones.
 - Cobertura IOMA o Particular por paciente, con duración automática configurable
@@ -34,6 +34,22 @@ WhatsApp jamás lo lee ni lo envía. Ver [odontograma](docs/odontograma.md).
 
 El flujo de reservas y señas está documentado en
 [docs/reservas-y-senas.md](docs/reservas-y-senas.md).
+
+Si la lectura de medios con IA está habilitada, la imagen o el PDF de un
+comprobante se envía temporalmente a OpenAI con `store=false` para extraer sólo
+los datos visibles: monto, moneda, fecha, destino, titular e identificador de la
+operación. El modelo no valida el comprobante ni concilia la transferencia con
+un banco. `store=false` evita crear estado de aplicación en Responses; según la
+política vigente del proveedor, los registros de prevención de abuso pueden
+conservar contenido hasta 30 días salvo que el proyecto tenga Zero Data
+Retention. Una regla básica local y transaccional en PostgreSQL puede confirmar
+automáticamente únicamente la pre-reserva exacta asociada al mensaje. Se
+exigen sólo legibilidad, monto exacto y coincidencia de alias o titular; moneda,
+fecha e identificador se guardan como datos auxiliares y no bloquean. Se
+conservan la evidencia técnica, la lectura estructurada, el hash del archivo y
+la auditoría; la plataforma no persiste localmente sus bytes. Los comprobantes que no cumplen la
+regla o llegan tarde quedan para revisión manual, y Gisela puede revisar o
+cancelar después cualquier turno autoconfirmado.
 
 ## Marca
 
@@ -156,12 +172,20 @@ WHATSAPP_TEST_ALLOWED_NUMBERS=
 - `WHATSAPP_WEBHOOK_MAX_BYTES`: límite incremental del webhook (3 MiB por
   defecto); evita bufferizar bodies no autenticados sin cota.
 - `OPENAI_API_KEY`: secreto exclusivo de Supabase Edge Functions para el
-  asistente administrativo opcional. El modelo queda fijado server-side en
-  `gpt-5.6-luna`; la función no envía el mensaje original, usa `store=false` y
-  sólo puede ejecutarse si están activos `OPENAI_ADMINISTRATIVE_ENABLED`,
-  `ai_enabled` y `WHATSAPP_AUTOMATIONS_ENABLED`. Los horarios provienen de las
-  reglas estructuradas de agenda y la ubicación de los datos del consultorio;
-  no existe un prompt/conocimiento libre editable.
+  asistente administrativo opcional. Las respuestas administrativas y la
+  lectura estructurada de comprobantes usan `gpt-5.6-luna`; las notas de voz
+  usan el modelo de transcripción `gpt-transcribe`. Las solicitudes a Responses
+  usan `store=false`; `/v1/audio/transcriptions` no expone ese parámetro y la
+  documentación vigente indica que no conserva estado de aplicación ni logs de
+  prevención de abuso. Sólo pueden ejecutarse si están activos
+  `OPENAI_ADMINISTRATIVE_ENABLED`, `ai_enabled` y
+  `WHATSAPP_AUTOMATIONS_ENABLED`. Los horarios provienen de las reglas
+  estructuradas de agenda y la ubicación de los datos del consultorio; no
+  existe un prompt/conocimiento libre editable.
+- La opción independiente `ai_media_enabled` permite leer notas de voz y medios.
+  Para comprobantes, se aplica el procesamiento temporal y la regla básica de
+  autoconfirmación descriptos arriba; habilitar el asistente administrativo no
+  habilita por sí solo la lectura de medios.
 - Los flags solo aceptan `true` o `false`. Si faltan o están mal escritos, el
   sistema asume automatizaciones apagadas y mantiene activo el modo general de
   prueba.

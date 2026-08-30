@@ -21,6 +21,10 @@ const BUSINESS_TOKEN = "vault-token-for-reminder-account";
 Deno.env.set("WHATSAPP_GRAPH_API_VERSION", "v26.0");
 Deno.env.set("WHATSAPP_TEST_MODE", "false");
 Deno.env.set("WHATSAPP_AUTOMATIONS_ENABLED", "true");
+Deno.env.set(
+  "WHATSAPP_RECIPIENT_FINGERPRINT_SECRET",
+  "reminder-account-test-fingerprint-secret",
+);
 
 function credentials(accountId = ACCOUNT_ID): Record<string, unknown> {
   return {
@@ -76,7 +80,7 @@ function reminderClient(input: {
   };
   const templatePolicy = {
     key: "appointment_reminder_24h",
-    meta_name: "appointment_reminder_24h",
+    meta_name: "gisela_appointment_reminder_24h_v2",
     category: "UTILITY",
     meta_status: "APPROVED",
     quality_rating: "GREEN",
@@ -91,6 +95,18 @@ function reminderClient(input: {
 
   return {
     rpc: async (name: string, parameters: Record<string, unknown>) => {
+      if (name === "resolve_whatsapp_coexistence_recipient") {
+        return {
+          data: [
+            {
+              recipient_value: "5491100000001",
+              identity_kind: "wa_id",
+              identity_provenance: "recent_inbound",
+            },
+          ],
+          error: null,
+        };
+      }
       assert.equal(name, "resolve_whatsapp_account_credentials");
       input.rpcCalls.push(parameters);
       if (input.rpcError) {
@@ -166,12 +182,11 @@ function deliveryInput(client: SupabaseClient, fetchImpl: typeof fetch) {
       whatsapp_opt_out_at: null,
       whatsapp_consent_status: "opted_in" as const,
     },
-    professionalName: "Gisela Lentz",
     template: {
       key: "appointment_reminder_24h",
-      meta_name: "appointment_reminder_24h",
+      meta_name: "gisela_appointment_reminder_24h_v2",
       language_code: "es_AR",
-      body_preview: "Recordatorio de turno odontológico.",
+      body_preview: "Te recuerdo tu turno de mañana.",
     },
     businessTimezone: "America/Argentina/Buenos_Aires",
     fetchImpl,
@@ -183,12 +198,14 @@ Deno.test("reminder usa cuenta, phone y business token exactos", async () => {
   const insertedMessages: Array<Record<string, unknown>> = [];
   let graphAuthorization = "";
   let graphUrl = "";
+  let graphBody: Record<string, unknown> = {};
   const client = reminderClient({ rpcCalls, insertedMessages });
   const result = await deliverAppointmentReminder(
     deliveryInput(client, async (input, init) => {
       graphUrl = String(input);
       graphAuthorization =
         new Headers(init?.headers).get("Authorization") ?? "";
+      graphBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(
         JSON.stringify({ messages: [{ id: "wamid.reminder.1" }] }),
         { status: 200 },
@@ -202,6 +219,16 @@ Deno.test("reminder usa cuenta, phone y business token exactos", async () => {
     `https://graph.facebook.com/v26.0/${PHONE_NUMBER_ID}/messages`,
   );
   assert.equal(graphAuthorization, `Bearer ${BUSINESS_TOKEN}`);
+  const template = graphBody.template as {
+    name?: string;
+    components?: Array<{ type?: string; parameters?: unknown[] }>;
+  };
+  assert.equal(template.name, "gisela_appointment_reminder_24h_v2");
+  const bodyComponent = template.components?.find(
+    (component) => component.type === "body",
+  );
+  assert.equal(bodyComponent?.parameters?.length, 3);
+  assert.equal(JSON.stringify(graphBody).includes("Gisela Lentz"), false);
   assert.equal(insertedMessages.length, 1);
   assert.equal(insertedMessages[0].coexistence_account_id, ACCOUNT_ID);
   assert.equal(rpcCalls.length, 2);

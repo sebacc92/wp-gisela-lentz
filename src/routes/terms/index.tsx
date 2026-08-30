@@ -47,9 +47,12 @@ export default component$(() => {
         </ul>
         <p>
           Elegir un horario genera una pre-reserva temporal, no un turno
-          confirmado. Enviar un comprobante tampoco acredita automáticamente un
-          pago: una persona autorizada debe revisarlo y confirmar la seña. La
-          confirmación definitiva depende del aviso que emita el servicio.
+          confirmado. Si el comprobante permite leer el monto exacto y el
+          destinatario esperado, el sistema puede confirmar el turno
+          automáticamente. Esa lectura no acredita que el dinero haya ingresado
+          al banco: el comprobante puede revisarse después y el turno puede
+          cancelarse manualmente si existe una diferencia. La confirmación
+          vigente es la que informa el servicio por WhatsApp.
         </p>
         <p>
           Si la pre-reserva vence antes de recibir el comprobante, el horario

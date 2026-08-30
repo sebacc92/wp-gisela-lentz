@@ -68,8 +68,9 @@ export const ManualContent = component$<ManualContentProps>(
               <h3>Atención automática</h3>
               <p>
                 Cuando está activa, ayuda a orientar pedidos simples de turnos.
-                No reemplaza tu criterio: las urgencias, comprobantes y pedidos
-                complejos quedan para revisión humana.
+                También puede autoconfirmar una pre-reserva con una comprobación
+                básica si habilitaste la lectura de medios. Las urgencias, los
+                casos dudosos y los pedidos complejos quedan para tu revisión.
               </p>
             </div>
             <div>
@@ -136,19 +137,41 @@ export const ManualContent = component$<ManualContentProps>(
           <span class="eyebrow">Señas</span>
           <h2>Qué hacer con un comprobante</h2>
           <p>
-            Una reserva puede quedar como <strong>Esperando seña</strong>.
-            Cuando llega una imagen o documento, el sistema lo marca para que lo
-            revises; no confirma el pago por sí solo.
+            Una reserva puede quedar como <strong>Esperando seña</strong>. Si
+            habilitaste la lectura de medios, una imagen o un PDF se envía
+            temporalmente a OpenAI con <code>store=false</code> para extraer
+            monto, moneda, fecha, destino, titular e identificador de la
+            operación. El modelo no valida el comprobante ni concilia la
+            transferencia con un banco.
+          </p>
+          <p>
+            <code>store=false</code> evita que Responses conserve estado de la
+            solicitud. OpenAI puede mantener registros de prevención de abuso
+            con contenido por hasta 30 días, salvo que el proyecto tenga Zero
+            Data Retention habilitado.
           </p>
           <ol class="manual-steps">
-            <li>Abrí la conversación y comprobá el turno asociado.</li>
-            <li>Revisá el comprobante con tus propios criterios.</li>
             <li>
-              Elegí <strong>Confirmar seña</strong> sólo si corresponde. Si no
-              corresponde, no lo confirmes: hablá con la persona y actualizá o
-              cancelá el turno según sea necesario.
+              Una regla básica local de la base de datos puede autoconfirmar
+              sólo la pre-reserva exacta asociada al mensaje cuando el archivo
+              es legible y se leen el monto exacto y el alias o titular. Moneda,
+              fecha e identificador quedan como datos auxiliares y no bloquean.
+            </li>
+            <li>
+              Revisá los casos que no cumplen la regla. Si el comprobante llegó
+              después del vencimiento, buscá un nuevo horario y generá otra
+              pre-reserva: el turno vencido no se puede confirmar.
+            </li>
+            <li>
+              Podés revisar cualquier turno autoconfirmado y cancelarlo después
+              si encontrás una diferencia.
             </li>
           </ol>
+          <p class="manual-callout">
+            La plataforma conserva la lectura extraída, el hash, la evidencia
+            técnica y la auditoría, pero no persiste localmente los bytes de la
+            imagen o del PDF.
+          </p>
         </section>
 
         <section id="calendario" class="manual-section">
@@ -175,7 +198,9 @@ export const ManualContent = component$<ManualContentProps>(
             La atención automática guía pasos repetitivos, como pedir un turno,
             consultar horarios o iniciar una reprogramación. Se detiene cuando
             una persona toma la conversación, cuando hay una urgencia o cuando
-            llega un comprobante.
+            un comprobante necesita revisión manual. Un comprobante que cumple
+            la regla básica puede confirmar automáticamente la pre-reserva
+            exacta.
           </p>
           <p>
             Antes de activarla para uso cotidiano, revisá horarios, servicios,
@@ -217,12 +242,13 @@ export const ManualContent = component$<ManualContentProps>(
               <h3>El comprobante no se reconoció</h3>
               <p>
                 <strong>Qué significa:</strong> puede haber llegado fuera de la
-                reserva o sin un turno asociado. <strong>Qué revisar:</strong>
-                la conversación, el turno y el archivo recibido.
-                <strong> Qué hacer:</strong> buscá la conversación y no
-                confirmes una seña sin revisarla.{" "}
-                <strong>Cuándo llamar a Sebastián:</strong> si el archivo no
-                aparece o el turno correcto no se puede encontrar.
+                reserva, ser ilegible, no cumplir la regla básica o no tener un
+                turno asociado. <strong>Qué revisar:</strong> la conversación,
+                el turno y el archivo recibido. <strong> Qué hacer:</strong>{" "}
+                revisá el caso; si la reserva sigue activa, confirmá sólo si
+                corresponde. Si venció, buscá un nuevo horario y generá otra
+                pre-reserva. <strong>Cuándo llamar a Sebastián:</strong> si el
+                archivo no aparece o el turno correcto no se puede encontrar.
               </p>
             </article>
             <article>

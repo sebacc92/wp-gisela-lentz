@@ -13,8 +13,13 @@ Las migraciones versionadas están en `supabase/migrations/`.
 - `services`: motivos de turno editables. Su duración histórica se conserva por
   compatibilidad, pero no decide la duración de las reservas de Gisela.
 - `availability_rules`, `availability_exceptions`: franjas semanales y bloqueos/aperturas excepcionales.
-- `appointments`: turnos con snapshot de cobertura y duración, vencimiento de la
-  pre-reserva y estado/auditoría de la seña.
+- `appointments`: turnos con snapshot de cobertura, duración y datos de seña
+  informados (monto, alias y titular), vencimiento de la pre-reserva y
+  estado/auditoría de la seña, incluido el actor y la versión de política cuando
+  la confirmación es automática.
+- `automated_deposit_proof_results`: ledger append-only e idempotente que une
+  turno, mensaje, hash SHA-256, lectura estructurada, política y resultado de
+  cada comprobante procesado automáticamente.
 - `automation_sessions`: estado durable del bot.
 - `reminders`: cola durable de recordatorios.
 - `message_templates`, `quick_replies`: textos configurables.
@@ -38,21 +43,33 @@ Los RPC nuevos son:
 - `create_service_appointment`: toma la cobertura del paciente, crea una
   pre-reserva y revalida horario semanal, bloqueos, anticipación, buffer y
   solapamientos antes de insertar.
-- `record_deposit_proof`: asocia un mensaje de imagen/documento sin afirmar que
-  el pago sea válido ni confirmar automáticamente el turno.
+- `record_deposit_proof`: conserva la asociación manual de un mensaje de
+  imagen/documento sin afirmar que el pago sea válido.
+- `process_automated_deposit_proof`: RPC exclusiva de `service_role`; bloquea el
+  turno exacto, revalida mensaje, contacto, pre-reserva y regla básica, y
+  devuelve `confirmed`, `review`, `late` o `already_confirmed`. Exige legibilidad,
+  monto exacto y coincidencia de alias o titular; moneda, fecha e identificador
+  quedan sólo como datos auxiliares. Compara contra los datos guardados en la
+  pre-reserva, registra evidencia y auditoría y es idempotente por mensaje. El
+  hash queda para trazabilidad, no como barrera antifraude. Si el archivo llegó
+  antes del vencimiento pero terminó de procesarse después, sólo recupera el
+  horario cuando todavía está libre.
 - `confirm_appointment_deposit`: confirma seña y turno en una acción auditada.
 - `reschedule_service_appointment`: vuelve a tomar la cobertura actual del
   paciente, recalcula la duración y revalida antes de mover el turno. Los
-  registros históricos conservan su snapshot original hasta que se
-  reprograman.
+  registros históricos conservan su snapshot de cobertura; una pre-reserva
+  pendiente conserva siempre los datos de seña que ya se le informaron al
+  paciente.
 
 Los RPC históricos `get_available_slots`, `create_appointment` y `reschedule_appointment` siguen disponibles para la automatización existente. Ahora también validan la agenda en backend. Las reservas y reprogramaciones toman un advisory lock por profesional; junto con la exclusión GiST evita carreras y doble reserva.
 
 `app_settings` centraliza nombre, subtítulo, contacto, zona horaria, duraciones
-por cobertura, monto/datos de seña, tiempo de pre-reserva, buffer, anticipación y
-mensajes configurables. Los datos que Gisela todavía no informó permanecen
-vacíos; hoy el email es el único que sigue así porque el contacto es únicamente
-por WhatsApp.
+por cobertura, monto/datos de seña, tiempo de pre-reserva, buffer, anticipación,
+mensajes configurables y los switches `ai_enabled`/`ai_media_enabled`. La lectura
+de comprobantes requiere ambos, además de
+`OPENAI_ADMINISTRATIVE_ENABLED=true` y la automatización global activa. Los datos
+que Gisela todavía no informó permanecen vacíos; hoy el email es el único que
+sigue así porque el contacto es únicamente por WhatsApp.
 
 ## Configuración operativa del consultorio
 
@@ -81,8 +98,8 @@ conversaciones ni credenciales, y todo puede editarse después desde
 
 Las urgencias no son un motivo reservable. Las agenda y cotiza ella de forma
 particular, así que `requiresPriority` en
-`supabase/functions/_shared/incoming-message.ts` las deriva a atención humana
-con prioridad, en singular y en plural.
+`supabase/functions/_shared/incoming-message.ts` las deriva a atención manual
+con prioridad.
 
 ## Seguridad
 

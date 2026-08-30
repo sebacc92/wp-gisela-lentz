@@ -1,0 +1,18 @@
+{
+  "lint": {
+    "include": ["supabase/functions/"],
+    "rules": {
+      // Edge Functions pin Supabase runtime dependencies in each npm: import.
+      // Several fetch/RPC test doubles intentionally implement async contracts.
+      // Control-character regexes are deliberate input and filename sanitizers.
+      // Type checking is the required guard for unresolved/free symbols; the
+      // existing Edge tree still has a small amount of unused-symbol debt.
+      "exclude": [
+        "no-control-regex",
+        "no-import-prefix",
+        "no-unused-vars",
+        "require-await",
+      ],
+    },
+  },
+}

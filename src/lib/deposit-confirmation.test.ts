@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { confirmDepositAndNotify } from "./deposit-confirmation.ts";
+import {
+  confirmDepositAndNotify,
+  renderDepositConfirmationMessage,
+} from "./deposit-confirmation.ts";
 
 function confirmationClient(options?: {
   rpcFails?: boolean;
   sendThrows?: boolean;
+  template?: string;
   sentBody?: (body: Record<string, unknown>) => void;
 }): SupabaseClient {
   const query = {
@@ -22,7 +26,8 @@ function confirmationClient(options?: {
       return {
         data: {
           deposit_confirmed_message_template:
-            "Confirmado para el {date} a las {time}.",
+            options?.template ??
+            "Confirmé tu turno para el {date} a las {time}.",
         },
         error: null,
       };
@@ -86,4 +91,15 @@ test("si la RPC falla no informa una confirmación inexistente", async () => {
   );
 
   assert.deepEqual(result, { confirmed: false, notified: false });
+});
+
+test("una plantilla inválida usa una confirmación segura sin placeholders", () => {
+  assert.equal(
+    renderDepositConfirmationMessage(
+      "Confirmé tu turno: {date} {placeholder_desconocido}",
+      "viernes 14 de agosto",
+      "10:30",
+    ),
+    "¡Listo! Confirmé tu turno para el viernes 14 de agosto a las 10:30.",
+  );
 });

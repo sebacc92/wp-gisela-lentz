@@ -91,7 +91,8 @@ function graphFetch(options: {
       );
     }
     const body = options.body ?? new Uint8Array([1, 2, 3, 4]);
-    return new Response(body, {
+    const responseBody = Uint8Array.from(body);
+    return new Response(responseBody.buffer, {
       status: options.mediaStatus ?? 200,
       headers: {
         "content-type": options.mediaContentType ?? "audio/ogg",

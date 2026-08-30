@@ -2,8 +2,10 @@
 
 La automatización y todos los cambios de turnos son deterministas. Cada
 conversación tiene una fila durable en `automation_sessions`; los cambios
-críticos se confirman contra Postgres y no dependen de un modelo. Existe una
-asistencia opcional y acotada para redactar únicamente horarios o ubicación.
+críticos se confirman contra Postgres y no dependen de la decisión de un
+modelo. La IA opcional puede redactar respuestas administrativas y transcribir
+los datos visibles de un comprobante, pero una regla fija decide si corresponde
+confirmar la seña.
 
 ```text
 idle
@@ -12,6 +14,9 @@ idle
  │                  └─ servicio ─► selecting_slot
  │                                   └─ horario ─► confirming_appointment
  │                                                    ├─ confirmar ─► pre-reserva + mensaje de seña
+ │                                                    │                 └─ imagen/PDF ─► validación básica
+ │                                                    │                                      ├─ válido ─► turno confirmado
+ │                                                    │                                      └─ no válido/tardío ─► human_handoff
  │                                                    ├─ otro ─► selecting_slot
  │                                                    └─ volver ─► idle
  ├─ Ver mis turnos ─► reviewing_appointments
@@ -26,13 +31,14 @@ idle
  │               └─ confirming_cancellation ─► turno cancelado
  ├─ Horarios y ubicación ─► información configurada
  │                           └─ IA administrativa opcional o human_handoff
- └─ Hablar con Gisela ─► human_handoff
+ └─ Otra consulta ─► human_handoff
 ```
 
 Estados adicionales:
 
-- `out_of_hours`: envía una sola respuesta configurable y no vuelve a responder
-  durante el cooldown.
+- `out_of_hours`: envía una sola respuesta configurable por cooldown. El
+  cooldown evita repetir ese aviso; no descarta ni deja sin procesar los
+  mensajes siguientes.
 - `human_handoff`: deja `automation_mode=manual` y `needs_human=true`.
 - una urgencia marca además `priority=true`, envía un aviso administrativo
   configurable y no ofrece diagnóstico ni tratamiento.
@@ -41,7 +47,7 @@ Estados adicionales:
 
 1. La primera respuesta es sólo el saludo configurado. Después el bot recopila
    de forma determinista y de a un dato por mensaje: nombre y apellido, si ya se
-   atendió con Gisela, teléfono de contacto y cobertura. Si el teléfono del
+   atendió con ella antes, teléfono de contacto y cobertura. Si el teléfono del
    remitente está disponible, puede confirmarlo con **Este WhatsApp**; si no,
    escribe otro número con código de área.
 2. Se muestran únicamente servicios activos; el servicio expresa el motivo.
@@ -49,22 +55,35 @@ Estados adicionales:
    configuración y `get_available_slots_for_coverage` los aplica realmente.
 4. Al confirmar el horario, `create_service_appointment` toma un lock, vuelve a
    validar y recién entonces crea una pre-reserva temporal.
-5. Sólo después de crearla se envía el mensaje configurable con monto, alias y
-   titular. El turno continúa en “Esperando seña”.
-6. Una imagen/documento recibido durante la reserva pasa a “Comprobante
-   recibido” y a revisión humana. Nunca se valida el pago automáticamente.
-7. Si otro pedido ocupó el horario, se informa de forma simple y se ofrecen
+5. La pre-reserva guarda una copia del monto, alias y titular vigentes, y esos
+   mismos datos se envían en el mensaje configurable. Un cambio posterior en
+   Configuración no altera lo que se le pidió transferir a ese paciente. El
+   turno continúa en “Esperando seña”.
+6. Una imagen JPEG/PNG o un PDF sólo se interpreta como comprobante cuando la
+   sesión está en `waiting_deposit` y tiene una pre-reserva asociada. La IA
+   transcribe legibilidad, monto, moneda, fecha, alias o destino, titular e
+   identificador de operación; no decide si el pago es válido.
+7. La regla fija aprueba cuando el comprobante es legible, el monto coincide
+   exactamente y coincide el alias o el titular guardado en esa pre-reserva.
+   Moneda, fecha e identificador de operación se conservan sólo como datos
+   auxiliares: no bloquean la confirmación. Postgres vuelve a comprobar los tres
+   datos esenciales y confirma el turno automáticamente dentro de una
+   transacción.
+8. Si otro pedido ocupó el horario, se informa de forma simple y se ofrecen
    alternativas.
 
-La aprobación ocurre exclusivamente cuando una persona toca **Confirmar seña**.
-Un comprobante tardío se guarda y deriva a revisión, pero nunca revive ni
-confirma una reserva vencida.
+Un comprobante no legible, inválido, no asociado, tardío o cuyo procesamiento
+falla deriva a revisión manual. Gisela también conserva los controles para
+confirmar o cancelar manualmente. Un comprobante tardío se guarda, pero nunca
+revive ni confirma una reserva vencida.
 
 ## Reprogramación y cancelación
 
 - Sólo se consultan reservas/turnos futuros activos del mismo contacto.
 - Si hay varios, el paciente debe seleccionar uno.
 - El turno original se conserva hasta confirmar el nuevo horario.
+- Si era una pre-reserva pendiente, conserva monto, alias, titular y vencimiento
+  ya informados, y continúa en `waiting_deposit` para poder leer el comprobante.
 - Una cancelación siempre requiere confirmación inequívoca.
 - Los botones de un recordatorio validan que el turno siga activo y pertenezca al
   contacto antes de cambiarlo.
@@ -73,9 +92,11 @@ confirma una reserva vencida.
 
 - Una respuesta manual pausa el bot antes del envío externo.
 - `Reanudar automatización` limpia `needs_human` y la prioridad ya atendida.
-- Después de dos entradas inválidas, el bot deriva a Gisela.
-- Imágenes y documentos pasan a revisión humana. Si existe una pre-reserva
-  vigente se asocian como posible comprobante, sin OCR ni validación automática.
+- Después de dos entradas inválidas, el bot pasa la conversación a atención
+  manual.
+- La lectura automática de imágenes y PDF sólo se intenta en
+  `waiting_deposit`. Fuera de ese estado, o ante un archivo no legible o un
+  fallo de lectura, la conversación pasa a revisión manual.
 - Palabras de urgencia, dolor intenso, sangrado, emergencia, accidente o trauma
   marcan prioridad y detienen el flujo de reserva.
 - La conversación prioritaria queda visible en rojo en la bandeja.
@@ -84,7 +105,8 @@ confirma una reserva vencida.
 
 La comprobación usa la zona horaria configurada, franjas semanales y excepciones.
 Un bloqueo vigente prevalece sobre el horario habitual; una apertura excepcional
-puede habilitarlo. El cooldown evita repetir el aviso ante cada mensaje.
+puede habilitarlo. El cooldown evita repetir el aviso ante cada mensaje, pero no
+impide que el flujo procese las entradas posteriores.
 
 ## Controles globales
 
@@ -92,12 +114,23 @@ puede habilitarlo. El cooldown evita repetir el aviso ante cada mensaje.
   handoffs, respuestas urgentes o recordatorios automáticos. Webhook, bandeja y
   respuestas manuales siguen disponibles.
 - `app_settings.ai_enabled=false`: no se llama a OpenAI aunque la automatización
-  general esté activa. Además requiere el kill switch backend
-  `OPENAI_ADMINISTRATIVE_ENABLED=true`. Cuando los tres controles están activos,
-  sólo se envía una pregunta canónica sobre horarios/ubicación, los datos
-  estructurados del consultorio y un identificador seudónimo; nunca el texto
-  original ni datos del paciente. La solicitud usa `store=false` y el modelo
-  fijo `gpt-5.6-luna`.
+  general esté activa. Toda asistencia requiere además el kill switch backend
+  `OPENAI_ADMINISTRATIVE_ENABLED=true`. Las respuestas administrativas y los
+  comprobantes usan `gpt-5.6-luna`; el audio usa `gpt-transcribe`.
+- La lectura de audio, imagen o PDF requiere también
+  `app_settings.ai_media_enabled=true`. Por lo tanto, el comprobante automático
+  sólo funciona con `WHATSAPP_AUTOMATIONS_ENABLED`, `ai_enabled`,
+  `ai_media_enabled` y `OPENAI_ADMINISTRATIVE_ENABLED` activos. Si falla alguno,
+  el archivo no se interpreta y queda para revisión manual.
+- Las respuestas de horarios/ubicación sólo envían una pregunta canónica, los
+  datos estructurados del consultorio y un identificador seudónimo. Para un
+  comprobante se envía el adjunto necesario para transcribir sus datos. Las
+  solicitudes a Responses usan `store=false`. Esto evita estado de aplicación
+  en Responses, pero no sustituye Zero Data Retention: por defecto el proveedor
+  puede conservar registros de prevención de abuso hasta 30 días. Las notas de
+  voz usan `/v1/audio/transcriptions`, para el que la tabla vigente del proveedor
+  indica que no hay retención de estado de aplicación ni de logs de prevención
+  de abuso.
 - `WHATSAPP_TEST_MODE=true`: todo destinatario debe aparecer en
   `WHATSAPP_TEST_ALLOWED_NUMBERS`, incluidas respuestas manuales y recordatorios.
 - `Menú`, `inicio` o `volver al menú` reinician el flujo sin escribir cambios

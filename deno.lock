@@ -6682,6 +6682,7 @@
         "npm:@types/node@24.10.0",
         "npm:autoprefixer@^10.4.14",
         "npm:cssnano@^8.0.4",
+        "npm:deno@2.9.6",
         "npm:eslint-plugin-qwik@^2.0.0-beta.38",
         "npm:eslint@10.0.3",
         "npm:globals@17.0.0",

@@ -6,6 +6,8 @@ import {
   processIncomingMessage,
   requiresHumanReview,
   requiresPriority,
+  shouldDispatchIncomingAutomation,
+  whatsappConsentDecisionFromText,
 } from "./incoming-message.ts";
 import type { NormalizedIncomingMessage } from "./incoming-message.ts";
 
@@ -226,6 +228,86 @@ function textMessage(body: string): NormalizedIncomingMessage {
   };
 }
 
+test("una transcripción sólo aplica decisiones explícitas de consentimiento", () => {
+  assert.equal(
+    whatsappConsentDecisionFromText("No quiero recibir más mensajes"),
+    "opt_out",
+  );
+  assert.equal(
+    whatsappConsentDecisionFromText("Por favor quiero darme de baja"),
+    "opt_out",
+  );
+  assert.equal(
+    whatsappConsentDecisionFromText("Acepto recibir recordatorios de turnos"),
+    "opt_in",
+  );
+  assert.equal(
+    whatsappConsentDecisionFromText(
+      "No quiero recibir más mensajes promocionales, pero confirmame el turno",
+    ),
+    null,
+  );
+});
+
+function newInboundMediaClient(): {
+  client: SupabaseClient;
+  rpcCalls: string[];
+} {
+  const rpcCalls: string[] = [];
+  const contact = {
+    id: "contact-1",
+    phone_e164: "+5492291414102",
+    whatsapp_id: "5492291414102",
+    whatsapp_user_id: null,
+    name: "Paciente",
+    coverage: null,
+    is_existing_patient: false,
+    alternate_phone_e164: null,
+  };
+  const client = {
+    from(table: string) {
+      const query = {
+        select() {
+          return this;
+        },
+        eq() {
+          return this;
+        },
+        insert() {
+          return this;
+        },
+        async maybeSingle() {
+          if (table !== "contacts") throw new Error("UNEXPECTED_QUERY");
+          return { data: contact, error: null };
+        },
+        async single() {
+          if (table !== "messages") throw new Error("UNEXPECTED_QUERY");
+          return { data: { id: "message-1" }, error: null };
+        },
+      };
+      return query;
+    },
+    async rpc(name: string) {
+      rpcCalls.push(name);
+      if (name === "get_or_create_open_conversation") {
+        return {
+          data: {
+            id: "conversation-1",
+            contact_id: "contact-1",
+            automation_mode: "auto",
+          },
+          error: null,
+        };
+      }
+      if (name === "pause_whatsapp_automation_for_inbound_handoff") {
+        return { data: true, error: null };
+      }
+      throw new Error(`UNEXPECTED_RPC:${name}`);
+    },
+  } as unknown as SupabaseClient;
+  return { client, rpcCalls };
+}
+
 test("urgencies reach Gisela in singular and plural", () => {
   for (const body of [
     "tengo una urgencia",
@@ -250,7 +332,13 @@ test("an ordinary booking request keeps using the automated flow", () => {
   }
 });
 
-test("a voice note never continues through the automated flow alone", () => {
+test("clinical content requires review even when it is not an urgency", () => {
+  const message = textMessage("Quería consultar por una medicación y la dosis");
+  assert.equal(requiresPriority(message), false);
+  assert.equal(requiresHumanReview(message), true);
+});
+
+test("sin transcripción, una nota de voz nunca continúa sola", () => {
   const audio: NormalizedIncomingMessage = {
     ...textMessage(""),
     type: "audio",
@@ -261,4 +349,100 @@ test("a voice note never continues through the automated flow alone", () => {
   // Sin transcribir no hay texto que evaluar, así que la prioridad no se
   // infiere de un audio: la marca una persona desde la bandeja.
   assert.equal(requiresPriority(audio), false);
+});
+
+test("un adjunto pausado sigue despachando el worker aunque la IA no pueda leerlo", () => {
+  assert.equal(
+    shouldDispatchIncomingAutomation({
+      automationsEnabled: true,
+      optedOut: false,
+      humanReview: true,
+      priority: false,
+      owner: false,
+      readableMedia: false,
+      humanReviewPauseOwned: true,
+      automationMode: "manual",
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldDispatchIncomingAutomation({
+      automationsEnabled: true,
+      optedOut: false,
+      humanReview: true,
+      priority: false,
+      owner: false,
+      readableMedia: false,
+      humanReviewPauseOwned: false,
+      automationMode: "auto",
+    }),
+    false,
+  );
+});
+
+test("con OPENAI apagado, el inbound se pausa pero no queda sin despachar", async () => {
+  const previous = process.env.OPENAI_ADMINISTRATIVE_ENABLED;
+  process.env.OPENAI_ADMINISTRATIVE_ENABLED = "false";
+  try {
+    const { client, rpcCalls } = newInboundMediaClient();
+    const result = await processIncomingMessage({
+      client,
+      message: {
+        ...textMessage("Imagen"),
+        externalMessageId: "wamid.media.ai-off.1",
+        type: "image",
+        metadata: {
+          media_id: "1234567890",
+          mime_type: "image/jpeg",
+        },
+      },
+      automationsEnabled: true,
+    });
+
+    assert.equal(result.shouldRunAutomation, true);
+    assert.equal(
+      rpcCalls.includes("pause_whatsapp_automation_for_inbound_handoff"),
+      true,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENAI_ADMINISTRATIVE_ENABLED;
+    } else {
+      process.env.OPENAI_ADMINISTRATIVE_ENABLED = previous;
+    }
+  }
+});
+
+test("con la automatización global apagada, un adjunto queda marcado para Gisela", async () => {
+  const previous = process.env.OPENAI_ADMINISTRATIVE_ENABLED;
+  process.env.OPENAI_ADMINISTRATIVE_ENABLED = "true";
+  try {
+    const { client, rpcCalls } = newInboundMediaClient();
+    const result = await processIncomingMessage({
+      client,
+      message: {
+        ...textMessage("Documento"),
+        externalMessageId: "wamid.media.global-off.1",
+        type: "document",
+        metadata: {
+          media_id: "1234567890",
+          mime_type: "application/pdf",
+        },
+      },
+      automationsEnabled: false,
+    });
+
+    assert.equal(result.shouldRunAutomation, false);
+    assert.equal(
+      rpcCalls.includes("pause_whatsapp_automation_for_inbound_handoff"),
+      true,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENAI_ADMINISTRATIVE_ENABLED;
+    } else {
+      process.env.OPENAI_ADMINISTRATIVE_ENABLED = previous;
+    }
+  }
 });

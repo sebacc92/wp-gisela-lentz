@@ -6,6 +6,7 @@ import {
   existingWhatsAppDispatchDisposition,
   isAutomaticWhatsAppSource,
   isCausallyOwnedManualAutomationNotice,
+  isCurrentDepositProofAcknowledgement,
   isOperatorWhatsAppPurpose,
   isRetryableWhatsAppAutomationFailure,
   isWhatsAppTestRecipientAllowed,
@@ -216,7 +217,9 @@ test("todo envío automático nuevo queda detrás del kill switch", () => {
   assert.equal(isAutomaticWhatsAppSource("automation"), true);
   assert.equal(isAutomaticWhatsAppSource("reminder"), true);
   assert.equal(isAutomaticWhatsAppSource("deposit_request"), true);
+  assert.equal(isAutomaticWhatsAppSource("deposit_confirmation"), true);
   assert.equal(isAutomaticWhatsAppSource("proof_acknowledgement"), true);
+  assert.equal(isAutomaticWhatsAppSource("late_proof_acknowledgement"), true);
   assert.equal(isAutomaticWhatsAppSource("hold_expiration"), true);
   assert.equal(isAutomaticWhatsAppSource("operator"), false);
   assert.equal(isAutomaticWhatsAppSource("operator_deposit_request"), false);
@@ -249,6 +252,13 @@ test("sólo el aviso causado por el inbound que tomó el handoff atraviesa manua
   assert.equal(
     isCausallyOwnedManualAutomationNotice({
       ...owned,
+      source: "late_proof_acknowledgement",
+    }),
+    true,
+  );
+  assert.equal(
+    isCausallyOwnedManualAutomationNotice({
+      ...owned,
       source: "automation",
     }),
     false,
@@ -266,6 +276,65 @@ test("sólo el aviso causado por el inbound que tomó el handoff atraviesa manua
       ...owned,
       source: "handoff",
       inboundMessageId: "message-2",
+    }),
+    false,
+  );
+});
+
+test("un acuse de comprobante exige el mismo proof y el estado vigente", () => {
+  const currentReview = {
+    status: "scheduled",
+    deposit_status: "proof_received",
+    deposit_proof_late: false,
+    deposit_proof_message_id: "proof-1",
+  };
+  assert.equal(
+    isCurrentDepositProofAcknowledgement({
+      source: "proof_acknowledgement",
+      automationOwnerMessageId: "proof-1",
+      appointment: currentReview,
+    }),
+    true,
+  );
+  assert.equal(
+    isCurrentDepositProofAcknowledgement({
+      source: "proof_acknowledgement",
+      automationOwnerMessageId: "proof-1",
+      appointment: { ...currentReview, status: "confirmed" },
+    }),
+    false,
+  );
+  assert.equal(
+    isCurrentDepositProofAcknowledgement({
+      source: "proof_acknowledgement",
+      automationOwnerMessageId: "proof-1",
+      appointment: {
+        ...currentReview,
+        deposit_proof_message_id: "proof-2",
+      },
+    }),
+    false,
+  );
+
+  const currentLate = {
+    status: "cancelled",
+    deposit_status: "expired",
+    deposit_proof_late: true,
+    deposit_proof_message_id: "proof-late",
+  };
+  assert.equal(
+    isCurrentDepositProofAcknowledgement({
+      source: "late_proof_acknowledgement",
+      automationOwnerMessageId: "proof-late",
+      appointment: currentLate,
+    }),
+    true,
+  );
+  assert.equal(
+    isCurrentDepositProofAcknowledgement({
+      source: "late_proof_acknowledgement",
+      automationOwnerMessageId: "proof-late",
+      appointment: { ...currentLate, status: "confirmed" },
     }),
     false,
   );

@@ -40,9 +40,9 @@ export default component$(() => {
           <li>
             <strong>Conversaciones:</strong> contenido de los mensajes enviados
             y recibidos, archivos o referencias a archivos cuando corresponda,
-            incluidos los comprobantes que la persona decida enviar para que el
-            consultorio revise una seña, además de la fecha, hora y estado de
-            entrega o lectura.
+            incluidos los comprobantes que la persona decida enviar, su lectura
+            estructurada, hash y evidencia técnica, además de la fecha, hora y
+            estado de entrega o lectura.
           </li>
           <li>
             <strong>Datos de turnos:</strong> la información administrativa
@@ -83,9 +83,9 @@ export default component$(() => {
           una interacción de WhatsApp. No es necesario enviar diagnósticos,
           historias clínicas, contraseñas, códigos de seguridad, credenciales
           bancarias ni datos completos de una cuenta por este canal. Si se
-          solicita una seña, el comprobante se utiliza únicamente para revisión
-          administrativa humana: la plataforma no valida transferencias ni
-          acredita pagos automáticamente.
+          solicita una seña, el comprobante se utiliza para una comprobación
+          administrativa básica automática o para revisión manual. La plataforma
+          no concilia transferencias con un banco ni acredita pagos.
         </p>
       </section>
 
@@ -99,8 +99,8 @@ export default component$(() => {
           <li>recibir, organizar y responder consultas por WhatsApp;</li>
           <li>gestionar solicitudes y cambios de turnos;</li>
           <li>
-            mantener una pre-reserva temporal y permitir que personal autorizado
-            revise y confirme una seña;
+            mantener una pre-reserva temporal, aplicar una comprobación
+            administrativa básica y permitir su revisión manual;
           </li>
           <li>
             mantener una copia administrativa de los turnos en el Google
@@ -154,14 +154,44 @@ export default component$(() => {
           Si además se habilita la lectura de adjuntos —un interruptor
           independiente—, el contenido de una nota de voz, una imagen o un PDF
           enviados por el paciente puede transmitirse a OpenAI para
-          transcribirlo o para copiar los datos visibles de un comprobante. Ese
-          envío también se hace con almacenamiento desactivado y con un
-          identificador seudónimo, nunca con el nombre ni el teléfono del
-          paciente. La lectura de un comprobante es un dato auxiliar para
-          revisarlo más rápido: no acredita un pago ni confirma un turno, que
-          siguen dependiendo de una persona. La información clínica del
-          odontograma nunca se envía a ningún proveedor de inteligencia
-          artificial.
+          transcribirlo o para extraer de un comprobante el monto, la moneda, la
+          fecha, el destino, el titular y el identificador de la operación que
+          sean visibles. Las imágenes y los PDF se procesan mediante Responses
+          con <code>store=false</code>; las notas de voz se procesan mediante el
+          endpoint de transcripción de audio. El envío usa un identificador
+          seudónimo cuando el endpoint lo admite, nunca el nombre ni el teléfono
+          del paciente.
+        </p>
+        <p>
+          <code>store=false</code> evita que la solicitud quede guardada como
+          estado de aplicación en Responses. Según la tabla vigente de OpenAI,
+          Responses puede generar registros de prevención de abuso por hasta 30
+          días salvo que el proyecto tenga Zero Data Retention, mientras que
+          <code>/v1/audio/transcriptions</code> no conserva estado de aplicación
+          ni esos registros. Los datos de la API no se usan para entrenar
+          modelos por defecto. Podés consultar los{" "}
+          <a
+            href="https://platform.openai.com/docs/models/default-usage-policies-by-endpoint"
+            target="_blank"
+            rel="noreferrer"
+          >
+            controles de datos de OpenAI
+          </a>
+          .
+        </p>
+        <p>
+          El modelo no valida el comprobante, no concilia la operación con un
+          banco y no acredita la transferencia. Una regla básica local y
+          transaccional en la base de datos puede confirmar automáticamente sólo
+          la pre-reserva exacta asociada al mensaje si el archivo es legible y
+          coinciden el monto exacto y el alias o titular. Moneda, fecha e
+          identificador son auxiliares y no bloquean. Los casos que no cumplen
+          la regla o llegan tarde quedan para revisión manual; Gisela puede
+          revisar y, si corresponde, cancelar después un turno autoconfirmado.
+          Se conservan la evidencia técnica, la lectura estructurada, el hash y
+          la auditoría, pero la plataforma no persiste localmente los bytes de
+          la imagen o del PDF. La información clínica del odontograma nunca se
+          envía a ningún proveedor de inteligencia artificial.
         </p>
         <p>
           Si el consultorio habilita Google Calendar, Google procesa la copia

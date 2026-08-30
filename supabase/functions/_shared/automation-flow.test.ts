@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   APPOINTMENT_WELCOME_MESSAGE,
+  depositProofReviewMessage,
   MAIN_MENU_OPTIONS,
   PATIENT_PROFILE_PROMPTS,
   isMainMenuRequest,
@@ -29,14 +30,18 @@ import {
   selectSlotsForOffer,
 } from "./automation-flow.ts";
 
-test("la bienvenida contiene sólo el saludo solicitado y ninguna lista", () => {
+test("la bienvenida habla como Gisela en singular y no adelanta la lista", () => {
   assert.equal(
     APPOINTMENT_WELCOME_MESSAGE,
-    "Hola!!!☺️ Gracias por comunicarte con el Consultorio Odontológico Lentz Gisela. Para agendar tu turno envíanos:",
+    "¡Hola! Soy Gisela 😊 Para agendar tu turno voy a pedirte algunos datos.",
   );
   assert.doesNotMatch(
     APPOINTMENT_WELCOME_MESSAGE,
     /nombre y apellido|sos paciente|teléfono de contacto|ioma|particular|\n|\b[1-4][.)]/i,
+  );
+  assert.doesNotMatch(
+    APPOINTMENT_WELCOME_MESSAGE,
+    /\b(nosotros|nosotras|nuestro|nuestra|podemos|necesitamos|recibimos|respondemos|envianos)\b|\b(consultorio de|hablar con)\s+gisela\b/i,
   );
 });
 
@@ -326,6 +331,21 @@ test("renderiza el mensaje configurable de seña sin hardcodear sus valores", ()
     rendered,
     "Seña: $10.000\nAlias: odontologa.gisela.mp\nTitular: Gisela Vanesa Lentz",
   );
+});
+
+test("el aviso de revisión nunca excede WhatsApp ni filtra placeholders", () => {
+  const fallback =
+    "Recibí el comprobante. Necesito revisarlo antes de confirmar el turno.";
+  assert.equal(
+    depositProofReviewMessage("¡Gracias! Recibí tu archivo.", false),
+    "¡Gracias! Recibí tu archivo. Necesito revisarlo antes de confirmar el turno.",
+  );
+  assert.equal(depositProofReviewMessage("x".repeat(4096), false), fallback);
+  assert.equal(
+    depositProofReviewMessage("Recibí {placeholder_desconocido}.", false),
+    fallback,
+  );
+  assert.match(depositProofReviewMessage(null, true), /pre-reserva ya venció/);
 });
 
 test("los horarios ofrecidos se reparten entre días, no se agotan en el primero", () => {

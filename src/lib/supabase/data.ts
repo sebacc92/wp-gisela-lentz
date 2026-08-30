@@ -63,6 +63,8 @@ interface AppointmentRow {
   deposit_status: DepositStatus;
   hold_expires_at: string | null;
   deposit_proof_message_id: string | null;
+  deposit_confirmation_actor: "automatic_system" | null;
+  deposit_confirmation_policy_version: string | null;
   professionals: { name: string } | Array<{ name: string }> | null;
   services: { name: string } | Array<{ name: string }> | null;
 }
@@ -87,6 +89,8 @@ export interface AppointmentListItem {
   depositStatus: DepositStatus;
   holdExpiresAt: string | null;
   depositProofMessageId: string | null;
+  depositConfirmationActor: "automatic_system" | null;
+  depositConfirmationPolicyVersion: string | null;
 }
 
 const avatarTones: Conversation["avatarTone"][] = [
@@ -156,6 +160,9 @@ function mapAppointment(row: AppointmentRow): AppointmentSummary {
     depositStatus,
     holdExpiresAt: row.hold_expires_at ?? undefined,
     depositProofMessageId: row.deposit_proof_message_id ?? undefined,
+    depositConfirmationActor: row.deposit_confirmation_actor ?? undefined,
+    depositConfirmationPolicyVersion:
+      row.deposit_confirmation_policy_version ?? undefined,
   };
 }
 
@@ -188,7 +195,7 @@ export async function loadInboxData(client: SupabaseClient): Promise<{
       ? client
           .from("appointments")
           .select(
-            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
           )
           .in("contact_id", contactIds)
           .order("starts_at", { ascending: true })
@@ -330,7 +337,7 @@ export async function loadAppointments(
   let query = client
     .from("appointments")
     .select(
-      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,internal_note,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,internal_note,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
     )
     .gte("starts_at", fromIso);
   if (toIso) query = query.lt("starts_at", toIso);
@@ -354,6 +361,8 @@ export async function loadAppointments(
       deposit_status: DepositStatus;
       hold_expires_at: string | null;
       deposit_proof_message_id: string | null;
+      deposit_confirmation_actor: "automatic_system" | null;
+      deposit_confirmation_policy_version: string | null;
       contacts:
         | {
             name: string;
@@ -397,6 +406,8 @@ export async function loadAppointments(
       depositStatus,
       holdExpiresAt: row.hold_expires_at,
       depositProofMessageId: row.deposit_proof_message_id,
+      depositConfirmationActor: row.deposit_confirmation_actor,
+      depositConfirmationPolicyVersion: row.deposit_confirmation_policy_version,
     };
   });
 }

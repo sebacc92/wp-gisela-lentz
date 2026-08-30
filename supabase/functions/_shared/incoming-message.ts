@@ -1,17 +1,6 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
-import {
-  isDepositProofMediaType,
-  normalizeDepositProofResult,
-} from "./deposit-proof.ts";
 import { isOwnerNumber, ownerNumbersFromEnvironment } from "./owner-access.ts";
-import {
-  isWhatsAppPolicyError,
-  sendAndRecordMessage,
-  textPayload,
-  type WhatsAppContact,
-  type WhatsAppConversation,
-} from "./whatsapp.ts";
 
 const CONSENT_POLICY_VERSION = "whatsapp-business-messaging-policy/2026-08-10";
 
@@ -86,7 +75,11 @@ const OPT_OUT_PHRASES = new Set([
   "no deseo recibir mas mensajes",
   "no recibir mas mensajes",
   "no me escriban mas",
+  "no me escribas mas",
   "no me manden mas mensajes",
+  "no me mandes mas mensajes",
+  "deja de escribirme",
+  "no quiero que me escribas mas",
   "quiero darme de baja",
   "denme de baja",
 ]);
@@ -105,30 +98,42 @@ const OPT_IN_REPLY_IDS = new Set([
   "consent_appointment_updates_yes",
 ]);
 
+export type WhatsAppConsentDecision = "opt_in" | "opt_out";
+
+/**
+ * Detecta únicamente frases explícitas y acotadas. También se reutiliza sobre
+ * una transcripción literal para respetar una baja enviada por nota de voz;
+ * una inferencia ambigua nunca concede ni revoca consentimiento.
+ */
+export function whatsappConsentDecisionFromText(
+  value: string,
+): WhatsAppConsentDecision | null {
+  const phrase = normalizedPhrase(value);
+  const politePhrase = phrase
+    .replace(/^por favor /, "")
+    .replace(/ por favor$/, "");
+  const explicitOptOut =
+    OPT_OUT_PHRASES.has(politePhrase) ||
+    /^(baja|stop) por favor$/.test(phrase) ||
+    /^(por favor )?(quiero )?(darme|denme) de baja( por favor)?$/.test(phrase);
+  if (explicitOptOut) return "opt_out";
+  return OPT_IN_PHRASES.has(phrase) ? "opt_in" : null;
+}
+
 function consentDecision(
   message: NormalizedIncomingMessage,
-): "opt_in" | "opt_out" | null {
+): WhatsAppConsentDecision | null {
   if (message.type !== "text" && message.type !== "interactive") return null;
 
-  const phrase = normalizedPhrase(message.body);
+  const textDecision = whatsappConsentDecisionFromText(message.body);
   const rawReplyId = message.metadata.interactive_reply_id;
   const replyId =
     typeof rawReplyId === "string"
       ? normalizedPhrase(rawReplyId).replace(/ /g, "_")
       : "";
-  const explicitOptOut =
-    OPT_OUT_PHRASES.has(phrase) ||
-    /^(baja|stop) por favor$/.test(phrase) ||
-    /^(por favor )?(quiero )?(darme|denme) de baja( por favor)?$/.test(
-      phrase,
-    ) ||
-    OPT_OUT_REPLY_IDS.has(replyId);
-
-  if (explicitOptOut) return "opt_out";
-  if (OPT_IN_PHRASES.has(phrase) || OPT_IN_REPLY_IDS.has(replyId)) {
-    return "opt_in";
-  }
-  return null;
+  if (OPT_OUT_REPLY_IDS.has(replyId)) return "opt_out";
+  if (OPT_IN_REPLY_IDS.has(replyId)) return "opt_in";
+  return textDecision;
 }
 
 function mediaUnderstandingPossible(): boolean {
@@ -142,6 +147,30 @@ function mediaUnderstandingPossible(): boolean {
       ? Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED")
       : runtime?.env?.OPENAI_ADMINISTRATIVE_ENABLED;
   return value?.trim() === "true";
+}
+
+export function shouldDispatchIncomingAutomation(input: {
+  automationsEnabled: boolean;
+  optedOut: boolean;
+  humanReview: boolean;
+  priority: boolean;
+  owner: boolean;
+  readableMedia: boolean;
+  humanReviewPauseOwned: boolean;
+  automationMode: unknown;
+}): boolean {
+  return (
+    input.automationsEnabled &&
+    !input.optedOut &&
+    (!input.humanReview ||
+      input.priority ||
+      input.owner ||
+      input.readableMedia ||
+      input.humanReviewPauseOwned) &&
+    (input.automationMode === "auto" ||
+      input.humanReviewPauseOwned ||
+      input.owner)
+  );
 }
 
 export function requiresHumanReview(
@@ -459,14 +488,16 @@ export async function processIncomingMessage(
   const owner = isOwnerNumber(message.phoneE164, ownerNumbersFromEnvironment());
   // Un adjunto deja de ser opaco cuando la lectura por IA está habilitada: la
   // automatización lo transcribe o lo lee y recién ahí decide si sigue sola o
-  // deriva. Sin esa lectura, un adjunto nunca despierta al bot.
+  // deriva. Si la lectura está apagada, la pausa queda asociada a este inbound
+  // y el worker igual se despierta para acusar recibo y dejarlo en revisión.
   const readableMedia =
+    automationsEnabled &&
     mediaUnderstandingPossible() &&
     (message.type === "audio" ||
       message.type === "image" ||
       message.type === "document");
   let humanReviewPauseOwned = false;
-  if (humanReview && !owner && decision !== "opt_out") {
+  if (humanReview && !readableMedia && !owner && decision !== "opt_out") {
     // Establish ownership before any deposit-proof RPC can also move the
     // conversation to manual. An app echo or operator pause is never replaced.
     const pause = await client.rpc(
@@ -481,120 +512,24 @@ export async function processIncomingMessage(
     humanReviewPauseOwned = pause.data === true;
   }
 
-  let depositProof = null as ReturnType<typeof normalizeDepositProofResult>;
-  if (isDepositProofMediaType(message.type)) {
-    const { data: proofData, error: proofError } = await client.rpc(
-      "record_deposit_proof",
-      {
-        p_contact_id: contact.id,
-        p_message_id: savedMessage.id,
-        p_received_at: message.receivedAt,
-      },
-    );
-    if (proofError) throw new Error("DEPOSIT_PROOF_RECORD_FAILED");
-    depositProof = normalizeDepositProofResult(proofData);
-
-    if (depositProof?.recognized) {
-      const { error } = await client
-        .from("messages")
-        .update({
-          metadata: {
-            ...message.metadata,
-            deposit_proof: true,
-            deposit_proof_late: depositProof.late,
-            appointment_id: depositProof.appointmentId,
-          },
-        })
-        .eq("id", savedMessage.id);
-      if (error) {
-        console.warn("Deposit proof metadata was not annotated", {
-          code: "PROOF_METADATA_UPDATE_FAILED",
-          messageId: savedMessage.id,
-        });
-      }
-    }
-  }
-
-  if (
-    humanReviewPauseOwned &&
-    depositProof?.recognized &&
-    decision !== "opt_out"
-  ) {
-    // Re-check the same causal claim after proof persistence. If an app echo
-    // won in between, the RPC returns false and no automatic notice follows.
-    const pause = await client.rpc(
-      "pause_whatsapp_automation_for_inbound_handoff",
-      {
-        p_message_id: savedMessage.id,
-        p_priority: priority,
-        p_current_flow: depositProof.late
-          ? "late_deposit_proof"
-          : "deposit_proof_received",
-      },
-    );
-    if (pause.error) throw pause.error;
-    humanReviewPauseOwned = pause.data === true;
-  }
-
-  if (
-    automationsEnabled &&
-    humanReviewPauseOwned &&
-    depositProof?.recognized &&
-    depositProof.acknowledge &&
-    depositProof.appointmentId
-  ) {
-    const { data: settings, error: settingsError } = await client
-      .from("app_settings")
-      .select("deposit_proof_received_message_template")
-      .eq("id", true)
-      .single();
-    const acknowledgement =
-      typeof settings?.deposit_proof_received_message_template === "string"
-        ? settings.deposit_proof_received_message_template.trim()
-        : "";
-    if (settingsError || !acknowledgement) {
-      console.warn("Deposit proof acknowledgement was not sent", {
-        code: "PROOF_ACKNOWLEDGEMENT_NOT_CONFIGURED",
-      });
-    } else {
-      try {
-        await sendAndRecordMessage({
-          client,
-          conversation: conversation as unknown as WhatsAppConversation,
-          contact: contact as unknown as WhatsAppContact,
-          payload: textPayload(acknowledgement),
-          bodyPreview: acknowledgement,
-          idempotencyKey: `proof-acknowledgement:${depositProof.appointmentId}`,
-          appointmentId: depositProof.appointmentId,
-          coexistenceAccountId,
-          metadata: {
-            source: "proof_acknowledgement",
-            inbound_message_id: savedMessage.id,
-            appointment_id: depositProof.appointmentId,
-            proof_message_id: savedMessage.id,
-          },
-        });
-      } catch (error) {
-        console.warn("Deposit proof acknowledgement was not sent", {
-          code: isWhatsAppPolicyError(error)
-            ? error.code
-            : "PROOF_ACKNOWLEDGEMENT_FAILED",
-        });
-      }
-    }
-  }
+  // La asociación y el eventual cambio de estado del turno ocurren recién
+  // después de leer el archivo en whatsapp-automation. Así una radiografía o
+  // cualquier otro documento nunca se registra como seña sólo por ser adjunto.
 
   return {
     messageId: savedMessage.id as string,
     contact,
     conversation,
     deduplicated,
-    shouldRunAutomation:
-      automationsEnabled &&
-      decision !== "opt_out" &&
-      (!humanReview || priority || owner || readableMedia) &&
-      (conversation.automation_mode === "auto" ||
-        humanReviewPauseOwned ||
-        owner),
+    shouldRunAutomation: shouldDispatchIncomingAutomation({
+      automationsEnabled,
+      optedOut: decision === "opt_out",
+      humanReview,
+      priority,
+      owner,
+      readableMedia,
+      humanReviewPauseOwned,
+      automationMode: conversation.automation_mode,
+    }),
   };
 }

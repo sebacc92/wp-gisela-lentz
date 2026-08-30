@@ -64,10 +64,11 @@ pasos sin compartir credenciales, y la persona técnica sabe cuándo detenerse.
 - Hasta ese despliegue controlado, el Manual no debe usarse como evidencia del
   estado remoto. Este archivo versionado sigue siendo la guía presencial.
 - **Orden obligatorio del despliegue: primero Supabase, después Vercel.**
-  Configuración → Mensajes automáticos guarda `ai_enabled` y `ai_model`, y el
-  flujo de Embedded Signup depende de la cuota configurable y de la validación
-  de BSUID. Promover el frontend a producción antes de aplicar las migraciones
-  pendientes rompe esas pantallas contra una base sin esas columnas.
+  Configuración → Mensajes automáticos guarda `ai_enabled`,
+  `ai_media_enabled` y `ai_model`, y el flujo de Embedded Signup depende de la
+  cuota configurable y de la validación de BSUID. Promover el frontend a
+  producción antes de aplicar las migraciones pendientes rompe esas pantallas
+  contra una base sin esas columnas.
 - El resumen de Google Calendar del Manual requiere además que exista la
   Function `google-calendar-status`. Hoy esa Function no está desplegada en la
   producción de Gisela; el Manual la marcará como no comprobable hasta que se
@@ -213,7 +214,8 @@ muestre la suscripción activa y que el panel conserve el botón de Coexistence.
    plazo de seña, buffer y antelación. No guardar un alias o importe que Gisela
    no haya confirmado.
 5. Ir a **Configuración → Mensajes automáticos**. Revisar texto de urgencias y
-   fuera de horario. Mantener desactivadas las automatizaciones al terminar.
+   fuera de horario. Mantener desactivadas las automatizaciones y la lectura de
+   medios con IA al terminar.
 6. Usar **Estado de WhatsApp** sólo para el onboarding y la comprobación segura;
    no tocar el botón de verificación de conexión como sustituto de la revisión
    de Embedded Signup.
@@ -299,7 +301,7 @@ un valor o estructura; no reemplaza la validación presencial de Gisela.
 | Antelación mínima                           | 60 min                                                                         | Sí                                | Gisela                           | Configuración → WhatsApp y reservas            | **PREGUNTAR A GISELA**                                                       |
 | Buffer entre turnos                         | 0 min                                                                          | Según criterio                    | Gisela                           | Configuración → WhatsApp y reservas            | **PREGUNTAR A GISELA**                                                       |
 | Seña                                        | Activa; monto, alias, titular, plazo y textos cargados                         | Sí si se usa seña                 | Gisela                           | Configuración → WhatsApp y reservas            | **PREGUNTAR A GISELA** cada dato real                                        |
-| Comprobantes                                | Revisión humana; sin OCR ni validación bancaria                                | Sí                                | Gisela                           | Bandeja / Agenda                               | Capacitar y probar                                                           |
+| Comprobantes                                | Código local: IA transcribe; regla fija; sin validación bancaria               | Sí                                | Gisela                           | Bandeja / Agenda                               | Desplegar y probar: válido, inválido y tardío                                |
 | Fuera de horario                            | Activo y con texto                                                             | Sí                                | Gisela                           | Configuración → Mensajes automáticos           | **PREGUNTAR A GISELA**; requiere horarios activos                            |
 | Urgencias                                   | Texto configurado                                                              | Sí                                | Gisela                           | Configuración → Mensajes automáticos           | **PREGUNTAR A GISELA**                                                       |
 | Información general                         | Vacía                                                                          | Opcional                          | Gisela                           | Configuración → Mensajes automáticos           | **PREGUNTAR A GISELA**                                                       |
@@ -308,12 +310,12 @@ un valor o estructura; no reemplaza la validación presencial de Gisela.
 | Números de prueba                           | No se documentan ni muestran                                                   | Sí para probar envíos             | Sebastián                        | Secret del servidor                            | Confirmar allowlist segura                                                   |
 | WhatsApp / Coexistence                      | Código y Functions listos; no hay cuenta real conectada                        | Sí                                | Gisela + Sebastián               | Configuración → Estado de WhatsApp / Meta      | Completar presencialmente                                                    |
 | Pausa de envíos                             | Activa por seguridad                                                           | Sí durante onboarding             | Sebastián                        | Estado de WhatsApp / configuración de servidor | No levantar durante la visita sin autorización posterior                     |
-| Plantillas Meta                             | 4 locales activas, sin verificar; recordatorio 2h apagado                      | Antes de proactivos               | Sebastián + Gisela               | Meta + Plantillas                              | No habilitar todavía                                                         |
+| Plantillas Meta                             | 5 plantillas v2 en voz singular, deshabilitadas y sin verificar                | Antes de proactivos               | Sebastián + Gisela               | Meta + Plantillas                              | Aprobar en Meta antes de habilitarlas                                        |
 | Consentimiento                              | No hay consentimientos                                                         | Antes de recordatorios/proactivos | Gisela + Sebastián               | Procedimiento operativo                        | Definir evidencia y texto                                                    |
 | Recordatorio 24h / 2h                       | Ambos apagados; sin cron de recordatorios                                      | Opcional posterior                | Gisela + Sebastián               | Configuración + cron técnico                   | No habilitar todavía                                                         |
-| Derivación a una persona                    | Disponible por conversación; los ecos manuales pausan el bot                   | Sí                                | Gisela + operadoras              | Bandeja → conversación                         | Capacitar y probar `Pausar bot` / `Reactivar bot`                            |
+| Atención personal de Gisela                 | Disponible por conversación; los ecos manuales pausan el bot                   | Sí                                | Gisela                           | Bandeja → conversación                         | Capacitar y probar `Pausar bot` / `Reactivar bot`                            |
 | Mensajes y recepción                        | Functions preparadas; sin número real ni tráfico                               | Sí                                | Plataforma + Gisela              | Bandeja / webhook                              | Probar sólo en modo seguro después de conectar                               |
-| Archivos y comprobantes                     | Descarga de media preparada; aprobación es humana                              | Sí si se reciben comprobantes     | Gisela + operadoras              | Bandeja / Agenda                               | Capacitar y probar; no hay OCR ni verificación bancaria                      |
+| Archivos y comprobantes                     | Código local: imagen/PDF en `waiting_deposit` puede autoconfirmar              | Sí si se reciben comprobantes     | Gisela                           | Bandeja / Agenda                               | Fallos a revisión; sin verificación bancaria                                 |
 | Google Calendar                             | No configurado, sin Functions ni cron remoto                                   | Opcional posterior                | Sebastián + Gisela               | Google Cloud + Supabase + Configuración        | **BLOQUEADO HASTA PREPARACIÓN TÉCNICA**                                      |
 | Recuperación de contraseña                  | No existe en la interfaz                                                       | Recomendado                       | Sebastián                        | Supabase Auth + frontend                       | Implementar antes de delegar completamente                                   |
 
@@ -404,7 +406,12 @@ inesperados, se puede afirmar:
   automatización. Ambos usan leases, idempotencia y backoff.
 - `whatsapp-webhook` recibe los eventos de Meta; `whatsapp-media` descarga
   archivos con la credencial de la cuenta correcta; `whatsapp-send` y los
-  procesadores resuelven credenciales por cuenta y fallan cerrados.
+  procesadores resuelven credenciales por cuenta y fallan cerrados. Durante
+  `waiting_deposit`, la IA sólo transcribe los datos visibles de una imagen o
+  PDF; una regla fija exige legibilidad, monto exacto y alias o titular antes de
+  confirmar. Moneda, fecha e identificador de operación son auxiliares y no
+  bloquean la confirmación. Los fallos y comprobantes tardíos pasan a revisión
+  manual.
 - La agenda de la plataforma es la fuente de verdad. Google Calendar, cuando
   se prepare, será una copia privada secundaria y no una fuente de turnos.
 
@@ -420,8 +427,14 @@ revisión controlada son:
 - `REMINDER_CRON_SECRET`, `GOOGLE_CALENDAR_CLIENT_SECRET`,
   `GOOGLE_CALENDAR_CRON_SECRET`;
 - valores de seguridad operativa como `WHATSAPP_EMBEDDED_SIGNUP_ENABLED`,
-  `WHATSAPP_AUTOMATIONS_ENABLED`, `WHATSAPP_TEST_MODE` y la allowlist de
-  prueba.
+  `WHATSAPP_AUTOMATIONS_ENABLED`, `OPENAI_ADMINISTRATIVE_ENABLED`,
+  `WHATSAPP_TEST_MODE` y la allowlist de prueba.
+
+La autoconfirmación de comprobantes requiere `ai_enabled=true`,
+`ai_media_enabled=true`, `OPENAI_ADMINISTRATIVE_ENABLED=true` y la
+automatización global activa. Guarda hash, lectura, política y auditoría con
+idempotencia. No prueba autenticidad: se acepta el riesgo de falsificación y
+Gisela puede cancelar manualmente el turno después de revisarlo.
 
 Los IDs públicos y las variables legacy se mantienen documentados en
 [`.env.example`](../.env.example). La existencia de una cuenta Coexistence

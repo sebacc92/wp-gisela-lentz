@@ -808,6 +808,13 @@ export default component$(() => {
                   <dt>Estado</dt>
                   <dd>{displayStatus(selectedAppointment)}</dd>
                 </div>
+                {selectedAppointment.depositConfirmationActor ===
+                  "automatic_system" && (
+                  <div>
+                    <dt>Confirmación de seña</dt>
+                    <dd>Automática · comprobante disponible para revisión</dd>
+                  </div>
+                )}
                 {selectedAppointment.internalNote && (
                   <div>
                     <dt>Nota administrativa</dt>
@@ -822,15 +829,17 @@ export default component$(() => {
                 </p>
               )}
               <div class="appointment-actions-grid">
-                {selectedAppointment.depositStatus === "proof_received" &&
-                  selectedAppointment.depositProofMessageId && (
-                    <a
-                      class="secondary-button"
-                      href={`/app/inbox?patient=${selectedAppointment.contactId}&message=${selectedAppointment.depositProofMessageId}`}
-                    >
-                      Ver comprobante
-                    </a>
-                  )}
+                {selectedAppointment.depositProofMessageId && (
+                  <a
+                    class="secondary-button"
+                    href={`/app/inbox?patient=${selectedAppointment.contactId}&message=${selectedAppointment.depositProofMessageId}`}
+                  >
+                    {selectedAppointment.depositConfirmationActor ===
+                    "automatic_system"
+                      ? "Revisar comprobante"
+                      : "Ver comprobante"}
+                  </a>
+                )}
                 {selectedAppointment.depositStatus === "proof_received" && (
                   <button
                     class="primary-button"

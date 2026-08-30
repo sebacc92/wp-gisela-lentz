@@ -211,7 +211,6 @@ export default component$(() => {
   const selectedDepositAppointment =
     selectedConversationAppointments.find(
       (appointment) =>
-        appointment.depositStatus === "proof_received" &&
         Boolean(highlightedMessageId) &&
         appointment.depositProofMessageId === highlightedMessageId,
     ) ??

@@ -243,7 +243,7 @@ Deno.serve(async (request) => {
       const { data: appointment, error: appointmentError } = await client
         .from("appointments")
         .select(
-          "id,contact_id,professional_id,starts_at,status,contacts!appointments_contact_id_fkey(id,phone_e164,whatsapp_id,whatsapp_user_id,name,whatsapp_opt_in_at,whatsapp_opt_out_at,whatsapp_consent_status),professionals!appointments_professional_id_fkey(name)",
+          "id,contact_id,starts_at,status,contacts!appointments_contact_id_fkey(id,phone_e164,whatsapp_id,whatsapp_user_id,name,whatsapp_opt_in_at,whatsapp_opt_out_at,whatsapp_consent_status)",
         )
         .eq("id", reminder.appointment_id)
         .single();
@@ -297,16 +297,9 @@ Deno.serve(async (request) => {
         | WhatsAppContact
         | WhatsAppContact[]
         | null;
-      const professionalRelation = appointment.professionals as
-        | { name?: string }
-        | Array<{ name?: string }>
-        | null;
       const contact = Array.isArray(contactRelation)
         ? contactRelation[0]
         : contactRelation;
-      const professional = Array.isArray(professionalRelation)
-        ? professionalRelation[0]
-        : professionalRelation;
       if (!contact) throw new Error("CONTACT_NOT_FOUND");
       if (!hasActiveWhatsAppConsent(contact)) {
         throw new WhatsAppPolicyError("UTILITY_CONSENT_REQUIRED");
@@ -351,7 +344,6 @@ Deno.serve(async (request) => {
           id: appointment.id as string,
           starts_at: startsAt,
         },
-        professionalName: professional?.name ?? "Gisela Lentz",
         template: {
           key: templateKey,
           meta_name: template.meta_name as string,

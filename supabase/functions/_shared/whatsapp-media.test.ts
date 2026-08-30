@@ -90,6 +90,31 @@ test("acepta sólo media entrante, ID coincidente, MIME seguro y tamaño acotado
   }
 });
 
+test("un documento puede ser PDF, JPEG o PNG", () => {
+  for (const [mimeType, extension] of [
+    ["application/pdf", "pdf"],
+    ["image/jpeg", "jpg"],
+    ["image/png", "png"],
+  ] as const) {
+    const descriptor = resolveWhatsAppMediaDescriptor({
+      messageDirection: "inbound",
+      messageType: "document",
+      metadata: {
+        media_id: "1234567890",
+        mime_type: mimeType,
+        filename: "transferencia.original",
+      },
+      graphMediaId: "1234567890",
+      graphMimeType: mimeType,
+      graphFileSize: "4000",
+      maxBytes: 5000,
+    });
+
+    assert.equal(descriptor.mimeType, mimeType);
+    assert.equal(descriptor.filename, `transferencia.${extension}`);
+  }
+});
+
 test("sanitiza nombre y verifica el MIME real de la respuesta", () => {
   assert.equal(
     safeWhatsAppMediaFilename("../pago.PDF", "application/pdf"),

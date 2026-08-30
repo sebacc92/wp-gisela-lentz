@@ -790,7 +790,7 @@ export default component$(() => {
                       <summary>Ver otros mensajes de la reserva</summary>
                       <div class="settings-message-options-content">
                         <label class="form-field automation-message-field">
-                          <span>Cuando llega un comprobante</span>
+                          <span>Cuando un comprobante queda para revisión</span>
                           <textarea
                             rows={4}
                             maxLength={1024}
@@ -801,9 +801,13 @@ export default component$(() => {
                                 element.value)
                             }
                           />
+                          <small>
+                            Es un acuse para casos que no se autoconfirman; no
+                            debe prometer que el turno ya está confirmado.
+                          </small>
                         </label>
                         <label class="form-field automation-message-field">
-                          <span>Cuando confirmás la seña</span>
+                          <span>Confirmación de la seña</span>
                           <textarea
                             rows={4}
                             maxLength={1024}
@@ -838,10 +842,13 @@ export default component$(() => {
                     <div class="settings-policy-alert">
                       <Icon name="info" size={18} />
                       <span>
-                        <strong>La seña siempre la confirma una persona</strong>
+                        <strong>Autoconfirmación básica</strong>
                         <small>
-                          Cuando llega el comprobante, el turno queda reservado
-                          para que Gisela lo revise y toque “Confirmar seña”.
+                          Si la lectura encuentra el monto exacto y el alias o
+                          titular configurado, el turno se confirma. Si no,
+                          queda para revisión manual. El comprobante sigue
+                          disponible y podés cancelar el turno si detectás un
+                          problema.
                         </small>
                       </span>
                     </div>
@@ -2116,9 +2123,11 @@ export default component$(() => {
                       Transcribir audios y leer comprobantes con IA
                       <small>
                         Envía el audio o el comprobante recibido para
-                        transcribirlo o copiar sus datos. La seña la seguís
-                        confirmando vos: lo leído es sólo una ayuda para
-                        revisarlo más rápido.
+                        transcribirlo o copiar sus datos. Si el comprobante es
+                        legible y coinciden el monto y el alias o titular, la
+                        seña y el turno se confirman automáticamente. Si no, lo
+                        revisás vos. Siempre podés revisar el archivo y cancelar
+                        el turno después.
                       </small>
                     </span>
                   </label>

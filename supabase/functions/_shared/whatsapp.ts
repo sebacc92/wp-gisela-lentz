@@ -406,7 +406,9 @@ export function isAutomaticWhatsAppSource(value: string | null): boolean {
     value === "owner_access" ||
     value === "reminder" ||
     value === "deposit_request" ||
+    value === "deposit_confirmation" ||
     value === "proof_acknowledgement" ||
+    value === "late_proof_acknowledgement" ||
     value === "hold_expiration"
   );
 }
@@ -420,11 +422,42 @@ export function isCausallyOwnedManualAutomationNotice(args: {
   return (
     (args.source === "handoff" ||
       args.source === "urgent_handoff" ||
-      args.source === "proof_acknowledgement") &&
+      args.source === "proof_acknowledgement" ||
+      args.source === "late_proof_acknowledgement") &&
     args.pauseSource === "inbound_handoff" &&
     Boolean(args.inboundMessageId) &&
     args.pauseMessageId === args.inboundMessageId
   );
+}
+
+export type DepositProofAcknowledgementSource =
+  | "proof_acknowledgement"
+  | "late_proof_acknowledgement";
+
+export function isCurrentDepositProofAcknowledgement(args: {
+  source: DepositProofAcknowledgementSource;
+  automationOwnerMessageId: string | null;
+  appointment: {
+    status: string;
+    deposit_status: string;
+    deposit_proof_late: boolean | null;
+    deposit_proof_message_id: string | null;
+  };
+}): boolean {
+  const { appointment } = args;
+  if (
+    !args.automationOwnerMessageId ||
+    appointment.deposit_proof_message_id !== args.automationOwnerMessageId
+  ) {
+    return false;
+  }
+  return args.source === "proof_acknowledgement"
+    ? appointment.status === "scheduled" &&
+        appointment.deposit_status === "proof_received" &&
+        appointment.deposit_proof_late !== true
+    : appointment.status === "cancelled" &&
+        appointment.deposit_status === "expired" &&
+        appointment.deposit_proof_late === true;
 }
 
 export type OperatorWhatsAppPurpose =
@@ -793,7 +826,9 @@ async function assertOutboundPolicy(args: {
 
     if (
       source === "deposit_request" ||
+      source === "deposit_confirmation" ||
       source === "proof_acknowledgement" ||
+      source === "late_proof_acknowledgement" ||
       source === "hold_expiration" ||
       source === "operator_deposit_request" ||
       source === "operator_deposit_confirmation"
@@ -804,7 +839,7 @@ async function assertOutboundPolicy(args: {
       const { data: appointment, error: appointmentError } = await client
         .from("appointments")
         .select(
-          "id,contact_id,status,deposit_status,deposit_proof_late,hold_expires_at,hold_expired_notification_status",
+          "id,contact_id,status,deposit_status,deposit_proof_late,deposit_proof_message_id,hold_expires_at,hold_expired_notification_status",
         )
         .eq("id", appointmentId)
         .eq("contact_id", contact.id)
@@ -823,6 +858,15 @@ async function assertOutboundPolicy(args: {
         throw new WhatsAppPolicyError("DEPOSIT_REQUEST_STALE");
       }
       if (
+        source === "deposit_confirmation" &&
+        (appointment.status !== "confirmed" ||
+          appointment.deposit_status !== "confirmed" ||
+          !automationOwnerMessageId ||
+          appointment.deposit_proof_message_id !== automationOwnerMessageId)
+      ) {
+        throw new WhatsAppPolicyError("DEPOSIT_CONFIRMATION_STALE");
+      }
+      if (
         source === "operator_deposit_confirmation" &&
         (appointment.status !== "confirmed" ||
           (appointment.deposit_status !== "confirmed" &&
@@ -831,12 +875,22 @@ async function assertOutboundPolicy(args: {
         throw new WhatsAppPolicyError("DEPOSIT_CONFIRMATION_STALE");
       }
       if (
-        source === "proof_acknowledgement" &&
-        (appointment.status !== "scheduled" ||
-          appointment.deposit_status !== "proof_received" ||
-          appointment.deposit_proof_late === true)
+        source === "proof_acknowledgement" ||
+        source === "late_proof_acknowledgement"
       ) {
-        throw new WhatsAppPolicyError("DEPOSIT_PROOF_ACKNOWLEDGEMENT_STALE");
+        if (
+          !isCurrentDepositProofAcknowledgement({
+            source,
+            automationOwnerMessageId,
+            appointment,
+          })
+        ) {
+          throw new WhatsAppPolicyError(
+            source === "proof_acknowledgement"
+              ? "DEPOSIT_PROOF_ACKNOWLEDGEMENT_STALE"
+              : "LATE_DEPOSIT_PROOF_ACKNOWLEDGEMENT_STALE",
+          );
+        }
       }
       if (
         source === "hold_expiration" &&

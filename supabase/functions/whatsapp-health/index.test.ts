@@ -117,7 +117,7 @@ Deno.test(
 Deno.test(
   "health rechaza selector cross-account antes de cualquier Graph",
   async () => {
-    let graphCalls = 0;
+    const graphCalls = 0;
     const client = {
       rpc: async () => ({
         data: { account: { accountId: ACCOUNT_ID } },

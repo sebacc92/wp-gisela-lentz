@@ -8,6 +8,23 @@ function formatPart(startsAt: string, options: Intl.DateTimeFormatOptions) {
   }).format(new Date(startsAt));
 }
 
+export function renderDepositConfirmationMessage(
+  template: string,
+  date: string,
+  time: string,
+): string {
+  const fallback = `¡Listo! Confirmé tu turno para el ${date} a las ${time}.`;
+  const rendered = template
+    .replaceAll("{date}", date)
+    .replaceAll("{time}", time)
+    .trim();
+  return rendered &&
+    rendered.length <= 4096 &&
+    !/\{[A-Za-z][A-Za-z0-9_]*\}/.test(rendered)
+    ? rendered
+    : fallback;
+}
+
 export async function confirmDepositAndNotify(
   client: SupabaseClient,
   input: {
@@ -45,25 +62,17 @@ export async function confirmDepositAndNotify(
     const template = String(
       settings?.deposit_confirmed_message_template ?? "",
     ).trim();
-    if (!template) return { confirmed: true, notified: false };
-
-    const body = template
-      .replaceAll(
-        "{date}",
-        formatPart(input.startsAt, {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-        }),
-      )
-      .replaceAll(
-        "{time}",
-        formatPart(input.startsAt, {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }),
-      );
+    const date = formatPart(input.startsAt, {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    });
+    const time = formatPart(input.startsAt, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    const body = renderDepositConfirmationMessage(template, date, time);
     const { data, error: sendError } = await client.functions.invoke(
       "whatsapp-send",
       {

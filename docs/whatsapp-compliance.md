@@ -76,7 +76,9 @@ aprobados por la responsable del consultorio.
     con dirección y horarios estructurados. No comparte el mensaje original,
     identidad, teléfono del paciente, cobertura, turnos, comprobantes ni datos
     de salud; usa `store=false` y deriva a una persona ante datos faltantes o una
-    respuesta riesgosa.
+    respuesta riesgosa. `store=false` evita estado de aplicación, pero los logs
+    de prevención de abuso del proveedor pueden conservar contenido hasta 30
+    días salvo que el proyecto tenga Zero Data Retention.
 
 La autoridad final de mensajería es el backend compartido y el trigger
 `enforce_whatsapp_outbound_policy`. El ledger `whatsapp_consent_events` es

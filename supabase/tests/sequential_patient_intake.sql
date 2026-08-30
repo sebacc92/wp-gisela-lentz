@@ -8,8 +8,8 @@ select plan(2);
 
 select is(
   (select automation_welcome_message from public.app_settings where id = true),
-  'Hola!!!☺️ Gracias por comunicarte con el Consultorio Odontológico Lentz Gisela. Para agendar tu turno envíanos:',
-  'the configured welcome is the exact short greeting'
+  '¡Hola! Soy Gisela 😊 Para agendar tu turno voy a pedirte algunos datos.',
+  'the configured welcome is the exact first-person greeting'
 );
 
 select ok(

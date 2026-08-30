@@ -81,7 +81,6 @@ export async function deliverAppointmentReminder(input: {
   appointment: { id: string; starts_at: string };
   conversation: WhatsAppConversation;
   contact: WhatsAppContact;
-  professionalName: string;
   template: {
     key: string;
     meta_name: string;
@@ -95,7 +94,6 @@ export async function deliverAppointmentReminder(input: {
     input.contact.name,
     formatAppointmentDate(input.appointment.starts_at, input.businessTimezone),
     formatAppointmentTime(input.appointment.starts_at, input.businessTimezone),
-    input.professionalName || "Gisela Lentz",
   ];
   const payload = templatePayload(
     input.template.meta_name,

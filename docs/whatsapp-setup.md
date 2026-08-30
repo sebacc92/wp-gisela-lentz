@@ -61,10 +61,16 @@ Reglas:
 - usar orígenes HTTPS exactos, separados por coma, sin wildcard;
 - mantener test mode activo y una allowlist mínima durante toda la integración.
 - guardar `OPENAI_API_KEY` únicamente en Supabase Secrets. No copiarla a
-  Vercel, al navegador, SQL, logs ni archivos versionados. El asistente opcional
-  usa el modelo fijo `gpt-5.6-luna` y permanece apagado mientras
+  Vercel, al navegador, SQL, logs ni archivos versionados. El asistente y la
+  lectura de comprobantes usan `gpt-5.6-luna`; las notas de voz usan
+  `gpt-transcribe`. Todo permanece apagado mientras
   `OPENAI_ADMINISTRATIVE_ENABLED`, `ai_enabled` o
   `WHATSAPP_AUTOMATIONS_ENABLED` sean falsos;
+- la lectura de audio, imágenes y PDF requiere además
+  `app_settings.ai_media_enabled=true`. En particular, la lectura automática de
+  un comprobante sólo se intenta con `ai_enabled`, `ai_media_enabled`,
+  `OPENAI_ADMINISTRATIVE_ENABLED` y `WHATSAPP_AUTOMATIONS_ENABLED` activos; si
+  algún control está apagado, el adjunto queda para revisión manual;
 - mantener `WHATSAPP_EMBEDDED_SIGNUP_ENABLED=false` hasta la autorización
   específica del onboarding. Si falta o no vale literalmente `true`, backend y
   frontend deben fallar cerrado sin cargar Facebook Login;
@@ -76,6 +82,8 @@ Reglas:
   `META_APP_SECRET`; cada operación WABA usa el business token de ese cliente;
 - `WHATSAPP_MEDIA_MAX_BYTES` limita también el stream descargado para revisar
   comprobantes (10 MiB recomendado; máximo admitido por la función: 20 MiB).
+  La transcripción automática con IA aplica un límite más estricto de 4 MiB;
+  un adjunto mayor queda para revisión manual.
 - `WHATSAPP_WEBHOOK_MAX_BYTES` limita el body mientras se lee el stream, antes
   de reservar el payload completo. El default de 3 MiB refleja el máximo actual
   documentado por Meta; el código sólo acepta configuraciones entre 64 KiB y
@@ -207,15 +215,24 @@ ante cualquier destinatario inesperado, duplicado o problema de calidad.
 
 Crear y aprobar en Meta, con nombres iguales a `message_templates.meta_name`:
 
-- `appointment_created`
-- `appointment_reminder_24h`
-- `appointment_reminder_2h`
-- `appointment_cancelled`
-- `appointment_rescheduled`
+- `gisela_appointment_created_v2`
+- `gisela_appointment_reminder_24h_v2`
+- `gisela_appointment_reminder_2h_v2`
+- `gisela_appointment_cancelled_v2`
+- `gisela_appointment_rescheduled_v2`
 
-El recordatorio actual usa cuatro parámetros de cuerpo, en orden: paciente,
-fecha, hora y profesional. Agregar tres botones de respuesta rápida en orden:
-confirmar, reprogramar y cancelar.
+Los recordatorios usan tres parámetros de cuerpo, en orden: paciente, fecha y
+hora. El texto aprobado debe hablar como Gisela en primera persona singular,
+por ejemplo: `Hola {{1}}, te recuerdo tu turno del {{2}} a las {{3}}.` No debe
+decir “te recordamos”, “nuestro consultorio” ni “con Gisela”: es su propio
+WhatsApp y no existe otra profesional. Agregar tres botones de respuesta rápida
+en orden: confirmar, reprogramar y cancelar.
+
+Los nombres `*_v2` evitan reutilizar por accidente una plantilla anterior con
+cuatro parámetros o voz institucional. La migración las deja deshabilitadas y
+sin estado heredado: hay que esperar que la versión singular figure
+`APPROVED / UTILITY` y habilitarla desde el panel antes de activar
+recordatorios. El backend envía exactamente los tres parámetros de esa versión.
 
 En **Configuración → WhatsApp → Verificar conexión**, la función sincroniza
 estado, categoría y calidad. El backend sólo permite mensajes proactivos con

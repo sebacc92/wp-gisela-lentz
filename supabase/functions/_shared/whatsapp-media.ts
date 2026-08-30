@@ -7,7 +7,9 @@ const MEDIA_ID_PATTERN = /^[0-9]{5,64}$/;
 const ALLOWED_DOWNLOAD_HOSTS = new Set(["lookaside.fbsbx.com"]);
 const TYPE_MIME_ALLOWLIST = {
   image: new Set(["image/jpeg", "image/png"]),
-  document: new Set(["application/pdf"]),
+  // WhatsApp permite que una captura se envíe conservando calidad como
+  // "documento". Sigue siendo un comprobante legible y seguro para este flujo.
+  document: new Set(["application/pdf", "image/jpeg", "image/png"]),
   // WhatsApp entrega las notas de voz como audio/ogg con códec opus. El resto
   // son los formatos que Meta acepta para un adjunto de audio corriente.
   audio: new Set([

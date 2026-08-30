@@ -14,7 +14,7 @@ export type PatientProfileField =
   | "coverage";
 
 export const APPOINTMENT_WELCOME_MESSAGE =
-  "Hola!!!☺️ Gracias por comunicarte con el Consultorio Odontológico Lentz Gisela. Para agendar tu turno envíanos:";
+  "¡Hola! Soy Gisela 😊 Para agendar tu turno voy a pedirte algunos datos.";
 
 export const PATIENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
   name: "¿Cuál es tu nombre y apellido?",
@@ -389,6 +389,26 @@ export function renderConfiguredMessage(
         : placeholder,
     )
     .trim();
+}
+
+const DEFAULT_DEPOSIT_PROOF_REVIEW_MESSAGE =
+  "Recibí el comprobante. Necesito revisarlo antes de confirmar el turno.";
+
+export function depositProofReviewMessage(
+  configuredMessage: string | null | undefined,
+  late: boolean,
+): string {
+  if (late) {
+    return "Recibí el comprobante, pero la pre-reserva ya venció. Necesito revisarlo antes de confirmar un turno.";
+  }
+  const configured = configuredMessage?.trim() ?? "";
+  const candidate = configured
+    ? `${configured} Necesito revisarlo antes de confirmar el turno.`
+    : DEFAULT_DEPOSIT_PROOF_REVIEW_MESSAGE;
+  return candidate.length <= 4096 &&
+    !/\{[A-Za-z][A-Za-z0-9_]*\}/.test(candidate)
+    ? candidate
+    : DEFAULT_DEPOSIT_PROOF_REVIEW_MESSAGE;
 }
 
 export function resolveMainMenuIntent(value: string): MainMenuIntent | null {
