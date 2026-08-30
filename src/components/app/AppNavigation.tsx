@@ -12,6 +12,7 @@ interface AppNavigationProps {
     | "appointments"
     | "inbox"
     | "patients"
+    | "odontogram"
     | "settings"
     | "templates"
     | "manual";
@@ -57,6 +58,16 @@ const navItems: Array<{
     description: "Buscar y editar pacientes",
     href: "/app/patients",
     icon: "user",
+  },
+  {
+    key: "odontogram",
+    label: "Odontograma",
+    mobileLabel: "Ficha",
+    description: "Registrar el estado clínico de cada paciente",
+    href: "/app/odontogram",
+    icon: "smile",
+    // Dato de salud: fuera del alcance del rol operativo.
+    adminOnly: true,
   },
   {
     key: "settings",

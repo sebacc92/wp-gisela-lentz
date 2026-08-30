@@ -19,6 +19,8 @@ Las migraciones versionadas están en `supabase/migrations/`.
 - `reminders`: cola durable de recordatorios.
 - `message_templates`, `quick_replies`: textos configurables.
 - `audit_logs`, `webhook_events`: auditoría e idempotencia.
+- `odontogram_entries`: historia clínica odontológica por pieza. Append-only y
+  sólo accesible por ADMIN. Detalle en [odontograma](odontograma.md).
 
 ## Integridad de agenda
 
@@ -68,8 +70,9 @@ conversaciones ni credenciales, y todo puede editarse después desde
   como bloqueos de día completo en `availability_exceptions`. Los puentes
   turísticos se decretan año a año y las vacaciones dependen de Gisela: ambos se
   cargan a mano desde **Configuración → Días y horarios cerrados**.
-- Motivos de atención activos: Restauraciones, Extracciones, Limpieza,
-  Blanqueamiento y Ortopedia y ortodoncia. Los motivos heredados que Gisela no
+- Motivos de atención activos: Consulta, Restauraciones, Extracciones,
+  Limpieza, Blanqueamiento y Ortopedia y ortodoncia. Consulta se reincorporó en
+  `20260829234000_add_consulta_service.sql`. Los motivos heredados que Gisela no
   usa quedan desactivados, no eliminados, porque pueden tener turnos asociados.
 - IOMA 30 minutos, Particular 60, sin descanso entre pacientes y 12 horas de
   anticipación mínima para reservar.

@@ -3,9 +3,12 @@
 ## Alcance
 
 La aplicación es single tenant para Gisela Lentz. Conserva una sola profesional
-activa y no agrega organizaciones, billing ni historia clínica. Supabase es la
-fuente de verdad de contactos, agenda, conversaciones, mensajes y estado de la
-automatización.
+activa y no agrega organizaciones ni billing. Supabase es la fuente de verdad de
+contactos, agenda, conversaciones, mensajes y estado de la automatización.
+
+Desde el odontograma también guarda historia clínica. Es el único dato de salud
+del sistema y está aislado del resto: tabla propia, sólo ADMIN, append-only y
+fuera del alcance de la automatización.
 
 ```text
 Gisela / navegador

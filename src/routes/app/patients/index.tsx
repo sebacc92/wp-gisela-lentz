@@ -215,7 +215,10 @@ export default component$(() => {
           <div>
             <span class="eyebrow">Agenda administrativa</span>
             <h1>Pacientes</h1>
-            <p>Datos de contacto y turnos, sin información clínica.</p>
+            <p>
+              Datos de contacto y turnos. La información clínica se carga desde
+              Odontograma.
+            </p>
           </div>
           <div class="patients-header-actions">
             <ManualHelpLink section="pacientes" label="¿Cómo usar pacientes?" />

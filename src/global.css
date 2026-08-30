@@ -7309,3 +7309,172 @@ body {
     min-height: 42px;
   }
 }
+
+/* Odontograma */
+.odontogram-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .odontogram-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.odontogram-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.odontogram-chart h2 {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+
+.odontogram-row {
+  display: flex;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.odontogram-tooth {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 40px;
+  padding: 6px 2px;
+  cursor: pointer;
+  border: 1px solid rgb(0 0 0 / 14%);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.odontogram-tooth:hover,
+.odontogram-tooth:focus-visible {
+  border-color: #936a7f;
+}
+
+.odontogram-tooth.selected {
+  outline: 3px solid rgb(147 106 127 / 30%);
+  outline-offset: 1px;
+  border-color: #936a7f;
+}
+
+.odontogram-tooth-state {
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgb(0 0 0 / 20%);
+  border-radius: 4px;
+  background: #f4f4f5;
+}
+
+/* Cada estado tiene color propio para leer la boca de un vistazo. */
+.condition-sano .odontogram-tooth-state {
+  background: #e7f6ec;
+}
+.condition-caries .odontogram-tooth-state {
+  background: #e5484d;
+}
+.condition-obturado .odontogram-tooth-state {
+  background: #3b82f6;
+}
+.condition-sellante .odontogram-tooth-state {
+  background: #14b8a6;
+}
+.condition-fracturado .odontogram-tooth-state {
+  background: #f59e0b;
+}
+.condition-endodoncia .odontogram-tooth-state {
+  background: #a855f7;
+}
+.condition-corona .odontogram-tooth-state {
+  background: #d4af37;
+}
+.condition-protesis .odontogram-tooth-state,
+.condition-implante .odontogram-tooth-state {
+  background: #64748b;
+}
+.condition-extraccion_indicada .odontogram-tooth-state {
+  border: 2px solid #e5484d;
+  background: #fff;
+}
+.condition-ausente .odontogram-tooth-state {
+  background: repeating-linear-gradient(
+    45deg,
+    #e4e4e7,
+    #e4e4e7 3px,
+    #fff 3px,
+    #fff 6px
+  );
+}
+
+.odontogram-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.odontogram-detail h2,
+.odontogram-detail h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.odontogram-current {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.odontogram-surfaces {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.odontogram-surfaces legend {
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.odontogram-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.odontogram-history small {
+  display: block;
+  opacity: 0.7;
+}
+
+.odontogram-history p {
+  margin: 4px 0 0;
+}
+
+.odontogram-privacy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

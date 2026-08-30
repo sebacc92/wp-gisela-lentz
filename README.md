@@ -3,7 +3,12 @@
 Aplicación interna, single tenant, para administrar la agenda, pacientes y
 conversaciones de WhatsApp de **Gisela Lentz · Odontología**. Reutiliza Qwik,
 Supabase Auth/Postgres/Edge Functions, Vercel y la API oficial de WhatsApp Cloud.
-No incluye historia clínica ni toma decisiones clínicas.
+No toma decisiones clínicas.
+
+Incluye un odontograma por paciente: es historia clínica, así que vive bajo
+reglas propias. Sólo lo ve y lo carga el rol ADMIN, es append-only —una
+corrección agrega un asiento y nunca pisa el anterior— y la automatización de
+WhatsApp jamás lo lee ni lo envía. Ver [odontograma](docs/odontograma.md).
 
 ## Qué incluye
 
@@ -345,6 +350,7 @@ git diff --check
 
 - [Arquitectura](docs/architecture.md)
 - [Base de datos](docs/database.md)
+- [Odontograma](docs/odontograma.md)
 - [Conexión de WhatsApp](docs/whatsapp-setup.md)
 - [WhatsApp Coexistence](docs/whatsapp-coexistence.md)
 - [Embedded Signup v4](docs/whatsapp-embedded-signup.md)

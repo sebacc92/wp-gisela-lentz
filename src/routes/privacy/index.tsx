@@ -59,6 +59,15 @@ export default component$(() => {
             como invitado.
           </li>
           <li>
+            <strong>Información clínica odontológica:</strong> el odontograma
+            registra el estado de cada pieza dental, las caras afectadas y notas
+            del tratamiento. Lo carga la profesional durante la atención; no se
+            recibe por WhatsApp. Es un dato de salud y se trata como tal: sólo
+            accede el rol administrador, cada registro queda con su fecha y
+            autor, ninguno se modifica ni se elimina, y la automatización de
+            mensajes nunca lo consulta ni lo envía.
+          </li>
+          <li>
             <strong>Preferencias y consentimiento:</strong> constancias de alta,
             baja o autorización para comunicaciones y recordatorios.
           </li>
