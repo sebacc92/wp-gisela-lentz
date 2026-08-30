@@ -568,3 +568,28 @@ export function parseAppointmentSelection(
   ).exec(value);
   return match?.[1] ?? null;
 }
+
+/** Cuántos horarios se ofrecen por día. Mostrar todos los del primer día
+ * abierto llenaba la lista con un solo día y dejaba afuera a quien no podía
+ * justamente ese día. */
+export const MAX_SLOTS_OFFERED_PER_DAY = 2;
+
+/**
+ * Arma la lista de horarios a ofrecer tomando unos pocos de cada día, en orden,
+ * hasta llegar al total. Recibe los horarios ya agrupados por día para que el
+ * reparto no dependa de zonas horarias.
+ */
+export function selectSlotsForOffer<T>(
+  slotsByDay: T[][],
+  perDay: number,
+  limit: number,
+): T[] {
+  const selected: T[] = [];
+  for (const day of slotsByDay) {
+    for (const slot of day.slice(0, Math.max(0, perDay))) {
+      if (selected.length >= limit) return selected;
+      selected.push(slot);
+    }
+  }
+  return selected;
+}

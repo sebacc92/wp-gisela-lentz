@@ -25,6 +25,8 @@ import {
   resolveRescheduleConfirmation,
   resolveRescheduleRequest,
   renderConfiguredMessage,
+  MAX_SLOTS_OFFERED_PER_DAY,
+  selectSlotsForOffer,
 } from "./automation-flow.ts";
 
 test("la bienvenida contiene sólo el saludo solicitado y ninguna lista", () => {
@@ -324,4 +326,43 @@ test("renderiza el mensaje configurable de seña sin hardcodear sus valores", ()
     rendered,
     "Seña: $10.000\nAlias: odontologa.gisela.mp\nTitular: Gisela Vanesa Lentz",
   );
+});
+
+test("los horarios ofrecidos se reparten entre días, no se agotan en el primero", () => {
+  const lunes = ["lun 09:30", "lun 10:00", "lun 10:30", "lun 11:00"];
+  const martes = ["mar 13:30", "mar 14:00", "mar 14:30"];
+  const miercoles = ["mie 09:30", "mie 10:00"];
+
+  const ofrecidos = selectSlotsForOffer(
+    [lunes, martes, miercoles],
+    MAX_SLOTS_OFFERED_PER_DAY,
+    8,
+  );
+
+  // El problema era justamente que el primer día abierto llenaba la lista.
+  assert.deepEqual(ofrecidos, [
+    "lun 09:30",
+    "lun 10:00",
+    "mar 13:30",
+    "mar 14:00",
+    "mie 09:30",
+    "mie 10:00",
+  ]);
+});
+
+test("el reparto respeta el total pedido y tolera días vacíos", () => {
+  assert.deepEqual(
+    selectSlotsForOffer(
+      [
+        ["a", "b"],
+        ["c", "d"],
+      ],
+      2,
+      3,
+    ),
+    ["a", "b", "c"],
+  );
+  assert.deepEqual(selectSlotsForOffer([[], ["c"]], 2, 5), ["c"]);
+  assert.deepEqual(selectSlotsForOffer([], 2, 5), []);
+  assert.deepEqual(selectSlotsForOffer([["a"]], 0, 5), []);
 });

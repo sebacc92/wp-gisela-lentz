@@ -1138,8 +1138,16 @@ Deno.serve(async (request) => {
       coverage: PatientCoverage,
       limit = 8,
     ): Promise<AutomationSlot[]> => {
-      const slots: AutomationSlot[] = [];
-      for (let offset = 0; offset < 21 && slots.length < limit; offset += 1) {
+      // Se recorren varios días y se toman pocos de cada uno: así la lista
+      // abarca distintos días en vez de agotarse en el primero que esté
+      // abierto.
+      const slotsByDay: AutomationSlot[][] = [];
+      const maxDaysOffered = Math.ceil(limit / MAX_SLOTS_OFFERED_PER_DAY);
+      for (
+        let offset = 0;
+        offset < 21 && slotsByDay.length < maxDaysOffered;
+        offset += 1
+      ) {
         const date = new Date(executionNow);
         date.setDate(date.getDate() + offset);
         const { data, error } = await client.rpc(
@@ -1149,23 +1157,26 @@ Deno.serve(async (request) => {
             p_coverage: coverage,
             p_date: dateInTimezone(date, businessTimezone),
             p_timezone: businessTimezone,
-            p_limit: limit - slots.length,
+            p_limit: MAX_SLOTS_OFFERED_PER_DAY,
           },
         );
         if (error) throw error;
-        for (const slot of data ?? []) {
-          slots.push({
+        const day = (data ?? []).map(
+          (slot: { starts_at: string; ends_at: string }) => ({
             startsAt: slot.starts_at,
             endsAt: slot.ends_at,
             professionalId,
             professionalName,
             serviceId,
             serviceName,
-          });
-          if (slots.length >= limit) break;
-        }
+          }),
+        );
+        if (day.length) slotsByDay.push(day);
       }
-      return await durableDecision("available_slots", slots);
+      return await durableDecision(
+        "available_slots",
+        selectSlotsForOffer(slotsByDay, MAX_SLOTS_OFFERED_PER_DAY, limit),
+      );
     };
 
     const showSlots = async (
