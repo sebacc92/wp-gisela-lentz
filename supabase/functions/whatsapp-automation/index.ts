@@ -683,7 +683,7 @@ Deno.serve(async (request) => {
         typeof appSettings?.urgent_message === "string" &&
         appSettings.urgent_message.trim()
           ? appSettings.urgent_message.trim()
-          : "Recibimos tu mensaje y lo marcamos para atención prioritaria. Gisela lo revisará personalmente. Si se trata de una emergencia, contactá al servicio de emergencias de tu zona.";
+          : "Tomo tu mensaje como urgencia y te respondo apenas lo vea. Si es una emergencia grave, contactá al servicio de emergencias de tu zona.";
       await send(
         textPayload(urgentMessage),
         urgentMessage,
@@ -1116,7 +1116,7 @@ Deno.serve(async (request) => {
       const message =
         "No encontramos próximos turnos activos asociados a este WhatsApp.";
       await send(textPayload(message), message);
-      await showMainMenu("Podés sacar un turno nuevo o hablar con Gisela.");
+      await showMainMenu("Podés sacar un turno nuevo o hacerme otra consulta.");
     };
 
     const showRescheduleRequest = async (
@@ -1260,7 +1260,7 @@ Deno.serve(async (request) => {
         await send(
           buttonsPayload(configuredInfo, [
             { id: "flow:new", title: "Sacar un turno" },
-            { id: "flow:human", title: "Hablar con Gisela" },
+            { id: "flow:human", title: "Otra consulta" },
             { id: "flow:menu", title: "Menú principal" },
           ]),
           configuredInfo,
@@ -1498,7 +1498,7 @@ Deno.serve(async (request) => {
       await send(
         buttonsPayload(answer.answer, [
           { id: "flow:new", title: "Sacar un turno" },
-          { id: "flow:human", title: "Hablar con Gisela" },
+          { id: "flow:human", title: "Otra consulta" },
           { id: "flow:menu", title: "Menú principal" },
         ]),
         answer.answer,
@@ -2245,7 +2245,7 @@ Deno.serve(async (request) => {
         const message =
           appointment.depositStatus === "proof_received"
             ? "Ya recibimos tu comprobante. Gisela lo va a revisar personalmente y te confirmaremos el turno."
-            : "Tu horario sigue pre-reservado. Enviá el comprobante como imagen o PDF y Gisela lo revisará personalmente.";
+            : "Tu horario sigue pre-reservado. Mandame el comprobante como imagen o PDF y lo reviso.";
         await send(textPayload(message), message, {
           appointment_id: appointment.id,
         });

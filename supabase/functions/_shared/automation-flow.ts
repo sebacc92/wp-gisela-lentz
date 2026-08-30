@@ -30,7 +30,9 @@ export const MAIN_MENU_OPTIONS: Array<{
   { id: "flow:appointments", title: "Ver mis turnos" },
   { id: "flow:cancel", title: "Cancelar turno" },
   { id: "flow:info", title: "Horarios y ubicación" },
-  { id: "flow:human", title: "Hablar con Gisela" },
+  // El número es el de Gisela y contesta ella: "hablar con Gisela" se leería
+  // como si del otro lado hubiera alguien más.
+  { id: "flow:human", title: "Otra consulta" },
 ];
 
 export function normalizeUserInput(value: string): string {

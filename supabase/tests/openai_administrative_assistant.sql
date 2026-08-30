@@ -252,10 +252,11 @@ select ok(
       and audit.action = 'openai.administrative_settings_updated'
       and audit.metadata = jsonb_build_object(
         'enabled', true,
-        'model', 'gpt-5.6-luna'
+        'model', 'gpt-5.6-luna',
+        'media_enabled', false
       )
   ),
-  'the audit stores only the boolean and fixed model'
+  'the audit stores only the booleans and the fixed model'
 );
 
 select * from finish();
