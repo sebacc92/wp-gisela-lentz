@@ -1,12 +1,14 @@
 import {
   $,
   component$,
+  useContext,
   useSignal,
   useStore,
   useVisibleTask$,
 } from "@qwik.dev/core";
 import { Link, type DocumentHead, useLocation } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { BOT_AUTOMATION_CONTEXT } from "~/components/app/BotAutomationContext";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { WhatsAppEmbeddedSignup } from "~/components/settings/WhatsAppEmbeddedSignup";
 import { Icon } from "~/components/ui/Icon";
@@ -183,6 +185,7 @@ function containsRestrictedAutomationRequest(value: string): boolean {
 }
 
 export default component$(() => {
+  const botAutomation = useContext(BOT_AUTOMATION_CONTEXT);
   const location = useLocation();
   const googleResult =
     location.url.searchParams.get("google") ??
@@ -245,7 +248,6 @@ export default component$(() => {
     whatsappQuality: "UNKNOWN" as "GREEN" | "YELLOW" | "RED" | "UNKNOWN",
     sendingPaused: false,
     sendingPauseReason: "",
-    automationsEnabled: false,
     testMode: true,
     testAllowedNumberCount: 0,
     professionalId: "",
@@ -2246,10 +2248,14 @@ export default component$(() => {
                       <span>Respuestas automáticas</span>
                       <strong
                         class={
-                          !state.automationsEnabled ? "sending-paused" : ""
+                          botAutomation.enabled !== true ? "sending-paused" : ""
                         }
                       >
-                        {state.automationsEnabled ? "Activadas" : "Apagadas"}
+                        {botAutomation.enabled === null
+                          ? "Sin comprobar"
+                          : botAutomation.enabled
+                            ? "Activadas"
+                            : "Apagadas"}
                       </strong>
                     </div>
                     <div>
@@ -2283,7 +2289,7 @@ export default component$(() => {
                       </strong>
                     </div>
                   </div>
-                  {!state.automationsEnabled && (
+                  {botAutomation.enabled === false && (
                     <div class="settings-policy-alert">
                       <Icon name="info" size={18} />
                       <span>
@@ -2293,6 +2299,18 @@ export default component$(() => {
                         <small>
                           Los mensajes seguirán llegando a Conversaciones para
                           que puedas responderlos de forma manual.
+                        </small>
+                      </span>
+                    </div>
+                  )}
+                  {botAutomation.enabled === null && (
+                    <div class="settings-policy-alert" role="alert">
+                      <Icon name="alert" size={18} />
+                      <span>
+                        <strong>No pudimos comprobar el bot</strong>
+                        <small>
+                          Volvé a Inicio y reintentá antes de asumir que está
+                          encendido o apagado.
                         </small>
                       </span>
                     </div>
@@ -2348,9 +2366,6 @@ export default component$(() => {
                         state.sendingPaused = Boolean(data.sendingPaused);
                         state.sendingPauseReason =
                           data.sendingPauseReason ?? "";
-                        state.automationsEnabled = Boolean(
-                          data.safety?.automationsEnabled,
-                        );
                         state.testMode = data.safety?.testMode !== false;
                         state.testAllowedNumberCount = Number(
                           data.safety?.testAllowedNumberCount ?? 0,

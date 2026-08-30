@@ -8,6 +8,7 @@ import type { DocumentHead } from "@qwik.dev/router";
 import { Link } from "@qwik.dev/router";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { BotAutomationControl } from "~/components/app/BotAutomationControl";
 import { Icon } from "~/components/ui/Icon";
 import {
   APP_DESCRIPTION,
@@ -239,6 +240,7 @@ export default component$(() => {
             <span class="eyebrow">Tu consultorio hoy</span>
             <h1>Buen día, {BUSINESS_CONFIG.name.split(" ")[0]}</h1>
             <p>{todayLabel}. Acá tenés todo lo importante, sin vueltas.</p>
+            <BotAutomationControl variant="home" />
             <nav class="dashboard-quick-actions" aria-label="Acciones rápidas">
               <Link class="primary-button" href={todayAgendaHref}>
                 <Icon name="calendar" size={17} /> Abrir agenda

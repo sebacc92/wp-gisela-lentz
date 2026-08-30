@@ -1,6 +1,13 @@
-import { $, component$, useStore, useVisibleTask$ } from "@qwik.dev/core";
+import {
+  $,
+  component$,
+  useContext,
+  useStore,
+  useVisibleTask$,
+} from "@qwik.dev/core";
 import { Link, type DocumentHead, useNavigate } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { BOT_AUTOMATION_CONTEXT } from "~/components/app/BotAutomationContext";
 import { ManualContent } from "~/components/manual/ManualContent";
 import type { ManualSystemStatus } from "~/components/manual/SystemStatus";
 import { Icon } from "~/components/ui/Icon";
@@ -75,6 +82,7 @@ function emptySystemStatus(): ManualSystemStatus {
 
 export default component$(() => {
   const navigate = useNavigate();
+  const botAutomation = useContext(BOT_AUTOMATION_CONTEXT);
   const access = useStore({ loading: true, allowed: false, failed: false });
   const system = useStore<ManualSystemStatus>(emptySystemStatus());
 
@@ -131,11 +139,7 @@ export default component$(() => {
           pendingJobs,
           ambiguousJobs,
         }),
-        automation: automationManualStatus(
-          whatsappChecked && typeof signup?.automationsEnabled === "boolean"
-            ? signup.automationsEnabled
-            : null,
-        ),
+        automation: automationManualStatus(botAutomation.enabled),
         testMode: testModeManualStatus(
           whatsappChecked && typeof signup?.testMode === "boolean"
             ? signup.testMode
@@ -175,7 +179,8 @@ export default component$(() => {
               calendarPending === null ||
               calendarFailed === null)) ||
           !webhookChecked ||
-          failedWebhooks === null,
+          failedWebhooks === null ||
+          botAutomation.enabled === null,
       };
       Object.assign(system, next);
     } catch {
@@ -255,7 +260,10 @@ export default component$(() => {
               </Link>
             </header>
             <ManualContent
-              systemStatus={system}
+              systemStatus={{
+                ...system,
+                automation: automationManualStatus(botAutomation.enabled),
+              }}
               onRefreshSystemStatus$={refreshSystemStatus}
             />
           </>

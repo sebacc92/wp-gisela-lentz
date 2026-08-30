@@ -110,9 +110,14 @@ impide que el flujo procese las entradas posteriores.
 
 ## Controles globales
 
+- `app_settings.automations_enabled=false`: apaga las respuestas del bot desde
+  la aplicación. Es la posición operativa por defecto; una persona `ADMIN` puede
+  cambiarla desde el interruptor del menú en escritorio o desde Inicio en
+  mobile. Cada cambio queda auditado.
 - `WHATSAPP_AUTOMATIONS_ENABLED=false`: no se invoca el bot ni se despachan
   handoffs, respuestas urgentes o recordatorios automáticos. Webhook, bandeja y
-  respuestas manuales siguen disponibles.
+  respuestas manuales siguen disponibles. Este kill switch backend debe estar
+  en `true` para que el interruptor de la aplicación pueda encender el bot.
 - `app_settings.ai_enabled=false`: no se llama a OpenAI aunque la automatización
   general esté activa. Toda asistencia requiere además el kill switch backend
   `OPENAI_ADMINISTRATIVE_ENABLED=true`. Las respuestas administrativas y los

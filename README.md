@@ -300,11 +300,16 @@ consultar el token o llamar a Graph, y registra el intento sin teléfono ni text
 del mensaje en logs.
 
 Cuando el número autorizado, la firma del webhook, los horarios y los servicios
-estén verificados, cambiar únicamente:
+estén verificados, habilitar la palanca de servidor:
 
 ```env
 WHATSAPP_AUTOMATIONS_ENABLED=true
 ```
+
+Esto permite que funcione el interruptor de la aplicación, pero no enciende el
+bot por sí solo: `app_settings.automations_enabled` nace en `false`. Una persona
+`ADMIN` puede encenderlo desde el menú lateral en escritorio o desde Inicio en
+mobile. El estado debe quedar apagado hasta terminar la verificación.
 
 No desactivar `WHATSAPP_TEST_MODE` hasta terminar todas las pruebas controladas.
 

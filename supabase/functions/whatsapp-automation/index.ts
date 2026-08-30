@@ -23,6 +23,7 @@ import {
   type PatientCoverage,
   type PatientProfileField,
 } from "../_shared/automation-flow.ts";
+import { appAutomationsEnabled } from "../_shared/app-automations.ts";
 import { validateDepositProofForAutoConfirmation } from "../_shared/deposit-proof.ts";
 import {
   jsonResponse,
@@ -593,7 +594,7 @@ Deno.serve(async (request) => {
 
     // Interruptor operativo del bot. El kill switch de servidor sigue vigente
     // aparte; acá se respeta el que Gisela maneja desde la aplicación.
-    if (appSettings?.automations_enabled === false) {
+    if (!appAutomationsEnabled(appSettings)) {
       return await finish({ ignored: true, reason: "AUTOMATIONS_DISABLED" });
     }
     const executionNow = new Date(execution.snapshot_at);

@@ -11,6 +11,10 @@ import {
   APP_USER_CONTEXT,
   type AppUserContextValue,
 } from "~/components/app/AppUserContext";
+import {
+  BOT_AUTOMATION_CONTEXT,
+  type BotAutomationContextValue,
+} from "~/components/app/BotAutomationContext";
 import { BUSINESS_CONFIG } from "~/config/business";
 import { isAdminProfile } from "~/lib/admin-access";
 import { getSupabaseClient } from "~/lib/supabase/client";
@@ -24,7 +28,13 @@ export default component$(() => {
     fullName: BUSINESS_CONFIG.name,
     isAdmin: false,
   });
+  const botAutomation = useStore<BotAutomationContextValue>({
+    enabled: null,
+    saving: false,
+    error: "",
+  });
   useContextProvider(APP_USER_CONTEXT, appUser);
+  useContextProvider(BOT_AUTOMATION_CONTEXT, botAutomation);
   const requestedPath = `${location.url.pathname}${location.url.search}${location.url.hash}`;
   const loginUrl = `/login?next=${encodeURIComponent(requestedPath)}`;
   const inactiveLoginUrl = `${loginUrl}&error=inactive`;
@@ -41,11 +51,19 @@ export default component$(() => {
         return;
       }
 
-      const { data: profile, error: profileError } = await client
-        .from("profiles")
-        .select("full_name,role,active")
-        .eq("id", session.user.id)
-        .single();
+      const [profileResult, automationResult] = await Promise.all([
+        client
+          .from("profiles")
+          .select("full_name,role,active")
+          .eq("id", session.user.id)
+          .single(),
+        client
+          .from("app_settings")
+          .select("automations_enabled")
+          .eq("id", true)
+          .single(),
+      ]);
+      const { data: profile, error: profileError } = profileResult;
 
       if (profileError || !profile?.active) {
         await client.auth.signOut();
@@ -55,6 +73,15 @@ export default component$(() => {
 
       appUser.fullName = profile.full_name?.trim() || BUSINESS_CONFIG.name;
       appUser.isAdmin = isAdminProfile(profile);
+      if (
+        automationResult.error ||
+        typeof automationResult.data?.automations_enabled !== "boolean"
+      ) {
+        botAutomation.error =
+          "No pudimos consultar el bot. Revisá la conexión e intentá de nuevo.";
+      } else {
+        botAutomation.enabled = automationResult.data.automations_enabled;
+      }
       ready.value = true;
     } catch {
       error.value =
