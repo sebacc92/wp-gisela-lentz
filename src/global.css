@@ -8096,3 +8096,24 @@ textarea::placeholder {
 .nav-bot-switch input:disabled ~ .nav-bot-switch-label {
   opacity: 0.65;
 }
+
+/* El panel "Más" de mobile tiene fondo claro: el switch necesita su propio
+   contraste, no el de la barra lateral oscura. */
+.mobile-bot-switch {
+  order: -1;
+  margin: 0 0 12px;
+  border-color: rgb(0 0 0 / 14%);
+  background: rgb(0 0 0 / 4%);
+}
+
+.mobile-bot-switch .nav-bot-switch-track {
+  background: rgb(0 0 0 / 22%);
+}
+
+.mobile-bot-switch.on .nav-bot-switch-track {
+  background: #2f9e63;
+}
+
+.mobile-bot-switch:focus-within {
+  outline-color: rgb(147 106 127 / 35%);
+}

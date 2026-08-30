@@ -102,6 +102,18 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
   const botEnabled = useSignal<boolean | null>(null);
   const botSaving = useSignal(false);
 
+  const toggleBot = $(async (next: boolean): Promise<boolean> => {
+    botSaving.value = true;
+    const { error } = await getSupabaseClient()
+      .from("app_settings")
+      .update({ automations_enabled: next })
+      .eq("id", true);
+    botSaving.value = false;
+    if (error) return false;
+    botEnabled.value = next;
+    return true;
+  });
+
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     if (!appUser.isAdmin) return;
@@ -160,17 +172,7 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
               disabled={botEnabled.value === null || botSaving.value}
               onChange$={async (_, element) => {
                 const next = element.checked;
-                botSaving.value = true;
-                const { error } = await getSupabaseClient()
-                  .from("app_settings")
-                  .update({ automations_enabled: next })
-                  .eq("id", true);
-                botSaving.value = false;
-                if (error) {
-                  element.checked = !next;
-                  return;
-                }
-                botEnabled.value = next;
+                if (!(await toggleBot(next))) element.checked = !next;
               }}
             />
             <span class="nav-bot-switch-track" aria-hidden="true" />
@@ -336,6 +338,35 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
                   ?.focus()
               }
             />
+            {appUser.isAdmin && (
+              <label
+                class={{
+                  "nav-bot-switch": true,
+                  "mobile-bot-switch": true,
+                  on: botEnabled.value === true,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={botEnabled.value === true}
+                  disabled={botEnabled.value === null || botSaving.value}
+                  onChange$={async (_, element) => {
+                    const next = element.checked;
+                    if (!(await toggleBot(next))) element.checked = !next;
+                  }}
+                />
+                <span class="nav-bot-switch-track" aria-hidden="true" />
+                <span class="nav-bot-switch-label">
+                  <Icon name="bot" size={16} />
+                  {botEnabled.value === null
+                    ? "Bot…"
+                    : botEnabled.value
+                      ? "Bot encendido"
+                      : "Bot apagado"}
+                </span>
+              </label>
+            )}
+
             <header class="mobile-more-header">
               <h2 id="mobile-more-title" class="sr-only">
                 Más opciones de navegación
