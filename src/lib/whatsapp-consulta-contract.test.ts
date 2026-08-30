@@ -56,7 +56,11 @@ test("la verificación de automatización ejecuta Deno sobre todas las Edge Func
     scripts["build.types:functions"],
     "deno check supabase/functions",
   );
-  assert.match(scripts["build.types"] ?? "", /build\.types:functions/);
+  // `build.types` queda deliberadamente fuera de la cadena de Deno: Qwik lo
+  // invoca durante el build con `--pretty`, y en el entorno de Vercel Deno no
+  // resuelve los npm: de las Edge Functions. Encadenarlo ahí rompe el deploy
+  // productivo. La verificación vive en `test:automation`, que sí lo corre.
+  assert.doesNotMatch(scripts["build.types"] ?? "", /build\.types:functions/);
   assert.match(scripts["test:automation"] ?? "", /build\.types:functions/);
   assert.equal(scripts["lint:functions"], "deno lint supabase/functions");
   assert.match(scripts.lint ?? "", /lint:functions/);
