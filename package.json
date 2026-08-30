@@ -12,7 +12,7 @@
     "build.client": "vite build",
     "build.preview": "vite build --ssr src/entry.preview.tsx",
     "build.server": "qwik check-client src dist && vite build -c adapters/vercel-edge/vite.config.ts",
-    "build.types": "pnpm run build.types:web && pnpm run build.types:functions",
+    "build.types": "pnpm run build.types:functions && pnpm run build.types:web",
     "build.types:functions": "deno check supabase/functions",
     "build.types:web": "tsc --incremental --noEmit",
     "deploy": "node scripts/assert-deployment-target.mjs && vercel deploy",
