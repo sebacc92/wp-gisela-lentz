@@ -36,6 +36,15 @@ import {
   requestAdministrativeOpenAIAnswer,
   resolveDurableAdministrativeAnswer,
 } from "../_shared/openai-administrative.ts";
+import {
+  OWNER_HELP_MESSAGE,
+  detectOwnerRequest,
+  formatOwnerAgenda,
+  formatOwnerPatient,
+  isOwnerNumber,
+  ownerNumbersFromEnvironment,
+  type OwnerAgendaAppointment,
+} from "../_shared/owner-access.ts";
 import { createServiceClient } from "../_shared/supabase.ts";
 import { constantTimeEqual } from "../_shared/whatsapp-webhook.ts";
 import {
@@ -678,6 +687,120 @@ Deno.serve(async (request) => {
       return true;
     };
 
+    // El número personal autorizado consulta su propia agenda: nunca entra al
+    // flujo de reserva ni recibe el menú de pacientes.
+    if (isOwnerNumber(contact.phone_e164, ownerNumbersFromEnvironment())) {
+      const requested = detectOwnerRequest(inboundBody);
+      let reply = OWNER_HELP_MESSAGE;
+
+      if (requested?.kind === "agenda") {
+        const now = new Date();
+        const dayOffset = requested.day === "tomorrow" ? 1 : 0;
+        const from = new Date(now);
+        if (requested.day !== "week") {
+          from.setUTCDate(from.getUTCDate() + dayOffset);
+          from.setUTCHours(0, 0, 0, 0);
+        }
+        const until = new Date(from);
+        until.setUTCDate(
+          until.getUTCDate() + (requested.day === "week" ? 7 : 1),
+        );
+
+        const { data, error } = await client
+          .from("appointments")
+          .select(
+            "starts_at,coverage,deposit_status,contacts(name,phone_e164),services(name)",
+          )
+          .gte("starts_at", from.toISOString())
+          .lt("starts_at", until.toISOString())
+          .in("status", ["scheduled", "confirmed"])
+          .order("starts_at");
+        if (error) throw error;
+
+        const appointments: OwnerAgendaAppointment[] = (data ?? []).map(
+          (row) => {
+            const patient = Array.isArray(row.contacts)
+              ? row.contacts[0]
+              : row.contacts;
+            const service = Array.isArray(row.services)
+              ? row.services[0]
+              : row.services;
+            return {
+              startsAt: row.starts_at as string,
+              patientName: (patient?.name as string) ?? "Sin nombre",
+              patientPhone: (patient?.phone_e164 as string) ?? null,
+              coverage: (row.coverage as string) ?? null,
+              service: (service?.name as string) ?? null,
+              depositStatus: (row.deposit_status as string) ?? null,
+            };
+          },
+        );
+        reply = formatOwnerAgenda({
+          appointments,
+          day: requested.day,
+          timezone: businessTimezone,
+        });
+      } else if (requested?.kind === "patient") {
+        const { data, error } = await client
+          .from("contacts")
+          .select("id,name,phone_e164,coverage,administrative_notes")
+          .ilike("name", `%${requested.query}%`)
+          .limit(9);
+        if (error) throw error;
+
+        const matches = await Promise.all(
+          (data ?? []).map(async (row) => {
+            const { data: next } = await client
+              .from("appointments")
+              .select("starts_at,coverage,deposit_status,services(name)")
+              .eq("contact_id", row.id)
+              .gte("starts_at", new Date().toISOString())
+              .in("status", ["scheduled", "confirmed"])
+              .order("starts_at")
+              .limit(1)
+              .maybeSingle();
+            return {
+              name: row.name as string,
+              phone: (row.phone_e164 as string) ?? null,
+              coverage: (row.coverage as string) ?? null,
+              notes: (row.administrative_notes as string) ?? null,
+              nextAppointment: next
+                ? {
+                    startsAt: next.starts_at as string,
+                    patientName: row.name as string,
+                    patientPhone: (row.phone_e164 as string) ?? null,
+                    coverage: (next.coverage as string) ?? null,
+                    service: null,
+                    depositStatus: (next.deposit_status as string) ?? null,
+                  }
+                : null,
+            };
+          }),
+        );
+        reply = formatOwnerPatient({
+          matches,
+          query: requested.query,
+          timezone: businessTimezone,
+        });
+      }
+
+      await send(
+        textPayload(reply),
+        reply,
+        { owner_request: requested?.kind ?? "help" },
+        "owner_access",
+      );
+      // Cada respuesta con datos de pacientes queda registrada.
+      await client.from("audit_logs").insert({
+        action: "whatsapp.owner_private_answer",
+        entity_type: "conversation",
+        entity_id: conversation.id,
+        metadata: { request: requested?.kind ?? "help" },
+      });
+      await saveSession("idle");
+      return await finish({ processed: true, state: "owner_access" });
+    }
+
     if (conversation.priority === true) {
       const urgentMessage =
         typeof appSettings?.urgent_message === "string" &&
@@ -820,7 +943,7 @@ Deno.serve(async (request) => {
       await claimInboundHandoff(client, inbound.id);
       const handoffMessage =
         `${reason ? `${reason.trim()} ` : ""}` +
-        "Pasamos esta conversación a atención manual. Gisela podrá responderte desde este mismo chat.";
+        "Sigo yo desde acá. Te respondo por este mismo chat.";
       await send(
         textPayload(handoffMessage),
         handoffMessage,
@@ -1656,6 +1779,12 @@ Deno.serve(async (request) => {
       });
     }
 
+    // El saludo va siempre primero, antes de pedir cualquier dato: si el primer
+    // mensaje ya pedía un turno, el flujo arrancaba sin saludar.
+    if (freshSession && welcomeMessage) {
+      await send(textPayload(welcomeMessage), welcomeMessage);
+    }
+
     const requestedIntent =
       resolveMainMenuIntent(inputValue) ?? administrativeInfoRoute(inputValue);
     const explicitHumanRequest =
@@ -1729,7 +1858,8 @@ Deno.serve(async (request) => {
     }
 
     if (session.state === "idle") {
-      await showMainMenu(freshSession ? welcomeMessage : undefined);
+      // El saludo ya salió como mensaje aparte; acá va sólo el pedido.
+      await showMainMenu(freshSession ? "Elegí una opción:" : undefined);
     } else if (session.state === "selecting_service") {
       if (inputValue === "services:next") {
         await showServices((session.context.professionalPage ?? 0) + 1);

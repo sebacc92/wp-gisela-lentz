@@ -4,6 +4,7 @@ import {
   isDepositProofMediaType,
   normalizeDepositProofResult,
 } from "./deposit-proof.ts";
+import { isOwnerNumber, ownerNumbersFromEnvironment } from "./owner-access.ts";
 import {
   isWhatsAppPolicyError,
   sendAndRecordMessage,
@@ -439,8 +440,12 @@ export async function processIncomingMessage(
 
   const humanReview = requiresHumanReview(message);
   const priority = requiresPriority(message);
+  // Un mensaje del número personal autorizado no se deriva "a una persona":
+  // del otro lado ya está la profesional. Pausar su propia conversación la
+  // dejaría sin respuesta, que es exactamente lo que hay que evitar.
+  const owner = isOwnerNumber(message.phoneE164, ownerNumbersFromEnvironment());
   let humanReviewPauseOwned = false;
-  if (humanReview && decision !== "opt_out") {
+  if (humanReview && !owner && decision !== "opt_out") {
     // Establish ownership before any deposit-proof RPC can also move the
     // conversation to manual. An app echo or operator pause is never replaced.
     const pause = await client.rpc(
@@ -566,7 +571,9 @@ export async function processIncomingMessage(
     shouldRunAutomation:
       automationsEnabled &&
       decision !== "opt_out" &&
-      (!humanReview || priority) &&
-      (conversation.automation_mode === "auto" || humanReviewPauseOwned),
+      (!humanReview || priority || owner) &&
+      (conversation.automation_mode === "auto" ||
+        humanReviewPauseOwned ||
+        owner),
   };
 }

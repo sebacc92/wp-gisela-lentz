@@ -403,6 +403,7 @@ export function isAutomaticWhatsAppSource(value: string | null): boolean {
     value === "automation" ||
     value === "handoff" ||
     value === "urgent_handoff" ||
+    value === "owner_access" ||
     value === "reminder" ||
     value === "deposit_request" ||
     value === "proof_acknowledgement" ||
