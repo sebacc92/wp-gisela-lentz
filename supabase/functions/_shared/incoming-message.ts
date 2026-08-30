@@ -131,6 +131,19 @@ function consentDecision(
   return null;
 }
 
+function mediaUnderstandingPossible(): boolean {
+  const runtime = (
+    globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }
+  ).process;
+  const value =
+    typeof Deno !== "undefined"
+      ? Deno.env.get("OPENAI_ADMINISTRATIVE_ENABLED")
+      : runtime?.env?.OPENAI_ADMINISTRATIVE_ENABLED;
+  return value?.trim() === "true";
+}
+
 export function requiresHumanReview(
   message: NormalizedIncomingMessage,
 ): boolean {
@@ -444,6 +457,14 @@ export async function processIncomingMessage(
   // del otro lado ya está la profesional. Pausar su propia conversación la
   // dejaría sin respuesta, que es exactamente lo que hay que evitar.
   const owner = isOwnerNumber(message.phoneE164, ownerNumbersFromEnvironment());
+  // Un adjunto deja de ser opaco cuando la lectura por IA está habilitada: la
+  // automatización lo transcribe o lo lee y recién ahí decide si sigue sola o
+  // deriva. Sin esa lectura, un adjunto nunca despierta al bot.
+  const readableMedia =
+    mediaUnderstandingPossible() &&
+    (message.type === "audio" ||
+      message.type === "image" ||
+      message.type === "document");
   let humanReviewPauseOwned = false;
   if (humanReview && !owner && decision !== "opt_out") {
     // Establish ownership before any deposit-proof RPC can also move the
@@ -571,7 +592,7 @@ export async function processIncomingMessage(
     shouldRunAutomation:
       automationsEnabled &&
       decision !== "opt_out" &&
-      (!humanReview || priority || owner) &&
+      (!humanReview || priority || owner || readableMedia) &&
       (conversation.automation_mode === "auto" ||
         humanReviewPauseOwned ||
         owner),

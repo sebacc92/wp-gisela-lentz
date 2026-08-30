@@ -576,6 +576,7 @@ Deno.serve(async (request) => {
 
     const normalizedInboundBody = normalizeUserInput(inboundBody);
     const inputValue = replyId || inboundBody;
+
     const configuredWelcomeMessage =
       typeof appSettings?.automation_welcome_message === "string"
         ? appSettings.automation_welcome_message.trim()
@@ -1893,6 +1894,13 @@ Deno.serve(async (request) => {
         processed: true,
         state: "invalid_reminder_action",
       });
+    }
+
+    // Si el adjunto sigue siendo ilegible después de intentar leerlo, vuelve a
+    // manos de una persona, que es el comportamiento de siempre.
+    if (!replyId && unreadableMedia) {
+      await handoff();
+      return await finish({ processed: true, state: "human_handoff" });
     }
 
     // El saludo va siempre primero, antes de pedir cualquier dato: si el primer
