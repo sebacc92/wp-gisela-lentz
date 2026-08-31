@@ -189,6 +189,26 @@ reales. Antes de cualquier prueba funcional posterior, todo staging debe quedar
 protegido por Cloudflare Access sobre **All traffic**. Nunca se debe reutilizar
 el dominio canónico para staging.
 
+### Estado remoto observado en la fase 2B
+
+El 2026-08-31 se creó exclusivamente `gisela-lentz-web-staging` en la cuenta
+Cloudflare `SEBA`, con hostname estable
+`gisela-lentz-web-staging.seba-ad3.workers.dev`. El deployment ID observado es
+`8a3f65ad-4b07-4490-8490-1fb5ea243789` y su version ID es
+`98b3a053-ed65-4b58-81cf-39ca33a4836d`.
+
+La verificación remota mostró `workers.dev` habilitado, Preview URLs
+deshabilitadas, `ASSETS` como único binding y ausencia de routes, Custom
+Domains, variables, secrets y persistencia. El Worker productivo
+`gisela-lentz-web` no existía en la cuenta al cerrar esta fase. Cloudflare Access
+queda pendiente de configuración manual; hasta completarlo no se deben usar
+cuentas reales ni probar Supabase productivo desde staging.
+
+Este fue el primer deployment del Worker, por lo que no existe una versión
+anterior a la cual volver. Ante un incidente se debe conservar la versión para
+diagnóstico y deshabilitar únicamente su hostname `workers.dev`, como se detalla
+en el plan de rollback.
+
 Pruebas públicas de la fase 2B:
 
 1. Landing SSR, canonical, headers, caché y `X-Robots-Tag`.
@@ -219,7 +239,8 @@ Procedimiento de la fase 2B:
    configuración productiva.
 4. Verificar que el nombre remoto `gisela-lentz-web-staging` esté libre o que el
    Worker preexistente pertenezca inequívocamente a este proyecto. El estado
-   remoto actual está **NO CONFIRMADO**.
+   remoto siempre se debe volver a consultar; no asumir que coincide con el
+   registro histórico de este documento.
 5. Autorizar explícitamente `pnpm run deploy:cloudflare:staging`; nunca usar el
    script productivo para crear staging.
 6. Registrar el hostname workers.dev estable y confirmar que Preview URLs está
