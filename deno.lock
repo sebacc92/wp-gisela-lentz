@@ -6697,7 +6697,8 @@
         "npm:typescript@5.9.3",
         "npm:vercel@58.1.0",
         "npm:vite-tsconfig-paths@^4.2.1",
-        "npm:vite@7.3.1"
+        "npm:vite@7.3.1",
+        "npm:wrangler@4.127.1"
       ]
     }
   }

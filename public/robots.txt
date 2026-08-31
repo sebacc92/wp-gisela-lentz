@@ -1,8 +1,11 @@
 User-agent: *
 Disallow: /app
 Disallow: /login
+Allow: /
 Allow: /privacy
 Allow: /privacy-policy
 Allow: /terms
 Allow: /terms-of-service
 Allow: /data-deletion
+
+Sitemap: https://giselalentz.com.ar/sitemap.xml

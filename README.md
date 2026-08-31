@@ -5,6 +5,13 @@ conversaciones de WhatsApp de **Gisela Lentz · Odontología**. Reutiliza Qwik,
 Supabase Auth/Postgres/Edge Functions, Vercel y la API oficial de WhatsApp Cloud.
 No toma decisiones clínicas.
 
+La raíz pública (`/`) contiene la landing de Gisela con información del
+consultorio, horarios, atención, preguntas frecuentes y acceso directo al
+WhatsApp oficial. El panel privado permanece bajo `/app` y `/login`. La landing
+se renderiza en el servidor e incluye metadata social, datos estructurados y
+`sitemap.xml`; cualquier cambio de dominio debe reflejarse también en
+`public/robots.txt` y `public/sitemap.xml`.
+
 Incluye un odontograma por paciente: es historia clínica, así que vive bajo
 reglas propias. Sólo lo ve y lo carga el rol ADMIN, es append-only —una
 corrección agrega un asiento y nunca pisa el anterior— y la automatización de
@@ -103,8 +110,8 @@ node scripts/assert-deployment-target.mjs
 ```
 
 El comando falla si detecta los identificadores conocidos del proyecto viejo en
-los enlaces locales de Supabase o Vercel. `pnpm deploy` ejecuta este guard antes
-de Vercel.
+los enlaces locales de Supabase o Vercel. `pnpm run deploy:vercel` ejecuta este
+guard antes de Vercel.
 
 ### 2. Vincular el Supabase nuevo y aplicar migraciones
 
@@ -240,7 +247,7 @@ pnpm exec supabase functions deploy google-calendar-disconnect
 pnpm exec supabase functions deploy process-calendar-sync
 ```
 
-### 4. Configurar Vercel
+### 4. Configurar Vercel como hosting actual y rollback
 
 Vincular la carpeta con el proyecto nuevo y volver a ejecutar el guard:
 
@@ -256,9 +263,10 @@ PUBLIC_SUPABASE_URL=https://NUEVO_PROJECT_REF.supabase.co
 PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 ```
 
-Agregar la URL final de Vercel a `APP_ALLOWED_ORIGINS` en Supabase y a las URLs
-de redirección permitidas de Supabase Auth. El dominio final no está inventado
-ni hardcodeado en el repositorio.
+Agregar temporalmente los orígenes de Vercel y Cloudflare a
+`APP_ALLOWED_ORIGINS` en Supabase y a las URLs de redirección permitidas de
+Supabase Auth. El origen canónico está centralizado en `src/config/site.ts`; ver
+`docs/CLOUDFLARE_MIGRATION.md` para el cutover y el rollback.
 
 ### 5. Crear el primer usuario
 

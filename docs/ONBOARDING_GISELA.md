@@ -29,8 +29,9 @@ pasos sin compartir credenciales, y la persona técnica sabe cuándo detenerse.
 - Supabase `qcthvykjlwqdrmpkxisc` (`gisela-lentz-wp`) está saludable; todas las
   migraciones hasta `20260826170000_whatsapp_embedded_signup.sql` están
   aplicadas.
-- El frontend productivo está disponible en
-  `https://gisela-lentz-wp.vercel.app`.
+- El frontend que sigue productivo hasta el cutover —y se conservará como
+  rollback— está disponible en `https://gisela-lentz-wp.vercel.app`; el origen
+  canónico previsto es `https://giselalentz.com.ar`.
 - Están activas las Functions de WhatsApp: recepción, envío, media,
   automatización, Embedded Signup, procesadores de Coexistence y recovery.
 - El recovery de Coexistence y de la outbox de automatización tiene exactamente
