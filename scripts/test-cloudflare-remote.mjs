@@ -8,13 +8,14 @@ const PRIVATE_ROBOTS = "noindex, nofollow, noarchive";
 const EXPECTED_STAGING_WORKER = "gisela-lentz-web-staging";
 
 function parseOrigin(argv) {
+  const argumentsList = argv[0] === "--" ? argv.slice(1) : argv;
   assert.deepEqual(
-    argv.slice(0, 1),
+    argumentsList.slice(0, 1),
     ["--origin"],
     "uso: node scripts/test-cloudflare-remote.mjs --origin https://<staging>.workers.dev",
   );
-  assert.equal(argv.length, 2, "se requiere únicamente --origin");
-  const origin = new URL(argv[1]);
+  assert.equal(argumentsList.length, 2, "se requiere únicamente --origin");
+  const origin = new URL(argumentsList[1]);
   assert.equal(origin.protocol, "https:", "staging remoto debe usar HTTPS");
   assert.equal(origin.pathname, "/", "el origen no puede incluir un path");
   assert.equal(origin.search, "", "el origen no puede incluir query string");
@@ -95,9 +96,16 @@ function assertPrivateHeaders(response, pathname) {
 }
 
 function assertHashedAsset(pathname) {
+  const filename = basename(pathname);
   assert.match(
-    basename(pathname),
-    /(?:^|[-.])[a-zA-Z0-9_]{6,}\.(?:css|js)$/,
+    filename,
+    /\.(?:css|js)$/,
+    `${pathname} no es CSS ni JavaScript`,
+  );
+
+  const stem = filename.replace(/\.(?:css|js)$/, "");
+  assert.ok(
+    stem.split(/[-.]/).some((part) => /^[a-zA-Z0-9_]{6,}$/.test(part)),
     `${pathname} no parece un asset con hash`,
   );
 }
@@ -125,8 +133,26 @@ assert.equal(
 );
 assertSecurityHeaders(home, "/");
 
+const privateStatusChains = [];
 for (const pathname of ["/login", "/app"]) {
-  const response = await request(origin, pathname);
+  const initialResponse = await request(origin, pathname);
+  assertPrivateHeaders(initialResponse, pathname);
+
+  let response = initialResponse;
+  const statusChain = [initialResponse.status];
+  if ([301, 302, 307, 308].includes(initialResponse.status)) {
+    const location = initialResponse.headers.get("location");
+    assert.equal(typeof location, "string", pathname);
+    const redirectUrl = new URL(location, origin);
+    assert.equal(redirectUrl.origin, origin, pathname);
+    assert.equal(redirectUrl.pathname, `${pathname}/`, pathname);
+    response = await request(
+      origin,
+      `${redirectUrl.pathname}${redirectUrl.search}`,
+    );
+    statusChain.push(response.status);
+  }
+
   assert.equal(response.status, 200, pathname);
   assertPrivateHeaders(response, pathname);
   assert.match(
@@ -135,6 +161,7 @@ for (const pathname of ["/login", "/app"]) {
     pathname,
   );
   assert.match(response.body, /<!doctype html|<html/i, pathname);
+  privateStatusChains.push(`${pathname}: ${statusChain.join(" → ")}`);
 }
 
 const robots = await request(origin, "/robots.txt");
@@ -217,7 +244,7 @@ console.log(
   [
     `Smoke remoto OK: ${origin}`,
     "/: 200, SSR, canonical productivo, noindex, seguridad y caché OK",
-    "/login y /app: 200, no-store y noindex OK (sin credenciales)",
+    `/login y /app: ${privateStatusChains.join("; ")}; no-store y noindex OK (sin credenciales)`,
     "/robots.txt (contenido público completo):",
     robots.body.trimEnd(),
     "Interpretación robots: permite crawling de la landing y bloquea /login y /app; el header SSR noindex protege la landing de staging.",
