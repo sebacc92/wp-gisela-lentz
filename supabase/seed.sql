@@ -139,7 +139,7 @@ values
     '30000000-0000-4000-8000-000000000001',
     '20000000-0000-4000-8000-000000000001',
     'outbound', 'text',
-    '¡Hola! Soy Gisela 😊 Para agendar tu turno voy a pedirte algunos datos.',
+    '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.',
     'read', 'seed:message:1', now() - interval '28 minutes'
   ),
   (

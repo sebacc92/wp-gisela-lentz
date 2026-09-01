@@ -102,15 +102,23 @@ test("un fallo o apagado de IA administrativa nunca completa en silencio", () =>
   );
 });
 
-test("las operaciones hablan directamente como Gisela", () => {
+test("las operaciones automáticas hablan como el consultorio", () => {
   const automation = source("supabase/functions/whatsapp-automation/index.ts");
 
-  assert.match(automation, /¡Listo! Reservé tu turno/);
-  assert.match(automation, /¡Listo! Reprogramé tu turno/);
-  assert.match(automation, /Cancelé tu turno/);
-  assert.match(automation, /Ya confirmé tu turno/);
+  assert.match(automation, /¡Listo! Tu turno quedó confirmado/);
+  assert.match(automation, /¡Listo! Tu turno quedó reprogramado/);
+  assert.match(automation, /Tu turno quedó cancelado/);
+  assert.match(automation, /Tu turno ya está confirmado/);
   assert.doesNotMatch(
     automation,
-    /Tu turno (?:quedó agendado|quedó reprogramado|fue cancelado)/,
+    /(?:Reservé|Reprogramé|Cancelé|Ya confirmé) tu turno/,
+  );
+  assert.match(
+    automation,
+    /Voy a derivar tu consulta para que puedan ayudarte/,
+  );
+  assert.doesNotMatch(
+    automation,
+    /Sigo yo desde acá|te respondo apenas lo vea|la reviso yo personalmente|continuar personalmente|Mandame el comprobante|Anoté que vas a asistir|pendiente de mi revisión/,
   );
 });

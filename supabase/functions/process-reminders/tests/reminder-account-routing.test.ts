@@ -80,7 +80,7 @@ function reminderClient(input: {
   };
   const templatePolicy = {
     key: "appointment_reminder_24h",
-    meta_name: "gisela_appointment_reminder_24h_v2",
+    meta_name: "gisela_appointment_reminder_24h_v3",
     category: "UTILITY",
     meta_status: "APPROVED",
     quality_rating: "GREEN",
@@ -184,9 +184,9 @@ function deliveryInput(client: SupabaseClient, fetchImpl: typeof fetch) {
     },
     template: {
       key: "appointment_reminder_24h",
-      meta_name: "gisela_appointment_reminder_24h_v2",
+      meta_name: "gisela_appointment_reminder_24h_v3",
       language_code: "es_AR",
-      body_preview: "Te recuerdo tu turno de mañana.",
+      body_preview: "Te recordamos tu turno de mañana.",
     },
     businessTimezone: "America/Argentina/Buenos_Aires",
     fetchImpl,
@@ -223,7 +223,7 @@ Deno.test("reminder usa cuenta, phone y business token exactos", async () => {
     name?: string;
     components?: Array<{ type?: string; parameters?: unknown[] }>;
   };
-  assert.equal(template.name, "gisela_appointment_reminder_24h_v2");
+  assert.equal(template.name, "gisela_appointment_reminder_24h_v3");
   const bodyComponent = template.components?.find(
     (component) => component.type === "body",
   );

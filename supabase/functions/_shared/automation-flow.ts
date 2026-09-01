@@ -14,11 +14,11 @@ export type PatientProfileField =
   | "coverage";
 
 export const APPOINTMENT_WELCOME_MESSAGE =
-  "¡Hola! Soy Gisela 😊 Para agendar tu turno voy a pedirte algunos datos.";
+  "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.";
 
 export const PATIENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
   name: "¿Cuál es tu nombre y apellido?",
-  is_existing_patient: "¿Ya te atendiste conmigo antes?",
+  is_existing_patient: "¿Ya te atendiste en el consultorio antes?",
   contact_phone:
     "¿Cuál es tu teléfono de contacto? Podés escribir otro número o elegir este WhatsApp.",
   coverage: "¿Tu cobertura es IOMA o Particular?",
@@ -46,8 +46,7 @@ export const MAIN_MENU_OPTIONS: Array<{
   { id: "flow:appointments", title: "Ver mis turnos" },
   { id: "flow:cancel", title: "Cancelar turno" },
   { id: "flow:info", title: "Horarios y ubicación" },
-  // El número es el de Gisela y contesta ella: "hablar con Gisela" se leería
-  // como si del otro lado hubiera alguien más.
+  // La opción abre una derivación humana sin prometer quién va a tomarla.
   { id: "flow:human", title: "Otra consulta" },
 ];
 
@@ -392,18 +391,18 @@ export function renderConfiguredMessage(
 }
 
 const DEFAULT_DEPOSIT_PROOF_REVIEW_MESSAGE =
-  "Recibí el comprobante. Necesito revisarlo antes de confirmar el turno.";
+  "Recibimos tu comprobante. Vamos a revisarlo antes de confirmar el turno.";
 
 export function depositProofReviewMessage(
   configuredMessage: string | null | undefined,
   late: boolean,
 ): string {
   if (late) {
-    return "Recibí el comprobante, pero la pre-reserva ya venció. Necesito revisarlo antes de confirmar un turno.";
+    return "Recibimos tu comprobante, pero la pre-reserva ya venció. Vamos a revisar el caso antes de confirmar un turno.";
   }
   const configured = configuredMessage?.trim() ?? "";
   const candidate = configured
-    ? `${configured} Necesito revisarlo antes de confirmar el turno.`
+    ? `${configured} Vamos a revisarlo antes de confirmar el turno.`
     : DEFAULT_DEPOSIT_PROOF_REVIEW_MESSAGE;
   return candidate.length <= 4096 &&
     !/\{[A-Za-z][A-Za-z0-9_]*\}/.test(candidate)

@@ -183,7 +183,7 @@ begin
       '90000000-0000-4000-8000-000000000003',
       '90000000-0000-4000-8000-000000000002',
       'outbound', 'template', 'Recordatorio',
-      'gisela_appointment_reminder_24h_v2',
+      'gisela_appointment_reminder_24h_v3',
       'pending', 'test:template:no-consent',
       jsonb_build_object(
         'source', 'reminder',
@@ -249,7 +249,7 @@ insert into public.messages (
   'wamid.policy.outbound',
   'template',
   'Recordatorio',
-  'gisela_appointment_reminder_24h_v2',
+  'gisela_appointment_reminder_24h_v3',
   'sent',
   'test:template:allowed',
   jsonb_build_object(
