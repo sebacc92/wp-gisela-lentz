@@ -1,11 +1,4 @@
 {
-  "redirects": [
-    {
-      "source": "/",
-      "destination": "/app",
-      "permanent": false
-    }
-  ],
   "rewrites": [
     {
       "source": "/privacy-policy",

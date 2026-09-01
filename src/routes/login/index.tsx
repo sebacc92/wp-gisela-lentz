@@ -201,5 +201,8 @@ export default component$(() => {
 
 export const head: DocumentHead = {
   title: getPageTitle("Ingresar"),
-  meta: [{ name: "description", content: APP_DESCRIPTION }],
+  meta: [
+    { name: "description", content: APP_DESCRIPTION },
+    { name: "robots", content: "noindex, nofollow, noarchive" },
+  ],
 };

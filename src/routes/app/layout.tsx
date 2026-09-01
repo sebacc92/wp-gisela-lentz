@@ -6,6 +6,7 @@ import {
   useStore,
   useVisibleTask$,
 } from "@qwik.dev/core";
+import type { DocumentHead } from "@qwik.dev/router";
 import { useLocation, useNavigate } from "@qwik.dev/router";
 import {
   APP_USER_CONTEXT,
@@ -112,3 +113,7 @@ export default component$(() => {
 
   return <Slot />;
 });
+
+export const head: DocumentHead = {
+  meta: [{ name: "robots", content: "noindex, nofollow, noarchive" }],
+};

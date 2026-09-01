@@ -1,7 +1,8 @@
 allowBuilds:
   "@parcel/watcher": true
-  deasync: set this to true or false
+  deasync: false
   deno: true
   esbuild: true
   sharp: true
-  vercel: set this to true or false
+  vercel: false
+  workerd: true

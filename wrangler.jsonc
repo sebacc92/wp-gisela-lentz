@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gisela-lentz-web",
+  "main": "./dist/_worker.js",
+  "compatibility_date": "2026-08-31",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "giselalentz.com.ar",
+      "custom_domain": true,
+    },
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": false,
+  },
+  "observability": {
+    "enabled": false,
+  },
+}

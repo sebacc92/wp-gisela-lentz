@@ -2,9 +2,10 @@
   "name": "gisela-lentz-whatsapp",
   "description": "Agenda, pacientes y WhatsApp para Gisela Lentz Odontología",
   "engines": {
-    "node": "^18.17.0 || ^20.3.0 || >=21.0.0"
+    "node": "24.x"
   },
-  "engines-annotation": "Mostly required by sharp which needs a Node-API v9 compatible runtime",
+  "engines-annotation": "Node 24 is pinned by .node-version and satisfies Vite 7 and the current build tooling",
+  "packageManager": "pnpm@11.15.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,10 +13,18 @@
     "build.client": "vite build",
     "build.preview": "vite build --ssr src/entry.preview.tsx",
     "build.server": "qwik check-client src dist && vite build -c adapters/vercel-edge/vite.config.ts",
+    "build.server:cloudflare": "qwik check-client src dist && vite build -c adapters/cloudflare-workers/vite.config.ts",
+    "build:cloudflare": "node scripts/check-cloudflare-config.mjs && pnpm run build.client && pnpm run build.server:cloudflare && pnpm run build.types:web && node scripts/check-cloudflare-build.mjs",
     "build.types": "tsc --incremental --noEmit",
     "build.types:functions": "deno check supabase/functions",
     "build.types:web": "tsc --incremental --noEmit",
-    "deploy": "node scripts/assert-deployment-target.mjs && vercel deploy",
+    "deploy": "node scripts/run-cloudflare-command.mjs production-dry",
+    "deploy:cloudflare": "node scripts/run-cloudflare-command.mjs production-dry",
+    "deploy:cloudflare:dry": "node scripts/run-cloudflare-command.mjs production-dry",
+    "deploy:cloudflare:production": "node scripts/deploy-cloudflare-production.mjs",
+    "deploy:cloudflare:staging": "node scripts/deploy-cloudflare-staging.mjs",
+    "deploy:cloudflare:staging:dry": "node scripts/run-cloudflare-command.mjs staging-dry",
+    "deploy:vercel": "node scripts/assert-deployment-target.mjs && vercel deploy",
     "dev": "vite --mode ssr",
     "dev.debug": "node --inspect-brk ./node_modules/vite/bin/vite.js --mode ssr --force",
     "fmt": "prettier --write .",
@@ -24,7 +33,13 @@
     "lint:functions": "deno lint supabase/functions",
     "lint:web": "eslint \"src/**/*.ts*\"",
     "preview": "qwik build preview && vite preview --open",
+    "preview:cloudflare": "node scripts/run-cloudflare-command.mjs preview",
     "start": "vite --open --mode ssr",
+    "test:cloudflare": "pnpm run build:cloudflare && pnpm run test:cloudflare:config && pnpm run test:cloudflare:smoke:production && pnpm run test:cloudflare:smoke:staging",
+    "test:cloudflare:config": "node --test scripts/cloudflare-config.test.mjs && node scripts/check-cloudflare-config.mjs",
+    "test:cloudflare:remote": "node scripts/test-cloudflare-remote.mjs",
+    "test:cloudflare:smoke:production": "node scripts/test-cloudflare-smoke.mjs --config wrangler.jsonc --label production",
+    "test:cloudflare:smoke:staging": "node scripts/test-cloudflare-smoke.mjs --config wrangler.staging.jsonc --label staging",
     "test:automation": "pnpm run build.types:functions && node --test supabase/functions/_shared/*.test.ts supabase/functions/process-calendar-sync/*.test.ts supabase/functions/process-reminders/*.test.ts src/lib/*.test.ts",
     "qwik": "qwik"
   },
@@ -50,7 +65,8 @@
     "typescript-plugin-css-modules": "latest",
     "vercel": "58.1.0",
     "vite": "7.3.1",
-    "vite-tsconfig-paths": "^4.2.1"
+    "vite-tsconfig-paths": "^4.2.1",
+    "wrangler": "4.127.1"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
