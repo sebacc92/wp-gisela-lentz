@@ -9,6 +9,8 @@ select no_plan();
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+update public.app_settings set automations_enabled = true where id;
+
 select ok(
   to_regclass('public.whatsapp_embedded_signup_attempts') is not null
     and to_regclass('public.whatsapp_onboarding_outbox') is not null,

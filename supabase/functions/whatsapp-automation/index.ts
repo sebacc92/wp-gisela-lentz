@@ -23,7 +23,10 @@ import {
   type PatientCoverage,
   type PatientProfileField,
 } from "../_shared/automation-flow.ts";
-import { appAutomationsEnabled } from "../_shared/app-automations.ts";
+import {
+  whatsappConversationOperationallyEnabled,
+  type WhatsAppAutomationExecutionLease,
+} from "../_shared/app-automations.ts";
 import { validateDepositProofForAutoConfirmation } from "../_shared/deposit-proof.ts";
 import {
   jsonResponse,
@@ -324,10 +327,7 @@ interface AutomationExecutionClaim {
   outcome: Record<string, unknown> | null;
 }
 
-interface AutomationExecutionLease {
-  messageId: string;
-  leaseToken: string;
-}
+type AutomationExecutionLease = WhatsAppAutomationExecutionLease;
 
 interface CommittedAutomationDomainEffect {
   conversationId: string;
@@ -592,9 +592,15 @@ Deno.serve(async (request) => {
     const contact = execution.contact_snapshot;
     const appSettings = execution.settings_snapshot;
 
-    // Interruptor operativo del bot. El kill switch de servidor sigue vigente
-    // aparte; acá se respeta el que Gisela maneja desde la aplicación.
-    if (!appAutomationsEnabled(appSettings)) {
+    // The live database decision is global OR the conversation's unexpired
+    // test override. The environment kill switch is checked independently
+    // below and again at the final Graph gate.
+    if (
+      !(await whatsappConversationOperationallyEnabled({
+        client,
+        conversationId: conversation.id,
+      }))
+    ) {
       return await finish({ ignored: true, reason: "AUTOMATIONS_DISABLED" });
     }
     const executionNow = new Date(execution.snapshot_at);
@@ -785,6 +791,8 @@ Deno.serve(async (request) => {
       source = "automation",
       appointmentId: string | null = null,
     ) => {
+      const lease = executionLease;
+      if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
       const sequence = sendSequence;
       sendSequence += 1;
       return await sendAndRecordMessage({
@@ -802,6 +810,7 @@ Deno.serve(async (request) => {
           inbound_message_id: inbound.id,
           automation_sequence: sequence,
         },
+        automationExecution: lease,
       });
     };
 
@@ -2852,6 +2861,10 @@ Deno.serve(async (request) => {
               const depositSendSequence = sendSequence;
               sendSequence += 1;
               try {
+                const lease = executionLease;
+                if (!lease) {
+                  throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+                }
                 await sendAndRecordMessage({
                   client,
                   conversation: conversation as WhatsAppConversation,
@@ -2868,6 +2881,7 @@ Deno.serve(async (request) => {
                     appointment_id: appointmentId,
                     deposit_request: true,
                   },
+                  automationExecution: lease,
                 });
               } catch (error) {
                 // La pre-reserva ya existe. Si el aviso no sale, la dejamos

@@ -14,6 +14,7 @@ import {
   getWhatsAppConsentStatus,
 } from "~/lib/whatsapp-compliance";
 import { Icon } from "../ui/Icon";
+import { ConversationBotTestControl } from "./ConversationBotTestControl";
 import { MessageBubble } from "./MessageBubble";
 import "./inbox.css";
 
@@ -178,13 +179,13 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             role="status"
             aria-label={
               props.conversation.automationMode === "auto"
-                ? "Automatización activa"
+                ? "Modo automático permitido"
                 : "Atención manual"
             }
           >
             <span aria-hidden="true" />
             {props.conversation.automationMode === "auto"
-              ? "Automatización activa"
+              ? "Modo automático"
               : "Atención manual"}
           </span>
         </div>
@@ -258,8 +259,8 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
         >
           <Icon name="bot" size={17} />
           {props.conversation.automationMode === "auto"
-            ? "Pausar bot"
-            : "Reactivar bot"}
+            ? "Pausar este chat"
+            : "Quitar pausa manual"}
         </button>
         {props.conversation.automationMode === "manual" &&
           consentStatus !== "opted_out" && (
@@ -273,6 +274,13 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             </button>
           )}
       </nav>
+
+      <ConversationBotTestControl
+        conversationId={props.conversation.id}
+        automationMode={props.conversation.automationMode}
+        needsHuman={props.conversation.needsHuman}
+        conversationStatus={props.conversation.status}
+      />
 
       {props.conversation.needsHuman && (
         <div

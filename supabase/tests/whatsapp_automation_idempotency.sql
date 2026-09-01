@@ -9,6 +9,11 @@ select plan(50);
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+-- This suite exercises automation mechanics rather than the operational
+-- switch. Claims now enforce that switch authoritatively, so make the fixture
+-- intent explicit.
+update public.app_settings set automations_enabled = true where id;
+
 select (
   current_date + 7 + mod(8 - extract(isodow from current_date)::integer, 7)
 )::date as test_date

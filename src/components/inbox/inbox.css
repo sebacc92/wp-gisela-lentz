@@ -278,6 +278,100 @@
   color: var(--brand-800);
 }
 
+.conversation-bot-card {
+  display: grid;
+  gap: 10px;
+  border-block: 1px solid #e1e8e7;
+  background: #fbfcfc;
+  padding: 13px 18px;
+}
+
+.conversation-bot-card.active {
+  border-color: #cfe2dc;
+  background: #f5faf8;
+}
+
+.conversation-bot-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.conversation-bot-icon {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: #e8f2ef;
+  color: var(--brand-800);
+}
+
+.conversation-bot-heading h2 {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 0.91rem;
+}
+
+.conversation-bot-heading p,
+.conversation-bot-note,
+.conversation-bot-error {
+  margin: 2px 0 0;
+  color: var(--ink-600);
+  font-size: 0.78rem;
+  line-height: 1.42;
+}
+
+.conversation-bot-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin: 0;
+  padding-left: 39px;
+}
+
+.conversation-bot-statuses div {
+  display: grid;
+  gap: 1px;
+}
+
+.conversation-bot-statuses dt {
+  color: var(--ink-500);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.conversation-bot-statuses dd {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.conversation-bot-note,
+.conversation-bot-error,
+.conversation-bot-actions {
+  margin-left: 39px;
+}
+
+.conversation-bot-note.warning,
+.conversation-bot-error {
+  color: #8a5327;
+}
+
+.conversation-bot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.conversation-bot-actions button {
+  min-height: 34px;
+}
+
 .inbox-chat-panel .chat-context-actions .confirm-deposit-action {
   border-color: var(--brand-700);
   background: var(--brand-700);
@@ -863,6 +957,7 @@
 
 @media (pointer: coarse) {
   .inbox-chat-panel .chat-context-actions button,
+  .inbox-chat-panel .conversation-bot-actions button,
   .inbox-chat-panel .message-attachment-open,
   .inbox-chat-panel .messages-history-control button,
   .inbox-chat-panel .popover-close,

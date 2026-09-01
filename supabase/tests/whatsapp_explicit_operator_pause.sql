@@ -9,6 +9,8 @@ select no_plan();
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+update public.app_settings set automations_enabled = true where id;
+
 insert into auth.users (id, email, encrypted_password, aud, role)
 values (
   '98100000-0000-4000-8000-000000000005',

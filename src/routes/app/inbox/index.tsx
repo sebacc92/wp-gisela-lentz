@@ -410,13 +410,15 @@ export default component$(() => {
             notice.value =
               data === "DISPATCHED"
                 ? "El bot va a responder el último mensaje en menos de un minuto."
-                : data === "ALREADY_ANSWERED"
-                  ? "El bot quedó activo. El último mensaje ya tenía respuesta."
-                  : data === "ALREADY_PROCESSED"
-                    ? "El bot quedó activo. Ese mensaje ya lo había procesado."
-                    : data === "CONTACT_OPTED_OUT"
-                      ? "No se puede: el contacto solicitó la baja de WhatsApp."
-                      : "El bot quedó activo en esta conversación.";
+                : data === "AUTOMATIONS_DISABLED"
+                  ? "Se quitó la pausa manual, pero el bot sigue apagado. Activá una prueba de 24 h para este chat o el switch global."
+                  : data === "ALREADY_ANSWERED"
+                    ? "El bot quedó activo. El último mensaje ya tenía respuesta."
+                    : data === "ALREADY_PROCESSED"
+                      ? "El bot quedó activo. Ese mensaje ya lo había procesado."
+                      : data === "CONTACT_OPTED_OUT"
+                        ? "No se puede: el contacto solicitó la baja de WhatsApp."
+                        : "El bot quedó activo en esta conversación.";
           }}
           onToggleAutomation$={async () => {
             const nextMode =
@@ -453,8 +455,8 @@ export default component$(() => {
             }
             notice.value =
               nextMode === "auto"
-                ? "Automatización reanudada."
-                : "Automatización pausada. Ahora responde Gisela.";
+                ? "Pausa manual quitada. El switch global o una prueba individual todavía deciden si el bot puede responder."
+                : "Automatización pausada sólo en este chat. Ahora responde Gisela.";
           }}
           onSend$={async (body, idempotencyKey) => {
             const localId = `local-${idempotencyKey}`;
@@ -573,6 +575,10 @@ export default component$(() => {
               selectedConversation.needsHuman = false;
               selectedConversation.priority = false;
             }
+            notice.value =
+              nextMode === "auto"
+                ? "Pausa manual quitada. El switch global o una prueba individual todavía deciden si el bot puede responder."
+                : "Automatización pausada sólo en este chat. Ahora responde Gisela.";
           }}
           onTogglePending$={async () => {
             const nextNeedsHuman = !selectedConversation.needsHuman;

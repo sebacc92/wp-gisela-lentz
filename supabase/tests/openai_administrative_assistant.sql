@@ -75,6 +75,8 @@ select ok(
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+update public.app_settings set automations_enabled = true where id;
+
 insert into public.contacts (
   id, phone_e164, whatsapp_id, name
 ) values (

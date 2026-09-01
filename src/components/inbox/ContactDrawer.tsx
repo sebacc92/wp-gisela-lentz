@@ -368,15 +368,15 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
               <span>
                 <strong>
                   {props.conversation.automationMode === "auto"
-                    ? "Pausar automatización"
-                    : "Reanudar automatización"}
+                    ? "Pausar este chat"
+                    : "Quitar pausa manual"}
                 </strong>
                 <small>
                   {props.conversation.automationMode === "auto"
                     ? "Gisela manejará esta conversación"
                     : consentStatus === "opted_out"
                       ? "La baja impide reanudar el flujo automático"
-                      : "El flujo automático podrá continuar"}
+                      : "El switch global o una prueba aún deben habilitar el bot"}
                 </small>
               </span>
             </button>

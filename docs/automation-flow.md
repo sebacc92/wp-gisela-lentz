@@ -114,10 +114,19 @@ impide que el flujo procese las entradas posteriores.
   la aplicación. Es la posición operativa por defecto; una persona `ADMIN` puede
   cambiarla desde el interruptor del menú en escritorio o desde Inicio en
   mobile. Cada cambio queda auditado.
+- Una persona `ADMIN` puede abrir desde una conversación una ventana de prueba
+  individual de 24 horas. Esta excepción sólo reemplaza el interruptor
+  operativo anterior para ese chat: no cambia `automation_mode`, no quita una
+  pausa manual, no evita consentimiento, locks, leases, idempotencia, seguridad
+  de destinatario ni pausas de envío. La ventana se vuelve a comprobar al
+  finalizar el webhook, al reclamar o recuperar trabajo, al registrar efectos y
+  justo antes de enviar a Graph. Activaciones, extensiones y revocaciones quedan
+  auditadas sin copiar teléfonos ni mensajes.
 - `WHATSAPP_AUTOMATIONS_ENABLED=false`: no se invoca el bot ni se despachan
   handoffs, respuestas urgentes o recordatorios automáticos. Webhook, bandeja y
   respuestas manuales siguen disponibles. Este kill switch backend debe estar
-  en `true` para que el interruptor de la aplicación pueda encender el bot.
+  en `true` para que el interruptor de la aplicación o una ventana de prueba
+  individual puedan habilitar el bot.
 - `app_settings.ai_enabled=false`: no se llama a OpenAI aunque la automatización
   general esté activa. Toda asistencia requiere además el kill switch backend
   `OPENAI_ADMINISTRATIVE_ENABLED=true`. Las respuestas administrativas y los
@@ -138,5 +147,7 @@ impide que el flujo procese las entradas posteriores.
   de abuso.
 - `WHATSAPP_TEST_MODE=true`: todo destinatario debe aparecer en
   `WHATSAPP_TEST_ALLOWED_NUMBERS`, incluidas respuestas manuales y recordatorios.
+- Las ventanas de prueba por conversación no crean ni habilitan recordatorios y
+  no intervienen en sus claims. Los reminders conservan sus gates existentes.
 - `Menú`, `inicio` o `volver al menú` reinician el flujo sin escribir cambios
   críticos.
