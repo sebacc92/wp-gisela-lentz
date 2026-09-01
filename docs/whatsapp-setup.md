@@ -215,24 +215,29 @@ ante cualquier destinatario inesperado, duplicado o problema de calidad.
 
 Crear y aprobar en Meta, con nombres iguales a `message_templates.meta_name`:
 
-- `gisela_appointment_created_v2`
-- `gisela_appointment_reminder_24h_v2`
-- `gisela_appointment_reminder_2h_v2`
-- `gisela_appointment_cancelled_v2`
-- `gisela_appointment_rescheduled_v2`
+- `gisela_appointment_created_v3`
+- `gisela_appointment_reminder_24h_v3`
+- `gisela_appointment_reminder_2h_v3`
+- `gisela_appointment_cancelled_v3`
+- `gisela_appointment_rescheduled_v3`
 
 Los recordatorios usan tres parámetros de cuerpo, en orden: paciente, fecha y
-hora. El texto aprobado debe hablar como Gisela en primera persona singular,
-por ejemplo: `Hola {{1}}, te recuerdo tu turno del {{2}} a las {{3}}.` No debe
-decir “te recordamos”, “nuestro consultorio” ni “con Gisela”: es su propio
-WhatsApp y no existe otra profesional. Agregar tres botones de respuesta rápida
-en orden: confirmar, reprogramar y cancelar.
+hora. El texto aprobado debe hablar como el consultorio, por ejemplo:
+`Hola {{1}}, te recordamos tu turno del {{2}} a las {{3}}.` Nunca debe afirmar
+ni insinuar que quien escribe es la Dra. Gisela Lentz. Agregar tres botones de
+respuesta rápida en orden: confirmar, reprogramar y cancelar.
 
-Los nombres `*_v2` evitan reutilizar por accidente una plantilla anterior con
-cuatro parámetros o voz institucional. La migración las deja deshabilitadas y
-sin estado heredado: hay que esperar que la versión singular figure
-`APPROVED / UTILITY` y habilitarla desde el panel antes de activar
-recordatorios. El backend envía exactamente los tres parámetros de esa versión.
+Los nombres `*_v3` evitan reutilizar por accidente una plantilla anterior con
+la voz personal de Gisela. La migración las deja deshabilitadas y sin estado
+heredado: hay que crear la copia institucional en Meta, esperar que figure
+`APPROVED / UTILITY`, sincronizarla y recién entonces habilitarla desde el panel.
+Cambiar `body_preview` en la base no modifica el texto real aprobado por Meta.
+El backend envía exactamente los tres parámetros de esa versión.
+
+Antes de aplicar la migración institucional, confirmar que los recordatorios y
+su cron estén apagados, o que las cinco plantillas v3 ya estén aprobadas y
+listas para sincronizar. Un recordatorio reclamado mientras una plantilla está
+deshabilitada se cancela por política y no debe atravesar esa ventana de cambio.
 
 En **Configuración → WhatsApp → Verificar conexión**, la función sincroniza
 estado, categoría y calidad. El backend sólo permite mensajes proactivos con

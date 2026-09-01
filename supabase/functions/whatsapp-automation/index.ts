@@ -1052,7 +1052,7 @@ Deno.serve(async (request) => {
       await claimInboundHandoff(client, inbound.id);
       const handoffMessage =
         `${reason ? `${reason.trim()} ` : ""}` +
-        "Sigo yo desde acá. Te respondo por este mismo chat.";
+        "Voy a derivar tu consulta para que puedan ayudarte 😊";
       await send(
         textPayload(handoffMessage),
         handoffMessage,
@@ -1067,7 +1067,7 @@ Deno.serve(async (request) => {
     ): Promise<Response> => {
       if (proof.status === "superseded") {
         await handoff(
-          "Recibí tu comprobante, pero necesito revisar el estado actual del turno.",
+          "Recibimos tu comprobante, pero necesitamos revisar el estado actual del turno.",
           { appointmentId: proof.appointmentId },
         );
         return await finish({
@@ -1094,7 +1094,7 @@ Deno.serve(async (request) => {
           };
         }
         const template = appSettings.deposit_confirmed_message_template?.trim();
-        const defaultConfirmationMessage = `¡Listo! Recibí el comprobante y confirmé tu turno para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)}.`;
+        const defaultConfirmationMessage = `¡Listo! Recibimos el comprobante y tu turno quedó confirmado para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)}.`;
         const renderedConfirmationMessage = template
           ? renderConfiguredMessage(template, {
               date: formatDate(proof.startsAt),
@@ -1422,10 +1422,9 @@ Deno.serve(async (request) => {
       );
       if (reviewResult.error) {
         if (isDepositProofReviewableRpcError(reviewResult.error)) {
-          await handoff(
-            "No pude asociar el comprobante automáticamente y necesito revisarlo.",
-            { appointmentId: snapshotAppointmentId },
-          );
+          await handoff("No pudimos asociar el comprobante automáticamente.", {
+            appointmentId: snapshotAppointmentId,
+          });
           return await finish({
             processed: true,
             state: "human_handoff",
@@ -1446,10 +1445,10 @@ Deno.serve(async (request) => {
     if (unreadableMedia) {
       const reason =
         inbound.type === "audio"
-          ? "No pude escuchar el audio automáticamente y necesito revisarlo."
+          ? "No pudimos escuchar el audio automáticamente."
           : session.state === "waiting_deposit"
-            ? "No pude leer el comprobante automáticamente y necesito revisarlo."
-            : "Recibí el archivo y necesito revisarlo.";
+            ? "No pudimos leer el comprobante automáticamente."
+            : "Recibimos el archivo.";
       await handoff(reason);
       return await finish({ processed: true, state: "human_handoff" });
     }
@@ -1462,7 +1461,7 @@ Deno.serve(async (request) => {
       const appointmentId = session.context.appointmentId;
       if (session.state !== "waiting_deposit" || !appointmentId) {
         await handoff(
-          "No pude asociar este archivo a una pre-reserva activa y necesito revisarlo.",
+          "No pudimos asociar este archivo a una pre-reserva activa.",
         );
         return await finish({ processed: true, state: "human_handoff" });
       }
@@ -1527,7 +1526,7 @@ Deno.serve(async (request) => {
       if (proofResult.error) {
         if (isDepositProofReviewableRpcError(proofResult.error)) {
           await handoff(
-            "No pude confirmar este comprobante automáticamente y necesito revisarlo.",
+            "No pudimos confirmar este comprobante automáticamente.",
             { appointmentId },
           );
           return await finish({
@@ -1551,7 +1550,7 @@ Deno.serve(async (request) => {
         typeof appSettings?.urgent_message === "string" &&
         appSettings.urgent_message.trim()
           ? appSettings.urgent_message.trim()
-          : "Tomo tu mensaje como urgencia y te respondo apenas lo vea. Si es una emergencia grave, contactá al servicio de emergencias de tu zona.";
+          : "Marcamos tu mensaje como urgente y vamos a derivarlo para que puedan responderte cuanto antes. Si es una emergencia grave, contactá al servicio de emergencias de tu zona.";
       await send(
         textPayload(urgentMessage),
         urgentMessage,
@@ -1567,7 +1566,7 @@ Deno.serve(async (request) => {
 
     if (transcribedAudioNeedsHuman) {
       await handoff(
-        "Por el contenido del audio, necesito revisarlo personalmente.",
+        "Por el contenido del audio, esta consulta necesita atención humana.",
       );
       return await finish({
         processed: true,
@@ -1678,7 +1677,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    const showMainMenu = async (message = "¿En qué más te puedo ayudar?") => {
+    const showMainMenu = async (message = "¿En qué más podemos ayudarte?") => {
       await send(
         listPayload(message, "Ver opciones", MAIN_MENU_OPTIONS),
         message,
@@ -1691,7 +1690,7 @@ Deno.serve(async (request) => {
         session.context.invalidAttempts,
       );
       if (shouldHandoff) {
-        await handoff("No pude interpretar la opción.");
+        await handoff("No pudimos interpretar la opción.");
         return;
       }
       await repeat(attempts);
@@ -1710,7 +1709,9 @@ Deno.serve(async (request) => {
         data ?? [],
       );
       if (!services.length) {
-        await handoff("Todavía no hay servicios disponibles para reservar.");
+        await handoff(
+          "Todavía no tenemos servicios disponibles para reservar.",
+        );
         return;
       }
 
@@ -1819,7 +1820,7 @@ Deno.serve(async (request) => {
       const slotCoverage = currentProfile().coverage;
       if (!slotCoverage) {
         await handoff(
-          "Necesito revisar la cobertura de este turno antes de reprogramarlo.",
+          "Necesitamos revisar la cobertura de este turno antes de reprogramarlo.",
         );
         return;
       }
@@ -1831,7 +1832,7 @@ Deno.serve(async (request) => {
         slotCoverage,
       );
       if (!slots.length) {
-        await handoff("No encontré horarios disponibles.");
+        await handoff("No encontramos horarios disponibles.");
         return;
       }
       const rows: Array<{ id: string; title: string; description?: string }> =
@@ -1981,9 +1982,9 @@ Deno.serve(async (request) => {
 
     const showNoAppointments = async () => {
       const message =
-        "No encontré próximos turnos activos asociados a este WhatsApp.";
+        "No encontramos próximos turnos activos asociados a este WhatsApp.";
       await send(textPayload(message), message);
-      await showMainMenu("Podés sacar un turno nuevo o hacerme otra consulta.");
+      await showMainMenu("Podés sacar un turno nuevo o hacer otra consulta.");
     };
 
     const showRescheduleRequest = async (
@@ -2120,7 +2121,7 @@ Deno.serve(async (request) => {
       const showConfiguredInfo = async () => {
         if (!configuredInfo) {
           await handoff(
-            "Todavía no tengo esa información configurada para responder automáticamente.",
+            "Todavía no tenemos esa información configurada para responder automáticamente.",
           );
           return;
         }
@@ -2156,7 +2157,7 @@ Deno.serve(async (request) => {
       const intent = administrativeInfoIntent(inputValue);
       if (!intent || !isAllowedAdministrativeQuestion(inputValue)) {
         await handoff(
-          "Para cuidar tu privacidad, esa consulta la reviso yo personalmente.",
+          "Para cuidar tu privacidad, esa consulta necesita atención humana.",
         );
         return;
       }
@@ -2238,9 +2239,7 @@ Deno.serve(async (request) => {
 
       const beforeCall = await readLiveAIControl();
       if (!beforeCall.automationsEnabled) {
-        await handoff(
-          "La respuesta automática se pausó y necesito continuar personalmente.",
-        );
+        await handoff("La respuesta automática se pausó.");
         return;
       }
 
@@ -2346,9 +2345,7 @@ Deno.serve(async (request) => {
           code: "OPENAI_DURABILITY_UNAVAILABLE",
         });
         if (!whatsappAutomationsEnabled()) {
-          await handoff(
-            "La respuesta automática se pausó y necesito continuar personalmente.",
-          );
+          await handoff("La respuesta automática se pausó.");
           return;
         }
         await showConfiguredInfo();
@@ -2357,9 +2354,7 @@ Deno.serve(async (request) => {
 
       const beforeSend = await readLiveAIControl();
       if (!beforeSend.automationsEnabled) {
-        await handoff(
-          "La respuesta automática se pausó y necesito continuar personalmente.",
-        );
+        await handoff("La respuesta automática se pausó.");
         return;
       }
       if (answer.source === "openai" && !beforeSend.aiEnabled) {
@@ -2493,7 +2488,7 @@ Deno.serve(async (request) => {
         if (appointment.status !== "confirmed") {
           await send(
             textPayload(
-              "Ese turno todavía espera la seña. Mandame el comprobante como imagen o PDF; si se leen el monto exacto y el destinatario, confirmo el turno.",
+              "Ese turno todavía espera la seña. Enviá el comprobante como imagen o PDF. Si se leen el monto exacto y el destinatario, te confirmamos el turno.",
             ),
             "Ese turno todavía no está confirmado.",
           );
@@ -2506,8 +2501,8 @@ Deno.serve(async (request) => {
           });
         }
         await send(
-          textPayload("¡Gracias! Anoté que vas a asistir."),
-          "¡Gracias! Anoté que vas a asistir.",
+          textPayload("¡Gracias! Registramos que vas a asistir."),
+          "¡Gracias! Registramos que vas a asistir.",
         );
         await saveSession("idle");
         return await finish({
@@ -2826,7 +2821,7 @@ Deno.serve(async (request) => {
               holdMinutes <= 0
             ) {
               await handoff(
-                "El horario quedó pre-reservado, pero necesito enviarte personalmente los datos de la seña.",
+                "El horario quedó pre-reservado, pero necesitamos que una persona te envíe los datos de la seña.",
               );
             } else {
               const message = renderConfiguredMessage(template, {
@@ -2840,7 +2835,7 @@ Deno.serve(async (request) => {
                 /\{[a-z][a-z0-9_]*\}/.test(message)
               ) {
                 await handoff(
-                  "El horario quedó pre-reservado, pero necesito enviarte personalmente los datos de la seña.",
+                  "El horario quedó pre-reservado, pero necesitamos que una persona te envíe los datos de la seña.",
                 );
                 return await finish({
                   processed: true,
@@ -2898,11 +2893,15 @@ Deno.serve(async (request) => {
             appointment.deposit_status === "not_required"
           ) {
             const message =
-              `¡Listo! Reservé tu turno.\n\n📅 ${formatDate(slot.startsAt)}\n` +
+              `¡Listo! Tu turno quedó confirmado.\n\n📅 ${formatDate(slot.startsAt)}\n` +
               `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName}`;
-            await send(textPayload(message), "¡Listo! Reservé tu turno.", {
-              appointment_id: appointmentId,
-            });
+            await send(
+              textPayload(message),
+              "¡Listo! Tu turno quedó confirmado.",
+              {
+                appointment_id: appointmentId,
+              },
+            );
             await saveSession("idle");
           } else {
             throw new Error("APPOINTMENT_STATE_INVALID");
@@ -3072,12 +3071,12 @@ Deno.serve(async (request) => {
               holdExpiresAt !== null &&
               Number.isFinite(new Date(holdExpiresAt).getTime());
             const message =
-              `¡Listo! Reprogramé tu turno.\n\n📅 ${formatDate(slot.startsAt)}\n` +
+              `¡Listo! Tu turno quedó reprogramado.\n\n📅 ${formatDate(slot.startsAt)}\n` +
               `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName}` +
               (waitingForDeposit
-                ? "\n\nLa pre-reserva sigue esperando la seña. Mandame el comprobante como imagen o PDF; si se leen el monto exacto y el destinatario, confirmo el turno."
+                ? "\n\nLa pre-reserva sigue esperando la seña. Enviá el comprobante como imagen o PDF. Si se leen el monto exacto y el destinatario, te confirmamos el turno."
                 : "");
-            await send(textPayload(message), "Reprogramé tu turno.", {
+            await send(textPayload(message), "Tu turno quedó reprogramado.", {
               appointment_id: appointmentId,
             });
             if (waitingForDeposit) {
@@ -3160,9 +3159,9 @@ Deno.serve(async (request) => {
             };
             await send(
               textPayload(
-                "Cancelé tu turno. Si necesitás uno nuevo, podés solicitarlo desde este chat.",
+                "Tu turno quedó cancelado. Si necesitás uno nuevo, podés solicitarlo desde este chat.",
               ),
-              "Cancelé tu turno.",
+              "Tu turno quedó cancelado.",
             );
             await saveSession("idle");
           }
@@ -3186,20 +3185,20 @@ Deno.serve(async (request) => {
         appointment?.status === "confirmed" ||
         appointment?.depositStatus === "confirmed"
       ) {
-        const message = "Ya confirmé tu turno.";
+        const message = "Tu turno ya está confirmado.";
         await send(textPayload(message), message, {
           appointment_id: appointment.id,
         });
         await saveSession("idle");
       } else if (!appointment || appointment.status !== "scheduled") {
         await showMainMenu(
-          "Esa pre-reserva ya no está activa. Si querés, te busco otro horario.",
+          "Esa pre-reserva ya no está activa. Si querés, podemos buscarte otro horario.",
         );
       } else {
         const message =
           appointment.depositStatus === "proof_received"
-            ? "Ya recibí tu comprobante y quedó pendiente de mi revisión."
-            : "Tu horario sigue pre-reservado. Mandame el comprobante como imagen o PDF; si se leen el monto exacto y el destinatario, confirmo el turno.";
+            ? "Ya recibimos tu comprobante y quedó pendiente de revisión."
+            : "Tu horario sigue pre-reservado. Enviá el comprobante como imagen o PDF. Si se leen el monto exacto y el destinatario, te confirmamos el turno.";
         await send(textPayload(message), message, {
           appointment_id: appointment.id,
         });

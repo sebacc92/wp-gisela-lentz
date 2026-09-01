@@ -10,7 +10,7 @@ import {
   buildAdministrativeOpenAIRequest,
   canonicalAdministrativeQuestion,
   formatStructuredBusinessHours,
-  hasDisallowedGiselaVoice,
+  hasProfessionalImpersonation,
   isAllowedAdministrativeQuestion,
   isAdministrativeOpenAIAnswer,
   OPENAI_ADMINISTRATIVE_HANDOFF_MESSAGE,
@@ -160,8 +160,17 @@ describe("OpenAI administrative privacy boundary", () => {
     assert.equal(request.max_output_tokens, 360);
     assert.equal(request.input, canonicalAdministrativeQuestion("location"));
     assert.equal(request.text.format.strict, true);
-    assert.match(request.instructions, /primera persona singular/i);
-    assert.match(request.instructions, /nunca uses primera persona plural/i);
+    assert.ok(
+      request.instructions.includes(
+        "Nunca afirmes ni insinúes que sos la Dra. Gisela Lentz. Respondé como asistente del consultorio o desde la voz institucional del consultorio. No hace falta aclarar constantemente que sos un asistente automático.",
+      ),
+    );
+    assert.match(request.instructions, /español rioplatense/i);
+    assert.doesNotMatch(request.instructions, /como si fuera ella misma/i);
+    assert.doesNotMatch(
+      request.instructions,
+      /nunca uses primera persona plural/i,
+    );
     assert.equal(
       JSON.stringify(request).includes("mensaje original de paciente"),
       false,
@@ -302,16 +311,14 @@ describe("OpenAI administrative transport", () => {
     assert.equal(isAdministrativeOpenAIAnswer(result), true);
   });
 
-  it("fuerza handoff si la IA habla como una recepción o sobre Gisela", async () => {
+  it("acepta la voz institucional y mencionar a Gisela sin suplantarla", async () => {
     for (const generatedAnswer of [
       "Podemos atenderte el lunes de 9 a 15.",
       "Te ayudamos a encontrar el consultorio.",
       "Te responderemos en breve.",
-      "Confirmaremos tu turno cuando llegue el comprobante.",
       "Te enviaremos la ubicación.",
       "Tendremos disponibilidad mañana.",
       "Te responderíamos mañana.",
-      "Cuando podamos, te confirmo.",
       "Te respondimos ayer.",
       "Te contestamos en breve.",
       "Podés escribirnos por WhatsApp.",
@@ -319,7 +326,6 @@ describe("OpenAI administrative transport", () => {
       "Dejanos ayudarte.",
       "Escríbenos por WhatsApp.",
       "Contáctenos por WhatsApp.",
-      "Confirmémoslo ahora.",
       "Gisela te responde cuando vuelva al consultorio.",
       "La odontóloga atiende los lunes de 9 a 15.",
       "La dentista te responde mañana.",
@@ -336,6 +342,55 @@ describe("OpenAI administrative transport", () => {
             status: 200,
           })) as typeof fetch,
       });
+      assert.equal(result.handoff, false, generatedAnswer);
+      assert.equal(result.answer, generatedAnswer, generatedAnswer);
+    }
+  });
+
+  it("fuerza handoff si la IA suplanta a Gisela", async () => {
+    for (const generatedAnswer of [
+      "Soy Gisela y atiendo los lunes de 9 a 15.",
+      "Soy Dra. Gisela Lentz.",
+      "Soy la Dra. Gisela Lentz.",
+      "Soy la Dra. Lentz.",
+      "Soy tu odontóloga.",
+      "Soy la odontóloga que va a atenderte.",
+      "Te habla Gisela.",
+      "Habla la Dra. Lentz.",
+      "Gisela por acá.",
+      "Te escribe Gisela.",
+      "Mi consultorio está en Miramar.",
+      "Mi agenda está completa.",
+      "Atiendo consultas sobre traumatismos dentales.",
+      "Trabajo con insumos descartables.",
+      "Te espero el lunes a las 9.",
+      "Voy a atenderte el lunes.",
+      "Cuando vengas al consultorio, voy a atenderte.",
+      "Podés atenderte conmigo el lunes.",
+      "Vas a atenderte conmigo.",
+      "Cuando vengas a verme, traé el comprobante.",
+      "Yo voy a revisar tu comprobante.",
+      "Te respondo personalmente.",
+      "Recibí tu comprobante.",
+      "Te reservé el turno.",
+      "Acabo de reservarte el turno.",
+      "Ya dejé reservado tu horario.",
+      "Te anoté el turno.",
+      "He confirmado el turno.",
+      "Yo revisé tu comprobante.",
+      "Confirmé tu turno para mañana.",
+    ]) {
+      const result = await requestAdministrativeOpenAIAnswer({
+        apiKey: TEST_KEY,
+        intent: "business_hours",
+        knowledge: "Horarios: lunes de 9 a 15.",
+        safetyIdentifier: TEST_SAFETY_ID,
+        fetchImpl: (async () =>
+          new Response(JSON.stringify(responseBody(generatedAnswer)), {
+            status: 200,
+          })) as typeof fetch,
+      });
+      assert.equal(hasProfessionalImpersonation(generatedAnswer), true);
       assert.equal(result.handoff, true, generatedAnswer);
       assert.equal(
         result.answer,
@@ -345,15 +400,18 @@ describe("OpenAI administrative transport", () => {
     }
 
     for (const answer of [
-      "Mi consultorio está en Miramar.",
-      "Mi consultorio está entre dos puntos extremos.",
-      "Los próximos horarios disponibles son el lunes y el martes.",
-      "Atiendo consultas sobre traumatismos dentales.",
-      "Trabajo con insumos descartables.",
-      "Realizo pernos y coronas.",
-      "Soy Gisela y atiendo los lunes de 9 a 15.",
+      "Estoy para ayudarte con los horarios.",
+      "Soy asistente del consultorio.",
+      "Voy a derivar tu consulta para que puedan ayudarte.",
+      "El consultorio está en Miramar.",
+      "El trabajo del consultorio se organiza por turnos.",
+      "El consultorio confirmó el horario.",
+      "La Dra. Gisela había confirmado el horario.",
+      "El recibo de transferencia quedó registrado.",
+      "La Dra. Gisela Lentz atiende los lunes.",
+      "Tenemos horarios disponibles el lunes.",
     ]) {
-      assert.equal(hasDisallowedGiselaVoice(answer), false, answer);
+      assert.equal(hasProfessionalImpersonation(answer), false, answer);
     }
   });
 
@@ -374,7 +432,7 @@ describe("OpenAI administrative transport", () => {
         responseId: null,
         source: "fallback",
       }),
-      false,
+      true,
     );
     assert.equal(
       isAdministrativeOpenAIAnswer({
@@ -382,6 +440,15 @@ describe("OpenAI administrative transport", () => {
         handoff: false,
         responseId: null,
         source: "fallback",
+      }),
+      true,
+    );
+    assert.equal(
+      isAdministrativeOpenAIAnswer({
+        answer: "Soy Gisela y atiendo los lunes.",
+        handoff: false,
+        responseId: null,
+        source: "openai",
       }),
       false,
     );
@@ -393,6 +460,28 @@ describe("OpenAI administrative transport", () => {
         source: "fallback",
       }),
       false,
+    );
+  });
+
+  it("rechaza una decisión durable anterior que suplanta a Gisela", async () => {
+    await assert.rejects(
+      resolveDurableAdministrativeAnswer({
+        recall: async () => ({
+          answer: "Soy Gisela y atiendo los lunes.",
+          handoff: false,
+          responseId: "resp_old_voice",
+          source: "openai",
+        }),
+        reserve: async () => true,
+        request: async () => {
+          throw new Error("request no esperado");
+        },
+        fallback: async () => {
+          throw new Error("fallback no esperado");
+        },
+        remember: async (answer) => answer,
+      }),
+      /OPENAI_DURABLE_RESPONSE_INVALID/,
     );
   });
 

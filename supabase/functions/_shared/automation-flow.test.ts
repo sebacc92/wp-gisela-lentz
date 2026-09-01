@@ -30,10 +30,10 @@ import {
   selectSlotsForOffer,
 } from "./automation-flow.ts";
 
-test("la bienvenida habla como Gisela en singular y no adelanta la lista", () => {
+test("la bienvenida habla como el consultorio y no adelanta la lista", () => {
   assert.equal(
     APPOINTMENT_WELCOME_MESSAGE,
-    "¡Hola! Soy Gisela 😊 Para agendar tu turno voy a pedirte algunos datos.",
+    "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.",
   );
   assert.doesNotMatch(
     APPOINTMENT_WELCOME_MESSAGE,
@@ -41,7 +41,7 @@ test("la bienvenida habla como Gisela en singular y no adelanta la lista", () =>
   );
   assert.doesNotMatch(
     APPOINTMENT_WELCOME_MESSAGE,
-    /\b(nosotros|nosotras|nuestro|nuestra|podemos|necesitamos|recibimos|respondemos|envianos)\b|\b(consultorio de|hablar con)\s+gisela\b/i,
+    /\bsoy\s+(?:la\s+dra\.?\s+)?gisela\b|\bsoy\s+gisela\s+lentz\b/i,
   );
 });
 
@@ -335,14 +335,14 @@ test("renderiza el mensaje configurable de seña sin hardcodear sus valores", ()
 
 test("el aviso de revisión nunca excede WhatsApp ni filtra placeholders", () => {
   const fallback =
-    "Recibí el comprobante. Necesito revisarlo antes de confirmar el turno.";
+    "Recibimos tu comprobante. Vamos a revisarlo antes de confirmar el turno.";
   assert.equal(
-    depositProofReviewMessage("¡Gracias! Recibí tu archivo.", false),
-    "¡Gracias! Recibí tu archivo. Necesito revisarlo antes de confirmar el turno.",
+    depositProofReviewMessage("¡Gracias! Recibimos tu archivo.", false),
+    "¡Gracias! Recibimos tu archivo. Vamos a revisarlo antes de confirmar el turno.",
   );
   assert.equal(depositProofReviewMessage("x".repeat(4096), false), fallback);
   assert.equal(
-    depositProofReviewMessage("Recibí {placeholder_desconocido}.", false),
+    depositProofReviewMessage("Recibimos {placeholder_desconocido}.", false),
     fallback,
   );
   assert.match(depositProofReviewMessage(null, true), /pre-reserva ya venció/);

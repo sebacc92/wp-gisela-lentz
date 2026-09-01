@@ -16,7 +16,7 @@ test("la automatización procesa el comprobante con una policy versionada", () =
   assert.match(automation, /proof\.status === "superseded"/);
   assert.match(automation, /reviewReasons: string\[\]/);
   assert.match(automation, /deposit_validation_reasons: proof\.reviewReasons/);
-  assert.match(automation, /necesito revisar el estado actual del turno/);
+  assert.match(automation, /necesitamos revisar el estado actual del turno/);
   assert.match(automation, /deposit_auto_confirmed: automaticallyConfirmed/);
   assert.match(automation, /validRenderedConfirmation/);
   assert.match(

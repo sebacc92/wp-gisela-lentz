@@ -13,7 +13,7 @@ export function renderDepositConfirmationMessage(
   date: string,
   time: string,
 ): string {
-  const fallback = `¡Listo! Confirmé tu turno para el ${date} a las ${time}.`;
+  const fallback = `¡Listo! Tu turno quedó confirmado para el ${date} a las ${time}.`;
   const rendered = template
     .replaceAll("{date}", date)
     .replaceAll("{time}", time)

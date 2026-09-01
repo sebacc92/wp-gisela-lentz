@@ -27,7 +27,7 @@ function confirmationClient(options?: {
         data: {
           deposit_confirmed_message_template:
             options?.template ??
-            "Confirmé tu turno para el {date} a las {time}.",
+            "Tu turno quedó confirmado para el {date} a las {time}.",
         },
         error: null,
       };
@@ -100,6 +100,6 @@ test("una plantilla inválida usa una confirmación segura sin placeholders", ()
       "viernes 14 de agosto",
       "10:30",
     ),
-    "¡Listo! Confirmé tu turno para el viernes 14 de agosto a las 10:30.",
+    "¡Listo! Tu turno quedó confirmado para el viernes 14 de agosto a las 10:30.",
   );
 });
