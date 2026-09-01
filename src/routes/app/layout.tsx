@@ -28,6 +28,7 @@ export default component$(() => {
   const appUser = useStore<AppUserContextValue>({
     fullName: BUSINESS_CONFIG.name,
     isAdmin: false,
+    preserveInboxUnread: false,
   });
   const botAutomation = useStore<BotAutomationContextValue>({
     enabled: null,
@@ -55,7 +56,7 @@ export default component$(() => {
       const [profileResult, automationResult] = await Promise.all([
         client
           .from("profiles")
-          .select("full_name,role,active")
+          .select("full_name,role,active,preserve_inbox_unread")
           .eq("id", session.user.id)
           .single(),
         client
@@ -74,6 +75,7 @@ export default component$(() => {
 
       appUser.fullName = profile.full_name?.trim() || BUSINESS_CONFIG.name;
       appUser.isAdmin = isAdminProfile(profile);
+      appUser.preserveInboxUnread = profile.preserve_inbox_unread === true;
       if (
         automationResult.error ||
         typeof automationResult.data?.automations_enabled !== "boolean"

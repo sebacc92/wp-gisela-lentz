@@ -7619,6 +7619,58 @@ textarea::placeholder {
   line-height: 1.45;
 }
 
+.login-forgot-button {
+  align-self: flex-end;
+  margin-top: -6px;
+  padding: 2px 0;
+  color: var(--brand-700);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.login-forgot-button:hover:not(:disabled) {
+  color: var(--brand-900);
+}
+
+.login-forgot-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.login-success {
+  margin: 0;
+  border-left: 4px solid var(--success);
+  padding: 11px 13px;
+  color: var(--ink-700);
+  background: #f0fdf4;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.login-recovery-state {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 30px;
+  color: var(--ink-600);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.login-recovery-state > p,
+.login-recovery-state > strong {
+  margin: 0;
+}
+
+.login-recovery-state > .login-submit {
+  margin-top: 8px;
+}
+
 .form-field-help {
   color: var(--ink-500);
   font-size: 12px;

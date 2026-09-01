@@ -100,8 +100,10 @@ pasos sin compartir credenciales, y la persona técnica sabe cuándo detenerse.
    recordatorios ni mensajes proactivos hasta que las plantillas requeridas
    estén aprobadas como `UTILITY`, el número tenga calidad adecuada y exista
    consentimiento documentado.
-4. **No hay recuperación de contraseña desde la interfaz.** Hasta implementar
-   ese flujo, una administradora o Sebastián debe resolver un acceso perdido.
+4. **La recuperación de contraseña depende del email de Auth.** La persona debe
+   pedir el enlace desde `/login` y elegir su nueva contraseña en
+   `/login/reset/`. El redirect exacto de producción debe permanecer permitido
+   en Supabase Auth; nunca se comparte una contraseña ni un token manualmente.
 
 ## A. Lo que hace Gisela
 
@@ -318,7 +320,7 @@ un valor o estructura; no reemplaza la validación presencial de Gisela.
 | Mensajes y recepción                        | Functions preparadas; sin número real ni tráfico                               | Sí                                | Plataforma + Gisela              | Bandeja / webhook                              | Probar sólo en modo seguro después de conectar                               |
 | Archivos y comprobantes                     | Código local: imagen/PDF en `waiting_deposit` puede autoconfirmar              | Sí si se reciben comprobantes     | Gisela                           | Bandeja / Agenda                               | Fallos a revisión; sin verificación bancaria                                 |
 | Google Calendar                             | No configurado, sin Functions ni cron remoto                                   | Opcional posterior                | Sebastián + Gisela               | Google Cloud + Supabase + Configuración        | **BLOQUEADO HASTA PREPARACIÓN TÉCNICA**                                      |
-| Recuperación de contraseña                  | No existe en la interfaz                                                       | Recomendado                       | Sebastián                        | Supabase Auth + frontend                       | Implementar antes de delegar completamente                                   |
+| Recuperación de contraseña                  | Enlace genérico desde Login + elección segura de contraseña                    | Sí                                | Cada persona                     | Supabase Auth + frontend                       | Verificar redirect permitido y entrega de email                              |
 
 ## Orden presencial exacto
 
