@@ -9,6 +9,8 @@ select plan(26);
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+update public.app_settings set automations_enabled = true where id;
+
 -- Exercise the same no-UPDATE materialization used by the migration against
 -- representative legacy rows. The normal updated_at trigger is deliberately
 -- attached: it would make this assertion fail if the initialization performed

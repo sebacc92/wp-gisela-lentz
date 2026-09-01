@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
-test("el worker respeta el switch persistido antes de procesar mensajes", () => {
+test("el worker consulta el gate operativo vivo antes de procesar mensajes", () => {
   const worker = readFileSync(
     resolve(process.cwd(), "supabase/functions/whatsapp-automation/index.ts"),
     "utf8",
@@ -12,8 +12,12 @@ test("el worker respeta el switch persistido antes de procesar mensajes", () => 
     "const appSettings = execution.settings_snapshot;",
   );
   const guard = worker.indexOf(
-    "if (!appAutomationsEnabled(appSettings))",
+    "await whatsappConversationOperationallyEnabled({",
     snapshot,
+  );
+  const conversationBinding = worker.indexOf(
+    "conversationId: conversation.id",
+    guard,
   );
   const disabled = worker.indexOf('reason: "AUTOMATIONS_DISABLED"', guard);
   const serverGuard = worker.indexOf(
@@ -23,7 +27,11 @@ test("el worker respeta el switch persistido antes de procesar mensajes", () => 
   const recipient = worker.indexOf("const automationRecipient", serverGuard);
 
   assert.ok(snapshot >= 0, "the claimed execution must expose its settings");
-  assert.ok(guard > snapshot, "the database switch must guard the worker");
+  assert.ok(guard > snapshot, "the live database gate must guard the worker");
+  assert.ok(
+    conversationBinding > guard,
+    "the operational decision must be bound to the claimed conversation",
+  );
   assert.ok(disabled > guard, "the disabled outcome must be persisted");
   assert.ok(
     serverGuard > disabled,

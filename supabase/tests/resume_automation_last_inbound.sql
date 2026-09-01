@@ -9,6 +9,8 @@ select plan(1);
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+update public.app_settings set automations_enabled = true where id;
+
 create function pg_temp.assert_true(value boolean, message text)
 returns void
 language plpgsql

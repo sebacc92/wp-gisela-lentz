@@ -36,6 +36,14 @@ destino canónico y encola un POST asíncrono mediante `pg_net`. Los processors
 siguen siendo la autoridad para claims, leases, idempotencia, orden y backoff;
 el cron no modifica esas colas directamente.
 
+El processor de automation outbox también vuelve a evaluar el permiso
+operativo de cada conversación. Un dispatch pendiente o con lease vencido se
+marca como omitido si el switch global está apagado y su ventana individual de
+prueba ya no está vigente. Un lease todavía activo no se roba: el worker que lo
+posee debe superar nuevamente el gate ligado a ese lease inmediatamente antes
+de Graph, por lo que una revocación o expiración no puede resucitarse mediante
+recovery.
+
 ## Límite de seguridad de la API
 
 Las ACL de `pg_net` y `pg_cron` son administradas por la plataforma Supabase y

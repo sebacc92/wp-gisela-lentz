@@ -14,6 +14,7 @@ import {
   operatorSourceForPurpose,
   parseSafetyBoolean,
   parseWhatsAppAllowedNumbers,
+  requiresWhatsAppAutomationExecutionLease,
   resolveWhatsAppRecipientIdentity,
   WhatsAppPolicyError,
   whatsAppPolicyCode,
@@ -229,6 +230,25 @@ test("todo envío automático nuevo queda detrás del kill switch", () => {
   );
 });
 
+test("sólo la automatización causal exige un lease de ejecución", () => {
+  assert.equal(requiresWhatsAppAutomationExecutionLease("automation"), true);
+  assert.equal(requiresWhatsAppAutomationExecutionLease("handoff"), true);
+  assert.equal(
+    requiresWhatsAppAutomationExecutionLease("deposit_request"),
+    true,
+  );
+  assert.equal(
+    requiresWhatsAppAutomationExecutionLease("proof_acknowledgement"),
+    true,
+  );
+  assert.equal(requiresWhatsAppAutomationExecutionLease("reminder"), false);
+  assert.equal(
+    requiresWhatsAppAutomationExecutionLease("hold_expiration"),
+    false,
+  );
+  assert.equal(requiresWhatsAppAutomationExecutionLease("operator"), false);
+});
+
 test("sólo el aviso causado por el inbound que tomó el handoff atraviesa manual", () => {
   const owned = {
     pauseSource: "inbound_handoff",
@@ -356,6 +376,12 @@ test("reconoce la barrera SQL de modo manual como política no reintentable", ()
       message: "WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY",
     }),
     "AUTOMATION_SUPERSEDED_BY_HUMAN_REPLY",
+  );
+  assert.equal(
+    whatsAppPolicyCode({
+      message: "WHATSAPP_AUTOMATION_EFFECT_BLOCKED_OPERATIONAL",
+    }),
+    "AUTOMATIONS_DISABLED",
   );
   assert.equal(whatsAppPolicyCode({ message: "DB_TIMEOUT" }), null);
 });

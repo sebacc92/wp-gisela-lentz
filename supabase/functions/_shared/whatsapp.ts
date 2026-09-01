@@ -4,6 +4,10 @@ import {
   resolveWhatsAppAccountCredentials,
   type WhatsAppAccountCredentials,
 } from "./whatsapp-account-credentials.ts";
+import {
+  checkWhatsAppAutomationSendEligibility,
+  type WhatsAppAutomationExecutionLease,
+} from "./app-automations.ts";
 
 export interface WhatsAppContact {
   id: string;
@@ -151,6 +155,9 @@ export function whatsAppPolicyCode(error: unknown): string | null {
   }
   if (normalized.includes("WHATSAPP_AUTOMATION_EFFECT_BLOCKED_HUMAN_REPLY")) {
     return "AUTOMATION_SUPERSEDED_BY_HUMAN_REPLY";
+  }
+  if (normalized.includes("WHATSAPP_AUTOMATION_EFFECT_BLOCKED_OPERATIONAL")) {
+    return "AUTOMATIONS_DISABLED";
   }
   return null;
 }
@@ -392,10 +399,61 @@ export function isWhatsAppTestRecipientAllowed(
 }
 
 export function whatsappAutomationsEnabled(): boolean {
-  return parseSafetyBoolean(
-    Deno.env.get("WHATSAPP_AUTOMATIONS_ENABLED"),
-    false,
-  );
+  const runtime = (
+    globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }
+  ).process;
+  const configuredValue =
+    typeof Deno !== "undefined"
+      ? Deno.env.get("WHATSAPP_AUTOMATIONS_ENABLED")
+      : runtime?.env?.WHATSAPP_AUTOMATIONS_ENABLED;
+  return parseSafetyBoolean(configuredValue, false);
+}
+
+/**
+ * Environment remains the absolute kill switch. Only after it passes do we
+ * consult the database's lease-bound operational decision. Keeping this helper
+ * next to the Graph sender makes the precedence explicit at the final gate.
+ */
+export async function assertWhatsAppAutomationSendEligible(options: {
+  client: Pick<SupabaseClient, "rpc">;
+  conversationId: string;
+  execution: WhatsAppAutomationExecutionLease;
+}): Promise<void> {
+  if (!whatsappAutomationsEnabled()) {
+    throw new WhatsAppPolicyError("AUTOMATIONS_DISABLED");
+  }
+  const eligibility = await checkWhatsAppAutomationSendEligibility(
+    options,
+  ).catch(() => {
+    throw new WhatsAppDispatchError("AUTOMATION_SEND_GATE_UNAVAILABLE", {
+      retryable: true,
+    });
+  });
+  if (eligibility.eligible) return;
+
+  const reason = eligibility.reason?.toUpperCase() ?? "";
+  switch (reason) {
+    case "AUTOMATION_PAUSED":
+      throw new WhatsAppPolicyError("AUTOMATION_PAUSED");
+    case "SENDING_PAUSED":
+      throw new WhatsAppPolicyError("SENDING_PAUSED");
+    case "HUMAN_REPLY_BARRIER":
+      throw new WhatsAppPolicyError("AUTOMATION_SUPERSEDED_BY_HUMAN_REPLY");
+    case "EXECUTION_LEASE_INVALID":
+      throw new WhatsAppDispatchError("AUTOMATION_EXECUTION_LEASE_LOST", {
+        retryable: true,
+      });
+    case "CONVERSATION_CLOSED":
+      throw new WhatsAppPolicyError("CONVERSATION_CLOSED");
+    case "INVALID_CONTEXT":
+    case "MESSAGE_CONTEXT_INVALID":
+    case "CONVERSATION_NOT_FOUND":
+      throw new WhatsAppPolicyError("AUTOMATION_CONTEXT_INVALID");
+    default:
+      throw new WhatsAppPolicyError("AUTOMATIONS_DISABLED");
+  }
 }
 
 export function isAutomaticWhatsAppSource(value: string | null): boolean {
@@ -410,6 +468,22 @@ export function isAutomaticWhatsAppSource(value: string | null): boolean {
     value === "proof_acknowledgement" ||
     value === "late_proof_acknowledgement" ||
     value === "hold_expiration"
+  );
+}
+
+/** Sources produced only inside a leased inbound automation execution. */
+export function requiresWhatsAppAutomationExecutionLease(
+  value: string | null,
+): boolean {
+  return (
+    value === "automation" ||
+    value === "handoff" ||
+    value === "urgent_handoff" ||
+    value === "owner_access" ||
+    value === "deposit_request" ||
+    value === "deposit_confirmation" ||
+    value === "proof_acknowledgement" ||
+    value === "late_proof_acknowledgement"
   );
 }
 
@@ -482,7 +556,17 @@ export function operatorSourceForPurpose(
 }
 
 function whatsappTestModeEnabled(): boolean {
-  return parseSafetyBoolean(Deno.env.get("WHATSAPP_TEST_MODE"), true);
+  const runtime = (
+    globalThis as typeof globalThis & {
+      process?: { env?: Record<string, string | undefined> };
+    }
+  ).process;
+  return parseSafetyBoolean(
+    typeof Deno !== "undefined"
+      ? Deno.env.get("WHATSAPP_TEST_MODE")
+      : runtime?.env?.WHATSAPP_TEST_MODE,
+    true,
+  );
 }
 
 export function validIdempotencyKey(value: string): boolean {
@@ -1227,6 +1311,7 @@ export async function sendAndRecordMessage(args: {
   appointmentId?: string | null;
   coexistenceAccountId?: string | null;
   metadata?: Record<string, unknown>;
+  automationExecution?: WhatsAppAutomationExecutionLease | null;
   fetchImpl?: typeof fetch;
 }): Promise<RecordedMessage> {
   const {
@@ -1242,6 +1327,7 @@ export async function sendAndRecordMessage(args: {
     appointmentId = null,
     coexistenceAccountId = null,
     metadata = {},
+    automationExecution = null,
     fetchImpl,
   } = args;
 
@@ -1251,6 +1337,12 @@ export async function sendAndRecordMessage(args: {
     typeof metadata.inbound_message_id === "string"
       ? metadata.inbound_message_id
       : null;
+  if (
+    requiresWhatsAppAutomationExecutionLease(source) &&
+    !automationExecution
+  ) {
+    throw new WhatsAppPolicyError("AUTOMATION_EXECUTION_REQUIRED");
+  }
   assertAdministrativePayload(bodyPreview, payload);
   if (!validIdempotencyKey(idempotencyKey)) {
     throw new Error("INVALID_IDEMPOTENCY_KEY");
@@ -1369,6 +1461,13 @@ export async function sendAndRecordMessage(args: {
     source,
     automationOwnerMessageId,
   });
+  if (automationExecution) {
+    await assertWhatsAppAutomationSendEligible({
+      client,
+      conversationId: conversation.id,
+      execution: automationExecution,
+    });
+  }
   let pending: Record<string, unknown> | null = null;
   if (existingResult.data) {
     const existing = existingResult.data as Record<string, unknown>;
@@ -1518,6 +1617,16 @@ export async function sendAndRecordMessage(args: {
       credentials.accountId !== initialCredentials.accountId
     ) {
       throw new WhatsAppPolicyError("WHATSAPP_ACCOUNT_CONTEXT_CHANGED");
+    }
+    // Last authorization read before the only external send side effect. A
+    // dispatch claimed while an override was active cannot send after expiry or
+    // revocation, and a stale execution lease cannot be reused by recovery.
+    if (automationExecution) {
+      await assertWhatsAppAutomationSendEligible({
+        client,
+        conversationId: conversation.id,
+        execution: automationExecution,
+      });
     }
     const dispatched = await dispatchWhatsAppPayload({
       recipient,
