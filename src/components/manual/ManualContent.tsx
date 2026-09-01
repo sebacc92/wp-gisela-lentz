@@ -46,9 +46,10 @@ export const ManualContent = component$<ManualContentProps>(
             <div>
               <strong>Si olvidaste la contraseña</strong>
               <p>
-                No compartas tu contraseña por WhatsApp ni por email. Pedí a la
-                persona administradora que siga el procedimiento de acceso; si
-                no está disponible, contactá a Sebastián.
+                Escribí tu email en la pantalla de ingreso y elegí
+                <em> ¿Olvidaste tu contraseña?</em>. Si la cuenta existe, vas a
+                recibir un enlace personal para elegir una nueva. No compartas
+                ese enlace ni tu contraseña.
               </p>
             </div>
           </div>

@@ -8,6 +8,10 @@ import {
   BUSINESS_CONFIG,
   getPageTitle,
 } from "~/config/business";
+import {
+  PASSWORD_RECOVERY_SENT_MESSAGE,
+  passwordResetRedirectUrl,
+} from "~/lib/password-recovery";
 import { getSupabaseClient } from "~/lib/supabase/client";
 
 function safeLoginDestination(raw: string | null, currentUrl: URL): string {
@@ -30,6 +34,8 @@ export default component$(() => {
   const password = useSignal("");
   const visible = useSignal(false);
   const loading = useSignal(false);
+  const recoveryLoading = useSignal(false);
+  const recoveryMessage = useSignal("");
   const error = useSignal("");
   const destination = safeLoginDestination(
     location.url.searchParams.get("next"),
@@ -68,7 +74,7 @@ export default component$(() => {
 
         <form
           class="login-form"
-          aria-busy={loading.value}
+          aria-busy={loading.value || recoveryLoading.value}
           preventdefault:submit
           onSubmit$={async () => {
             loading.value = true;
@@ -110,6 +116,7 @@ export default component$(() => {
               onInput$={(_, element) => {
                 email.value = element.value;
                 if (error.value) error.value = "";
+                if (recoveryMessage.value) recoveryMessage.value = "";
               }}
             />
           </label>
@@ -145,15 +152,56 @@ export default component$(() => {
               </button>
             </div>
           </label>
+          <button
+            class="login-forgot-button"
+            type="button"
+            disabled={loading.value || recoveryLoading.value}
+            onClick$={async () => {
+              const normalizedEmail = email.value.trim();
+              error.value = "";
+              recoveryMessage.value = "";
+              if (!normalizedEmail || !normalizedEmail.includes("@")) {
+                error.value =
+                  "Ingresá tu email para pedir un enlace de recuperación.";
+                return;
+              }
+
+              recoveryLoading.value = true;
+              const { error: recoveryError } =
+                await getSupabaseClient().auth.resetPasswordForEmail(
+                  normalizedEmail,
+                  {
+                    redirectTo: passwordResetRedirectUrl(location.url.origin),
+                  },
+                );
+              recoveryLoading.value = false;
+
+              if (recoveryError) {
+                error.value =
+                  "No pudimos enviar el enlace. Intentá nuevamente más tarde.";
+                return;
+              }
+              recoveryMessage.value = PASSWORD_RECOVERY_SENT_MESSAGE;
+            }}
+          >
+            {recoveryLoading.value
+              ? "Enviando enlace…"
+              : "¿Olvidaste tu contraseña?"}
+          </button>
           {error.value && (
             <p id="login-error" class="login-error" role="alert">
               {error.value}
             </p>
           )}
+          {recoveryMessage.value && (
+            <p class="login-success" role="status">
+              {recoveryMessage.value}
+            </p>
+          )}
           <button
             class="primary-button login-submit"
             type="submit"
-            disabled={loading.value}
+            disabled={loading.value || recoveryLoading.value}
           >
             {loading.value && (
               <span class="button-spinner" aria-hidden="true" />

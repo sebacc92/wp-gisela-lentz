@@ -163,7 +163,17 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
           <div class="nav-user" title={appUser.fullName}>
             <div class="profile-avatar">{profileInitials}</div>
             <span class="nav-user-copy">
-              <small>Sesión iniciada</small>
+              <small
+                title={
+                  appUser.preserveInboxUnread
+                    ? "Abrir chats no los marca como leídos"
+                    : undefined
+                }
+              >
+                {appUser.preserveInboxUnread
+                  ? "Desarrollador · modo observador"
+                  : "Sesión iniciada"}
+              </small>
               <strong>{appUser.fullName}</strong>
             </span>
           </div>
@@ -291,7 +301,11 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
                   {profileInitials}
                 </div>
                 <span>
-                  <small>Sesión iniciada</small>
+                  <small>
+                    {appUser.preserveInboxUnread
+                      ? "Desarrollador · modo observador"
+                      : "Sesión iniciada"}
+                  </small>
                   <strong>{appUser.fullName}</strong>
                 </span>
               </div>

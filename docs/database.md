@@ -4,7 +4,7 @@ Las migraciones versionadas están en `supabase/migrations/`.
 
 ## Núcleo
 
-- `profiles`: usuario, rol y estado.
+- `profiles`: usuario, rol, estado y capacidad opcional de observador de inbox.
 - `contacts`: nombre, teléfono E.164, email opcional, cobertura IOMA/Particular,
   condición de paciente anterior y notas administrativas.
 - `conversations`: asignación, modo automático/manual, prioridad, atención y no leídos.
@@ -104,6 +104,13 @@ con prioridad.
 ## Seguridad
 
 Todas las tablas tienen RLS. Los operadores leen la información operativa y gestionan conversaciones/turnos mediante políticas o RPC controladas. La configuración estructural solo puede modificarse con rol `ADMIN`. `anon` no tiene permisos sobre datos clínicos u operativos.
+
+`profiles.preserve_inbox_unread` es una capacidad ortogonal al rol: una persona
+puede conservar todos los permisos `ADMIN` y, al mismo tiempo, abrir chats sin
+poner en cero el contador compartido de no leídos. `mark_conversation_read` lo
+impone en backend y el navegador no tiene permiso de actualizar directamente
+`conversations.unread_count`. Si otra persona abre el chat normalmente, el
+contador compartido sí se limpia; no existe un cursor de lectura por usuario.
 
 ## Realtime
 

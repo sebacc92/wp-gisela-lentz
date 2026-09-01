@@ -1,10 +1,12 @@
 import {
   component$,
+  useContext,
   useSignal,
   useStore,
   useVisibleTask$,
 } from "@qwik.dev/core";
 import { useLocation, type DocumentHead } from "@qwik.dev/router";
+import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
 import { AppNavigation } from "~/components/app/AppNavigation";
 import { AppointmentDrawer } from "~/components/appointments/AppointmentDrawer";
 import { ChatPanel } from "~/components/inbox/ChatPanel";
@@ -59,6 +61,7 @@ function inboxFilterFromUrl(value: string | null): InboxFilter {
 
 export default component$(() => {
   const location = useLocation();
+  const appUser = useContext(APP_USER_CONTEXT);
   const state = useStore<InboxState>({
     conversations: [],
     quickReplies: [],
@@ -250,6 +253,8 @@ export default component$(() => {
         onSelect$={async (id) => {
           selectedId.value = id;
           mobileChatOpen.value = true;
+          if (appUser.preserveInboxUnread) return;
+
           const conversation = state.conversations.find(
             (item) => item.id === id,
           );

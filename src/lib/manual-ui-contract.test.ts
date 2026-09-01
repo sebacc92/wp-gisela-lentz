@@ -18,7 +18,10 @@ test("la ruta Manual y sus enlaces conservan el control de acceso ADMIN", () => 
   assert.match(page, /!access\.allowed/);
   assert.match(navigation, /key: "manual"/);
   assert.match(navigation, /adminOnly: true/);
-  assert.match(appLayout, /select\("full_name,role,active"\)/);
+  assert.match(
+    appLayout,
+    /select\("full_name,role,active,preserve_inbox_unread"\)/,
+  );
   assert.match(appLayout, /appUser\.isAdmin = isAdminProfile\(profile\)/);
   assert.match(navigation, /!item\.adminOnly \|\| appUser\.isAdmin/);
   assert.match(navigation, /"odontogram", "settings", "manual"/);
