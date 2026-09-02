@@ -3,6 +3,7 @@ import test from "node:test";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 import {
+  locationPayload,
   sendAndRecordMessage,
   textPayload,
   WhatsAppPolicyError,
@@ -33,6 +34,7 @@ function queryResult(data: unknown) {
 function finalGateClient(input: {
   eligibilityCalls: string[];
   failedMessages: Array<Record<string, unknown>>;
+  insertedMessages?: Array<Record<string, unknown>>;
 }): SupabaseClient {
   const freshConversation = {
     id: CONVERSATION_ID,
@@ -111,13 +113,15 @@ function finalGateClient(input: {
             columns === "whatsapp_ingest_sequence"
               ? queryResult({ whatsapp_ingest_sequence: 1 })
               : queryResult(null),
-          insert: (values: Record<string, unknown>) =>
-            queryResult({
+          insert: (values: Record<string, unknown>) => {
+            input.insertedMessages?.push(values);
+            return queryResult({
               id: OUTBOUND_ID,
               whatsapp_message_id: null,
               status: "pending",
               metadata: values.metadata,
-            }),
+            });
+          },
           update: (values: Record<string, unknown>) => {
             input.failedMessages.push(values);
             return queryResult(null);
@@ -209,6 +213,89 @@ test("revocation after reservation is rechecked at the last pre-Graph gate", asy
     } else {
       process.env.WHATSAPP_TEST_MODE = previousTestMode;
     }
+    if (previousGraphVersion === undefined) {
+      delete process.env.WHATSAPP_GRAPH_API_VERSION;
+    } else {
+      process.env.WHATSAPP_GRAPH_API_VERSION = previousGraphVersion;
+    }
+    if (previousFingerprint === undefined) {
+      delete process.env.WHATSAPP_RECIPIENT_FINGERPRINT_SECRET;
+    } else {
+      process.env.WHATSAPP_RECIPIENT_FINGERPRINT_SECRET = previousFingerprint;
+    }
+  }
+});
+
+test("una ubicación se registra y se despacha con un único snapshot canónico", async () => {
+  const previousTestMode = process.env.WHATSAPP_TEST_MODE;
+  const previousGraphVersion = process.env.WHATSAPP_GRAPH_API_VERSION;
+  const previousFingerprint = process.env.WHATSAPP_RECIPIENT_FINGERPRINT_SECRET;
+  process.env.WHATSAPP_TEST_MODE = "false";
+  process.env.WHATSAPP_GRAPH_API_VERSION = "v26.0";
+  process.env.WHATSAPP_RECIPIENT_FINGERPRINT_SECRET =
+    "synthetic-location-fingerprint-secret";
+
+  const insertedMessages: Array<Record<string, unknown>> = [];
+  const graphPayloads: Array<Record<string, unknown>> = [];
+  try {
+    const result = await sendAndRecordMessage({
+      client: finalGateClient({
+        eligibilityCalls: [],
+        failedMessages: [],
+        insertedMessages,
+      }),
+      conversation: {
+        id: CONVERSATION_ID,
+        contact_id: CONTACT_ID,
+        coexistence_account_id: ACCOUNT_ID,
+        last_inbound_message_at: new Date().toISOString(),
+        automation_mode: "auto",
+        needs_human: false,
+      },
+      contact: {
+        id: CONTACT_ID,
+        phone_e164: "+5491100000001",
+        whatsapp_id: "5491100000001",
+        whatsapp_user_id: null,
+        name: "Paciente",
+      },
+      payload: locationPayload({
+        latitude: -38.2657317,
+        longitude: -57.8353134,
+        name: "Consultorio de la Dra. Gisela Lentz",
+        address: "Calle 11 1375, Miramar, Buenos Aires",
+      }),
+      bodyPreview: "Ubicación del consultorio",
+      idempotencyKey: "operator:location:1",
+      coexistenceAccountId: ACCOUNT_ID,
+      metadata: { source: "operator" },
+      fetchImpl: async (_input, init) => {
+        graphPayloads.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({ messages: [{ id: "wamid.location" }] }),
+          { status: 200 },
+        );
+      },
+    });
+
+    assert.equal(result.status, "sent");
+    assert.equal(insertedMessages[0]?.type, "location");
+    const metadata = insertedMessages[0]?.metadata as Record<string, unknown>;
+    assert.equal(metadata.location_snapshot_version, 1);
+    assert.deepEqual(metadata.location, {
+      latitude: -38.2657317,
+      longitude: -57.8353134,
+      name: "Consultorio de la Dra. Gisela Lentz",
+      address: "Calle 11 1375, Miramar, Buenos Aires",
+    });
+    const graphPayload = graphPayloads[0];
+    assert.equal(graphPayload?.type, "location");
+    assert.deepEqual(graphPayload?.location, metadata.location);
+  } finally {
+    if (previousTestMode === undefined) delete process.env.WHATSAPP_TEST_MODE;
+    else process.env.WHATSAPP_TEST_MODE = previousTestMode;
     if (previousGraphVersion === undefined) {
       delete process.env.WHATSAPP_GRAPH_API_VERSION;
     } else {

@@ -162,6 +162,21 @@ export const MessageBubble = component$<MessageBubbleProps>(
                 )}
               </span>
             </div>
+          ) : message.type === "location" && message.location ? (
+            <div class="message-location-card">
+              <Icon name="map-pin" size={22} />
+              <span class="message-location-copy">
+                <strong>{message.location.name}</strong>
+                <small>{message.location.address}</small>
+                <a
+                  href={message.location.mapUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Abrir en Google Maps
+                </a>
+              </span>
+            </div>
           ) : (
             <p>{message.body}</p>
           )}

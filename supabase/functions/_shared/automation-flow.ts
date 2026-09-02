@@ -21,7 +21,7 @@ export const PATIENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
   is_existing_patient: "¿Ya te atendiste en el consultorio antes?",
   contact_phone:
     "¿Cuál es tu teléfono de contacto? Podés escribir otro número o elegir este WhatsApp.",
-  coverage: "¿Tu cobertura es IOMA o Particular?",
+  coverage: "¿Cómo vas a atenderte: IOMA, Particular u otra cobertura?",
 };
 
 export interface PatientProfileDraft {
@@ -60,6 +60,100 @@ export function normalizeUserInput(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+/**
+ * Reconoce únicamente saludos que no contienen además un pedido. Se mantiene
+ * deliberadamente acotado para que "hola, quiero un turno" siga llegando al
+ * clasificador de intenciones.
+ */
+export function isConversationGreeting(value: string): boolean {
+  const input = normalizeUserInput(value)
+    .replace(/\b(?:dra|doctora|gisela)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(?:hola(?: (?:buen dia|buenos dias|buenas|buenas tardes|buenas noches))?|buen dia|buenos dias|buenas|buenas tardes|buenas noches)(?: (?:como estas|como estan|que tal|como va))?$/.test(
+    input,
+  );
+}
+
+/** Mensajes breves de cierre, sin mezclarlos con una nueva consulta. */
+export function isConversationAcknowledgement(value: string): boolean {
+  const input = normalizeUserInput(value);
+  return /^(?:gracias|muchas gracias|mil gracias|dale|ok|okay|okey|joya|perfecto|listo|entendido|genial|buenisimo)(?: (?:muchas |mil )?gracias)?$/.test(
+    input,
+  );
+}
+
+/**
+ * Detecta consultas explícitas de precio. No interpreta un monto ni una mención
+ * aislada al valor de una seña como una pregunta por aranceles.
+ */
+export function asksAboutPrice(value: string): boolean {
+  const input = normalizeUserInput(value);
+  if (!input) return false;
+  return (
+    /^(?:precio|precios|costo|costos|valor|valores|arancel|aranceles|tarifa|tarifas)\b/.test(
+      input,
+    ) ||
+    /\bcuanto(?:s)? (?:sale|salen|cuesta|cuestan|seria|serian)\b/.test(input) ||
+    /\bcuanto(?:s)? (?:esta|estan) (?:la |el |una |un |las |los )?(?:consulta|limpieza(?: dental)?|extraccion(?:es)?|blanqueamiento|ortopedia|ortodoncia|restauracion(?:es)?|arreglo(?:s)?|tratamiento(?:s)?|prestacion(?:es)?|servicio(?:s)?|turno)\b/.test(
+      input,
+    ) ||
+    /\bque sale (?:la |el |una |un |las |los )?(?:consulta|limpieza(?: dental)?|extraccion(?:es)?|blanqueamiento|ortopedia|ortodoncia|restauracion(?:es)?|arreglo(?:s)?|tratamiento(?:s)?|prestacion(?:es)?|servicio(?:s)?|turno)\b/.test(
+      input,
+    ) ||
+    /\b(?:cual|que) (?:es|son|seria|serian) (?:el |la |los |las )?(?:precio|precios|costo|costos|valor|valores|arancel|aranceles|tarifa|tarifas)\b/.test(
+      input,
+    ) ||
+    /\bque (?:precio|precios|costo|costos|valor|valores|arancel|aranceles|tarifa|tarifas)\b/.test(
+      input,
+    ) ||
+    /\b(?:precio|precios|costo|costos|arancel|aranceles|tarifa|tarifas) (?:de|del|para)\b/.test(
+      input,
+    ) ||
+    /\b(?:me|nos) (?:pasas|podrias pasar|podes pasar|decis|dirias|informan|informarias) (?:el |los )?(?:precio|precios|costo|costos|valor|valores|arancel|aranceles|tarifa|tarifas)\b/.test(
+      input,
+    ) ||
+    /\b(?:tiene|tienen|hay) (?:algun )?(?:precio|costo|arancel|tarifa)\b/.test(
+      input,
+    )
+  );
+}
+
+const THIRD_PARTY_APPOINTMENT_WORDS =
+  "(?:(?:un|una) )?(?:acompanante|otra persona|mi (?:bebe|hija|hijo|madre|mama|padre|papa|pareja|esposa|esposo|marido|mujer|hermana|hermano|abuela|abuelo))";
+
+/**
+ * Señala pedidos que el flujo de un solo paciente no puede atribuir con
+ * seguridad: varios turnos, otro turno adicional o un turno para un tercero.
+ */
+export function requestsMultipleAppointments(value: string): boolean {
+  const input = normalizeUserInput(value);
+  if (!input) return false;
+  const appointment = "(?:turnos?|citas?)";
+  const several = "(?:2|dos|3|tres|varios|varias)";
+  return (
+    new RegExp(`\\b${several} ${appointment}\\b`).test(input) ||
+    new RegExp(
+      `\\b${appointment} (?:para|de) ${several}(?: personas?)?\\b`,
+    ).test(input) ||
+    new RegExp(
+      `\\b(?:otro|otra|segundo|segunda) ${appointment} (?:para|de)\\b`,
+    ).test(input) ||
+    new RegExp(
+      `\\b${appointment}\\b.{0,80}\\bpara mi\\b.{0,80}\\b(?:y|ademas|tambien)\\b.{0,80}\\b(?:otro|otra|${THIRD_PARTY_APPOINTMENT_WORDS})\\b`,
+    ).test(input) ||
+    new RegExp(
+      `\\b(?:tambien|ademas)\\b.{0,40}\\bpara ${THIRD_PARTY_APPOINTMENT_WORDS}\\b`,
+    ).test(input) ||
+    new RegExp(
+      `\\b${appointment}\\b.{0,60}\\bpara ${THIRD_PARTY_APPOINTMENT_WORDS}\\b`,
+    ).test(input) ||
+    new RegExp(
+      `\\b${THIRD_PARTY_APPOINTMENT_WORDS}\\b.{0,60}\\b(?:necesita|necesitan|quiere|quieren|busca|buscan) (?:un |otro )?${appointment}\\b`,
+    ).test(input)
+  );
+}
+
 function uniqueValue<T>(values: T[]): T | null {
   const unique = [...new Set(values)];
   return unique.length === 1 ? unique[0] : null;
@@ -88,7 +182,7 @@ function titleCaseName(value: string): string {
 function plausibleFullName(value: string): string | null {
   const candidate = value
     .replace(
-      /^\s*(?:1[.)-]?\s*)?(?:nombre(?:\s+y\s+apellido)?\s*[:=-]\s*)?/i,
+      /^\s*(?:1[.)-]?\s*)?(?:(?:nombre(?:\s+y\s+apellido)?\s*[:=-]\s*)|(?:(?:mi nombre es|me llamo)\s+))?/i,
       "",
     )
     .replace(/[.,;:]+$/g, "")
@@ -122,18 +216,67 @@ export function parseCoverageReply(value: string): PatientCoverage | null {
   const input = normalizeUserInput(value);
   const matches: PatientCoverage[] = [];
   if (/\bioma\b/.test(input)) matches.push("ioma");
-  if (/\bparticular\b/.test(input)) matches.push("particular");
+  if (
+    /\bparticular\b/.test(input) ||
+    /^(?:sin cobertura|sin obra social|no tengo (?:cobertura|obra social))$/.test(
+      input,
+    )
+  ) {
+    matches.push("particular");
+  }
   return uniqueValue(matches);
+}
+
+/**
+ * Reconoce una cobertura distinta de las dos rutas automáticas. Se usa sólo
+ * cuando el flujo está esperando este dato, para derivar sin hacer que la
+ * persona repita el nombre de su obra social o prepaga.
+ */
+export function isOtherCoverageReply(value: string): boolean {
+  if (value === "profile:coverage:other") return true;
+  if (parseCoverageReply(value) !== null) return false;
+  const input = normalizeUserInput(value);
+  if (
+    !input ||
+    /^(?:si|no|no se|ninguna|que opciones|cuales son las opciones)$/.test(input)
+  ) {
+    return false;
+  }
+  return (
+    /^(?:otra|otra cobertura|otra obra social|obra social|prepaga)$/.test(
+      input,
+    ) ||
+    /\b(?:tengo|uso|cuento con|mi cobertura es|mi obra social es|me atiendo (?:con|por)|soy de) [a-z0-9]/.test(
+      input,
+    ) ||
+    /^[a-z][a-z0-9]*(?: [a-z0-9]+){0,2}$/.test(input)
+  );
 }
 
 export function parseExistingPatientReply(value: string): boolean | null {
   if (value === "profile:existing:yes") return true;
   if (value === "profile:existing:no") return false;
   const input = normalizeUserInput(value);
-  if (/^(si|soy paciente|ya soy paciente|paciente si)$/.test(input))
+  if (
+    /^(?:si|(?:si )?(?:ya )?soy paciente(?: de (?:la )?(?:doctora|odontologa|dra|gisela|doctora gisela|odontologa gisela))?|paciente si)$/.test(
+      input,
+    ) ||
+    /^(?:si )?(?:ya )?me atendi(?: (?:antes|una vez|en el consultorio|con (?:la )?(?:doctora|odontologa|dra|gisela)))?$/.test(
+      input,
+    )
+  ) {
     return true;
-  if (/^(no|no soy paciente|paciente no|primera vez)$/.test(input))
+  }
+  if (
+    /^(?:no|no soy paciente(?: de (?:la )?(?:doctora|odontologa|dra|gisela|doctora gisela|odontologa gisela))?|paciente no|primera vez|es mi primera vez)$/.test(
+      input,
+    ) ||
+    /^(?:no|nunca) me atendi(?: (?:antes|en el consultorio|con (?:la )?(?:doctora|odontologa|dra|gisela)))?$/.test(
+      input,
+    )
+  ) {
     return false;
+  }
 
   const labelled = input.match(
     /(?:sos|soy|era|ya sos|ya soy)?\s*paciente(?: de (?:la )?odontologa| de gisela)?\s*(si|no)\b/,
@@ -224,10 +367,28 @@ function numberedResponseParts(value: string): Map<number, string> {
   return parts;
 }
 
+function explicitResponseParts(value: string): string[] {
+  return value
+    .split(/[\n;|]+/)
+    .map((part) =>
+      part
+        .trim()
+        .replace(/^[\-•]\s*/, "")
+        .replace(/[.!]+$/g, "")
+        .trim(),
+    )
+    .filter(Boolean);
+}
+
 function positionalResponseParts(value: string): string[] {
   const parts = value
     .split(/[\n;,|]+/)
-    .map((part) => part.trim())
+    .map((part) =>
+      part
+        .trim()
+        .replace(/^[\-•]\s*/, "")
+        .trim(),
+    )
     .filter(Boolean);
   if (parts.length < 3 || parts.length > 4) return [];
   if (parseExistingPatientReply(parts[1]) === null) return [];
@@ -242,6 +403,14 @@ function labelledName(value: string): string | null {
   return match ? plausibleFullName(match[1]) : null;
 }
 
+function explicitlyIntroducedNames(value: string): string[] {
+  return explicitResponseParts(value).flatMap((part) => {
+    const match = part.match(/^(?:mi nombre es|me llamo)\s+(.+)$/i);
+    const name = match ? plausibleFullName(match[1]) : null;
+    return name ? [name] : [];
+  });
+}
+
 function labelledExistingPatient(value: string): boolean | null {
   const match = value.match(
     /(?:^|[\n;|])\s*(?:2[.)-]?\s*)?(?:sos|soy|era|ya sos|ya soy)?\s*paciente(?: de (?:la )?odont[oó]loga| de gisela)?\s*[:=-]?\s*(s[ií]|no)\b/i,
@@ -249,11 +418,20 @@ function labelledExistingPatient(value: string): boolean | null {
   return match ? normalizeUserInput(match[1]) === "si" : null;
 }
 
-function labelledContactPhone(value: string): string | null {
-  const match = value.match(
-    /(?:^|[\n;|])\s*(?:3[.)-]?\s*)?(?:(?:tel[eé]fono|celular)(?:\s+de\s+contacto)?)\s*[:=-]\s*([^\n;|]+)/i,
-  );
-  return match ? match[1].trim() : null;
+function explicitlyStatedPatientHistory(value: string): boolean[] {
+  return explicitResponseParts(value).flatMap((part) => {
+    const parsed = parseExistingPatientReply(part);
+    return parsed === null ? [] : [parsed];
+  });
+}
+
+function explicitlyLabelledContactPhones(value: string): string[] {
+  return explicitResponseParts(value).flatMap((part) => {
+    const match = part.match(
+      /^(?:3[.)-]?\s*)?(?:(?:mi|el)\s+)?(?:tel[eé]fono|celular)(?:\s+de\s+contacto)?\s*(?::|=|-|es)\s*(.+)$/i,
+    );
+    return match?.[1]?.trim() ? [match[1].trim()] : [];
+  });
 }
 
 /**
@@ -276,6 +454,7 @@ export function parsePatientProfileReply(
 
   const nameCandidates = [
     labelledName(value),
+    ...explicitlyIntroducedNames(value),
     numbered.has(1) ? plausibleFullName(numbered.get(1) ?? "") : null,
     positional.length ? plausibleFullName(positional[0]) : null,
     expected === "name" ? plausibleFullName(value) : null,
@@ -287,6 +466,7 @@ export function parsePatientProfileReply(
   const existingCandidates: boolean[] = [];
   const labelledExisting = labelledExistingPatient(value);
   if (labelledExisting !== null) existingCandidates.push(labelledExisting);
+  existingCandidates.push(...explicitlyStatedPatientHistory(value));
   if (numbered.has(2)) {
     const parsed = parseExistingPatientReply(numbered.get(2) ?? "");
     if (parsed !== null) existingCandidates.push(parsed);
@@ -304,7 +484,7 @@ export function parsePatientProfileReply(
   else if (existingCandidates.length > 1) ambiguous.add("is_existing_patient");
 
   const phoneCandidates = [
-    labelledContactPhone(value),
+    ...explicitlyLabelledContactPhones(value),
     numbered.has(3) ? (numbered.get(3) ?? null) : null,
     positional.length === 4 ? positional[2] : null,
     expected === "contact_phone" ? value : null,
@@ -558,6 +738,36 @@ export function parseSlotIndex(
   return Number.isSafeInteger(index) && index >= 0 && index < slotCount
     ? index
     : null;
+}
+
+/**
+ * Acepta el identificador de WhatsApp, un número visible empezando en uno o el
+ * texto completo de una opción. El texto debe coincidir de forma única: no se
+ * adivinan fechas, días ni franjas parciales.
+ */
+export function parseSlotSelection(
+  value: string,
+  optionLabels: string[],
+): number | null {
+  const encoded = parseSlotIndex(value, optionLabels.length);
+  if (encoded !== null) return encoded;
+
+  const input = normalizeUserInput(value);
+  const numbered = /^(?:opcion )?(\d+)$/.exec(input);
+  if (numbered) {
+    const oneBased = Number(numbered[1]);
+    return Number.isSafeInteger(oneBased) &&
+      oneBased >= 1 &&
+      oneBased <= optionLabels.length
+      ? oneBased - 1
+      : null;
+  }
+
+  if (!input) return null;
+  const exactMatches = optionLabels.flatMap((label, index) =>
+    normalizeUserInput(label) === input ? [index] : [],
+  );
+  return uniqueValue(exactMatches);
 }
 
 export function parseProfessionalReply(value: string): string | null {

@@ -35,6 +35,57 @@ test("limita cada página y entrega los mensajes en orden cronológico", () => {
   assert.equal(page.messages.at(-1)?.id, "message-000");
 });
 
+test("mapea una ubicación validada a un enlace seguro de Google Maps", () => {
+  const row = {
+    ...messageRow(0),
+    type: "location" as const,
+    body: "Ubicación del consultorio",
+    metadata: {
+      business_maps_url:
+        "https://www.google.com/maps/search/?api=1&query=Centro%20de%20Atenci%C3%B3n%20Profesional%20%28C.A.P.%29&query_place_id=ChIJK5iJNYYQhZURBREHhxeQ9PQ",
+      location: {
+        latitude: -38.2657317,
+        longitude: -57.8353134,
+        name: "  Consultorio de la Dra. Gisela Lentz  ",
+        address: "Calle 11 1375, Miramar, Buenos Aires",
+        mapUrl: "javascript:alert(1)",
+      },
+    },
+  } satisfies InboxMessageRow;
+
+  const message = inboxMessagePageFromRows([row]).messages[0];
+
+  assert.deepEqual(message?.location, {
+    latitude: -38.2657317,
+    longitude: -57.8353134,
+    name: "Consultorio de la Dra. Gisela Lentz",
+    address: "Calle 11 1375, Miramar, Buenos Aires",
+    mapUrl:
+      "https://www.google.com/maps/search/?api=1&query=Centro%20de%20Atenci%C3%B3n%20Profesional%20%28C.A.P.%29&query_place_id=ChIJK5iJNYYQhZURBREHhxeQ9PQ",
+  });
+});
+
+test("una ubicación incompleta conserva el texto y no expone un enlace", () => {
+  const row = {
+    ...messageRow(0),
+    type: "location" as const,
+    body: "Ubicación del consultorio",
+    metadata: {
+      location: {
+        latitude: 91,
+        longitude: -57.8353134,
+        name: "Consultorio",
+        address: "Calle 11 1375",
+      },
+    },
+  } satisfies InboxMessageRow;
+
+  const message = inboxMessagePageFromRows([row]).messages[0];
+
+  assert.equal(message?.body, "Ubicación del consultorio");
+  assert.equal(message?.location, undefined);
+});
+
 test("carga páginas anteriores con cursor estable de fecha y secuencia", async () => {
   const calls: Array<[string, ...unknown[]]> = [];
   const rows = [messageRow(50), messageRow(51)];

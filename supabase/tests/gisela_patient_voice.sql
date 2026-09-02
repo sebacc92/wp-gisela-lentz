@@ -335,8 +335,8 @@ select is(
 select is((select title from public.quick_replies where shortcut = '/ubicacion'), 'Ubicación de mi consultorio', 'conserva el título manual de ubicación');
 select is(
   (select body from public.quick_replies where shortcut = '/ubicacion'),
-  'Mi consultorio está en calle 11 N° 1375, entre 26 y 28, Miramar, Provincia de Buenos Aires.',
-  'conserva la respuesta rápida manual de ubicación'
+  E'Mi consultorio está en Calle 11 1375, Miramar, Provincia de Buenos Aires, Argentina.\n\nMapa: https://www.google.com/maps/search/?api=1&query=Centro%20de%20Atenci%C3%B3n%20Profesional%20%28C.A.P.%29&query_place_id=ChIJK5iJNYYQhZURBREHhxeQ9PQ',
+  'conserva la respuesta rápida manual de ubicación con su mapa'
 );
 select is((select title from public.quick_replies where shortcut = '/espera'), 'En breve te respondo', 'conserva el título manual de espera');
 select is((select body from public.quick_replies where shortcut = '/espera'), 'Recibí tu mensaje. Te respondo en breve.', 'conserva la respuesta rápida manual de espera');

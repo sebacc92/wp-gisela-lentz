@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  assertWhatsAppLocationSnapshot,
   assertWhatsAppRecipientSnapshot,
   existingWhatsAppDispatchDisposition,
   isAutomaticWhatsAppSource,
@@ -10,6 +11,7 @@ import {
   isOperatorWhatsAppPurpose,
   isRetryableWhatsAppAutomationFailure,
   isWhatsAppTestRecipientAllowed,
+  locationPayload,
   normalizeWhatsAppNumber,
   operatorSourceForPurpose,
   parseSafetyBoolean,
@@ -214,6 +216,81 @@ test("una reserva outbound pendiente nunca se confunde con un envío aceptado", 
   );
 });
 
+test("la ubicación nativa normaliza texto y rechaza puntos inválidos", () => {
+  const location = locationPayload({
+    latitude: -38.2657317,
+    longitude: -57.8353134,
+    name: "  Consultorio de la Dra. Gisela Lentz ",
+    address: "Calle 11 1375, Miramar, Buenos Aires",
+  });
+
+  assert.deepEqual(location, {
+    type: "location",
+    location: {
+      latitude: -38.2657317,
+      longitude: -57.8353134,
+      name: "Consultorio de la Dra. Gisela Lentz",
+      address: "Calle 11 1375, Miramar, Buenos Aires",
+    },
+  });
+  assert.throws(
+    () =>
+      locationPayload({
+        latitude: Number.NaN,
+        longitude: -57.8353134,
+        name: "Consultorio",
+        address: "Calle 11 1375",
+      }),
+    (error: unknown) =>
+      error instanceof WhatsAppPolicyError &&
+      error.code === "INVALID_LOCATION_PAYLOAD",
+  );
+  assert.throws(
+    () =>
+      locationPayload({
+        latitude: -38.2657317,
+        longitude: -181,
+        name: "Consultorio",
+        address: "Calle 11 1375",
+      }),
+    /INVALID_LOCATION_PAYLOAD/,
+  );
+});
+
+test("el snapshot idempotente de ubicación no permite cambiar el pin", () => {
+  const location = {
+    latitude: -38.2657317,
+    longitude: -57.8353134,
+    name: "Consultorio de la Dra. Gisela Lentz",
+    address: "Calle 11 1375, Miramar, Buenos Aires",
+  };
+  assert.doesNotThrow(() =>
+    assertWhatsAppLocationSnapshot({
+      metadata: { location_snapshot_version: 1, location },
+      location,
+    }),
+  );
+  assert.throws(
+    () =>
+      assertWhatsAppLocationSnapshot({
+        metadata: {
+          location_snapshot_version: 1,
+          location: { ...location, longitude: -57.8 },
+        },
+        location,
+      }),
+    /IDEMPOTENCY_CONFLICT/,
+  );
+  assert.throws(
+    () =>
+      assertWhatsAppLocationSnapshot({
+        metadata: { location },
+        location,
+      }),
+    /IDEMPOTENCY_CONFLICT/,
+  );
+});
+
 test("todo envío automático nuevo queda detrás del kill switch", () => {
   assert.equal(isAutomaticWhatsAppSource("automation"), true);
   assert.equal(isAutomaticWhatsAppSource("reminder"), true);
@@ -221,6 +298,7 @@ test("todo envío automático nuevo queda detrás del kill switch", () => {
   assert.equal(isAutomaticWhatsAppSource("deposit_confirmation"), true);
   assert.equal(isAutomaticWhatsAppSource("proof_acknowledgement"), true);
   assert.equal(isAutomaticWhatsAppSource("late_proof_acknowledgement"), true);
+  assert.equal(isAutomaticWhatsAppSource("business_location"), true);
   assert.equal(isAutomaticWhatsAppSource("hold_expiration"), true);
   assert.equal(isAutomaticWhatsAppSource("operator"), false);
   assert.equal(isAutomaticWhatsAppSource("operator_deposit_request"), false);
@@ -239,6 +317,10 @@ test("sólo la automatización causal exige un lease de ejecución", () => {
   );
   assert.equal(
     requiresWhatsAppAutomationExecutionLease("proof_acknowledgement"),
+    true,
+  );
+  assert.equal(
+    requiresWhatsAppAutomationExecutionLease("business_location"),
     true,
   );
   assert.equal(requiresWhatsAppAutomationExecutionLease("reminder"), false);

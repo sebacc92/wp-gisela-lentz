@@ -48,6 +48,74 @@ export function formatInboxMessageTime(dateValue: string): string {
   }).format(date);
 }
 
+function cleanLocationText(value: unknown, maximum: number): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.trim().replace(/\s+/g, " ");
+  return clean && clean.length <= maximum ? clean : null;
+}
+
+function stableInboxGoogleMapsUrl(value: unknown): string | null {
+  const clean = cleanLocationText(value, 2_048);
+  if (!clean) return null;
+  try {
+    const url = new URL(clean);
+    return url.protocol === "https:" &&
+      url.hostname === "www.google.com" &&
+      !url.username &&
+      !url.password &&
+      !url.hash &&
+      url.pathname === "/maps/search/" &&
+      url.searchParams.get("api") === "1" &&
+      Boolean(url.searchParams.get("query")) &&
+      Boolean(url.searchParams.get("query_place_id"))
+      ? clean
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function inboxLocationFromMetadata(
+  type: Message["type"],
+  metadata: Record<string, unknown>,
+): Message["location"] {
+  if (type !== "location") return undefined;
+  const raw = metadata.location;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+
+  const candidate = raw as Record<string, unknown>;
+  const latitude = candidate.latitude;
+  const longitude = candidate.longitude;
+  const name = cleanLocationText(candidate.name, 120);
+  const address = cleanLocationText(candidate.address, 500);
+  if (
+    typeof latitude !== "number" ||
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    typeof longitude !== "number" ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180 ||
+    !name ||
+    !address
+  ) {
+    return undefined;
+  }
+
+  return {
+    latitude,
+    longitude,
+    name,
+    address,
+    // Prefer the validated Place ID URL persisted by the business location.
+    // Older records safely fall back to their validated coordinate snapshot.
+    mapUrl:
+      stableInboxGoogleMapsUrl(metadata.business_maps_url) ??
+      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${latitude},${longitude}`)}`,
+  };
+}
+
 function mapInboxMessage(row: InboxMessageRow): Message {
   return {
     id: row.id,
@@ -73,6 +141,7 @@ function mapInboxMessage(row: InboxMessageRow): Message {
       typeof row.metadata?.media_id === "string" &&
       Boolean(row.metadata.media_id),
     depositProofLate: row.metadata?.deposit_proof_late === true,
+    location: inboxLocationFromMetadata(row.type, row.metadata),
   };
 }
 

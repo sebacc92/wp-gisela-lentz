@@ -454,6 +454,57 @@
   box-shadow: 0 1px 3px rgb(118 81 102 / 7%);
 }
 
+.inbox-chat-panel .message-location-card {
+  display: flex;
+  min-width: min(280px, 68vw);
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.inbox-chat-panel .message-location-card > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--brand-700);
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.inbox-chat-panel .message-location-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.inbox-chat-panel .message-location-copy strong {
+  overflow-wrap: anywhere;
+  color: var(--ink-900);
+  font-size: 13px;
+}
+
+.inbox-chat-panel .message-location-copy small {
+  color: var(--ink-700);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.inbox-chat-panel .message-location-copy a {
+  width: fit-content;
+  margin-top: 3px;
+  color: var(--brand-800);
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.inbox-chat-panel .message-location-copy a:focus-visible {
+  border-radius: 3px;
+  outline: 3px solid rgb(147 106 127 / 22%);
+  outline-offset: 2px;
+}
+
 .inbox-chat-panel .message-attachment-open {
   display: inline-flex;
   min-height: 40px;

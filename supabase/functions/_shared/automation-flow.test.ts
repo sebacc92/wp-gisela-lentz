@@ -3,9 +3,13 @@ import test from "node:test";
 
 import {
   APPOINTMENT_WELCOME_MESSAGE,
+  asksAboutPrice,
   depositProofReviewMessage,
   MAIN_MENU_OPTIONS,
   PATIENT_PROFILE_PROMPTS,
+  isConversationAcknowledgement,
+  isConversationGreeting,
+  isOtherCoverageReply,
   isMainMenuRequest,
   formatDepositAmountArs,
   missingPatientProfileFields,
@@ -20,6 +24,8 @@ import {
   parseProfessionalReply,
   parseServiceReply,
   parseSlotIndex,
+  parseSlotSelection,
+  requestsMultipleAppointments,
   resolveAppointmentConfirmation,
   resolveCancellationConfirmation,
   resolveMainMenuIntent,
@@ -91,6 +97,107 @@ test("normaliza acentos, signos y espacios", () => {
   assert.equal(isMainMenuRequest("Volver al menú"), true);
 });
 
+test("distingue saludos solos de pedidos concretos", () => {
+  for (const greeting of [
+    "Hola",
+    "¡Buen día!",
+    "Hola, Gisela",
+    "Buenas tardes, doctora",
+    "Hola, ¿cómo están?",
+  ]) {
+    assert.equal(isConversationGreeting(greeting), true, greeting);
+  }
+  for (const request of [
+    "Hola, quiero sacar un turno",
+    "Buenas, ¿cuánto sale una limpieza?",
+    "Hola, necesito hablar con una persona",
+  ]) {
+    assert.equal(isConversationGreeting(request), false, request);
+  }
+});
+
+test("reconoce agradecimientos breves sin ocultar una consulta nueva", () => {
+  for (const acknowledgement of [
+    "Gracias",
+    "Muchas gracias 😊",
+    "Dale",
+    "Ok, gracias",
+    "Joya",
+    "Perfecto, gracias",
+    "Listo",
+    "Buenísimo, muchas gracias",
+  ]) {
+    assert.equal(
+      isConversationAcknowledgement(acknowledgement),
+      true,
+      acknowledgement,
+    );
+  }
+  for (const request of [
+    "Gracias, necesito otro turno",
+    "Perfecto, ¿cuánto sale?",
+    "Listo el comprobante, ¿lo recibieron?",
+  ]) {
+    assert.equal(isConversationAcknowledgement(request), false, request);
+  }
+});
+
+test("detecta consultas explícitas de precio sin confundir la seña", () => {
+  for (const priceQuestion of [
+    "¿Cuánto sale una limpieza?",
+    "¿Qué costo tiene la consulta?",
+    "Precio de blanqueamiento",
+    "¿Cuál sería el valor?",
+    "¿Me pasás el precio de la consulta?",
+    "¿Hay algún costo?",
+    "Hola buenas tardes. Quería consultar cuanto esta la limpieza dental. Tengo ioma",
+    "Que sale la consulta particular?",
+  ]) {
+    assert.equal(asksAboutPrice(priceQuestion), true, priceQuestion);
+  }
+  for (const otherMessage of [
+    "Ya transferí el valor de la seña.",
+    "Quiero un turno para limpieza",
+    "¿Cuánto demora una limpieza?",
+    "¿Cuánto está demorando la consulta?",
+    "¿Qué sale en el mapa?",
+    "El turno es particular",
+  ]) {
+    assert.equal(asksAboutPrice(otherMessage), false, otherMessage);
+  }
+});
+
+test("detecta varios turnos o un turno para un tercero de forma acotada", () => {
+  for (const multipleRequest of [
+    "Necesito dos turnos",
+    "Quiero turnos para 2 personas",
+    "Un turno para mí y otro para mi hija",
+    "También necesito uno para mi marido",
+    "Necesito un turno para mi hijo",
+    "Mi hija necesita un turno",
+    "Quiero un turno para un acompañante",
+  ]) {
+    assert.equal(
+      requestsMultipleAppointments(multipleRequest),
+      true,
+      multipleRequest,
+    );
+  }
+  for (const singleRequest of [
+    "Necesito un turno para mí",
+    "Mi turno es el dos",
+    "Quiero reprogramar mi segundo turno",
+    "Voy con mi hija a mi turno",
+    "Necesito turno para una limpieza",
+  ]) {
+    assert.equal(
+      requestsMultipleAppointments(singleRequest),
+      false,
+      singleRequest,
+    );
+  }
+});
+
 test("deriva a recepción después de dos respuestas inválidas consecutivas", () => {
   assert.deepEqual(nextInvalidAttempt(), {
     attempts: 1,
@@ -138,6 +245,18 @@ test("rechaza índices de horario incompletos o fuera de rango", () => {
   assert.equal(parseSlotIndex("slot:", 2), null);
   assert.equal(parseSlotIndex("slot:2", 2), null);
   assert.equal(parseSlotIndex("1", 2), null);
+});
+
+test("acepta un horario por id, número visible o texto completo exacto", () => {
+  const labels = ["Lun 07/09 · 09:30", "Mar 08/09 · 13:30"];
+  assert.equal(parseSlotSelection("slot:1", labels), 1);
+  assert.equal(parseSlotSelection("1", labels), 0);
+  assert.equal(parseSlotSelection("Opción 2", labels), 1);
+  assert.equal(parseSlotSelection("mar 08/09 - 13:30", labels), 1);
+  assert.equal(parseSlotSelection("martes a la tarde", labels), null);
+  assert.equal(parseSlotSelection("3", labels), null);
+  assert.equal(parseSlotSelection("09:30", labels), null);
+  assert.equal(parseSlotSelection("lunes", ["Lunes", "Lunes"]), null);
 });
 
 test("valida identificadores dinámicos de profesional y turno", () => {
@@ -209,6 +328,55 @@ test("extrae respuestas etiquetadas enviadas todas juntas", () => {
   );
 });
 
+test("aprovecha un perfil natural explícito enviado en líneas", () => {
+  assert.deepEqual(
+    parsePatientProfileReply(
+      "Milagros Ferreyra.\nNo soy paciente de la doctora\nMi teléfono es +5491112345678\nParticular",
+      { primaryPhoneE164: "+5491199999999" },
+    ),
+    {
+      values: {
+        name: "Milagros Ferreyra",
+        isExistingPatient: false,
+        contactPhoneConfirmed: true,
+        coverage: "particular",
+        alternatePhoneE164: "+5491112345678",
+      },
+      ambiguous: [],
+    },
+  );
+
+  assert.deepEqual(
+    parsePatientProfileReply(
+      "Me llamo Tomás Ruiz\nYa me atendí en el consultorio\nMi celular de contacto es 11 2345-6789\nTengo IOMA",
+    ).values,
+    {
+      name: "Tomás Ruiz",
+      isExistingPatient: true,
+      contactPhoneConfirmed: true,
+      coverage: "ioma",
+      alternatePhoneE164: "+5491123456789",
+    },
+  );
+});
+
+test("los formatos naturales sólo extraen afirmaciones explícitas", () => {
+  assert.deepEqual(
+    parsePatientProfileReply(
+      "La paciente Milagros Ferreyra necesita un turno y su teléfono está sin señal.",
+    ).values,
+    {},
+  );
+  assert.deepEqual(
+    parsePatientProfileReply("Ya transferí a +5491112345678").values,
+    {},
+  );
+  assert.deepEqual(
+    parsePatientProfileReply("Soy paciente\nNo soy paciente").ambiguous,
+    ["is_existing_patient"],
+  );
+});
+
 test("aprovecha una respuesta posicional completa o sin repetir el teléfono", () => {
   assert.deepEqual(
     parsePatientProfileReply("María López, no, +54 9 221 555 0101, particular")
@@ -259,6 +427,23 @@ test("confirma el teléfono de contacto actual o guarda uno distinto", () => {
     }).values,
     { contactPhoneConfirmed: true },
   );
+});
+
+test("otra cobertura se deriva sin pedir que repitan su nombre", () => {
+  for (const reply of [
+    "profile:coverage:other",
+    "Otra cobertura",
+    "OSDE",
+    "Swiss Medical",
+    "Tengo Federada Salud",
+  ]) {
+    assert.equal(isOtherCoverageReply(reply), true, reply);
+  }
+  for (const supported of ["IOMA", "Particular", "Sin cobertura", "No sé"]) {
+    assert.equal(isOtherCoverageReply(supported), false, supported);
+  }
+  assert.equal(parseCoverageReply("Sin cobertura"), "particular");
+  assert.equal(parseCoverageReply("No tengo obra social"), "particular");
 });
 
 test("no confunde un teléfono principal ni un texto libre con datos faltantes", () => {

@@ -12,6 +12,7 @@ export type IconName =
   | "file"
   | "info"
   | "logout"
+  | "map-pin"
   | "message"
   | "more"
   | "paperclip"
@@ -47,6 +48,12 @@ export const Icon = component$<IconProps>(({ name, size = 20, ...props }) => {
         <>
           <rect height="18" rx="2" width="18" x="3" y="4" />
           <path d="M16 2v4M8 2v4M3 10h18" />
+        </>
+      )}
+      {name === "map-pin" && (
+        <>
+          <path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z" />
+          <circle cx="12" cy="10" r="2.5" />
         </>
       )}
       {name === "file" && (
