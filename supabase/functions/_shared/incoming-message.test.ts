@@ -381,6 +381,33 @@ test("un adjunto pausado sigue despachando el worker aunque la IA no pueda leerl
   );
 });
 
+test("un handoff manual frena el siguiente inbound sin afectar otra conversación automática", () => {
+  const ordinaryInbound = {
+    automationsEnabled: true,
+    optedOut: false,
+    humanReview: false,
+    priority: false,
+    owner: false,
+    readableMedia: false,
+    humanReviewPauseOwned: false,
+  };
+
+  assert.equal(
+    shouldDispatchIncomingAutomation({
+      ...ordinaryInbound,
+      automationMode: "manual",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldDispatchIncomingAutomation({
+      ...ordinaryInbound,
+      automationMode: "auto",
+    }),
+    true,
+  );
+});
+
 test("con OPENAI apagado, el inbound se pausa pero no queda sin despachar", async () => {
   const previous = process.env.OPENAI_ADMINISTRATIVE_ENABLED;
   process.env.OPENAI_ADMINISTRATIVE_ENABLED = "false";

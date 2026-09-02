@@ -31,7 +31,7 @@ idle
  │               └─ confirming_cancellation ─► turno cancelado
  ├─ Horarios y ubicación ─► información configurada
  │                           └─ IA administrativa opcional o human_handoff
- └─ Otra consulta ─► human_handoff
+ └─ Hablar con la secretaria ─► human_handoff
 ```
 
 Estados adicionales:
