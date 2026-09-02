@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(50);
+select plan(51);
 
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
@@ -673,6 +673,52 @@ select ok(
     where conversation_id = '97000000-0000-4000-8000-000000000004'
   ),
   'the newer session marker follows the authoritative ingest sequence'
+);
+
+update public.conversations
+set current_flow = 'side-query-sentinel'
+where id = '97000000-0000-4000-8000-000000000004';
+
+select clock_timestamp() + interval '1 hour 30.321 seconds' as resume_expiry
+\gset
+
+select public.save_whatsapp_automation_session(
+  '97000000-0000-4000-8000-000000000014',
+  :'newer_lease_token'::uuid,
+  1,
+  'collecting_patient_profile',
+  '{"expectedProfileField":"coverage","serviceId":"service-1"}'::jsonb,
+  :'resume_expiry'::timestamptz
+) as applied
+\gset lateral_first_
+
+select public.save_whatsapp_automation_session(
+  '97000000-0000-4000-8000-000000000014',
+  :'newer_lease_token'::uuid,
+  1,
+  'collecting_patient_profile',
+  '{"expectedProfileField":"coverage","serviceId":"service-1"}'::jsonb,
+  :'resume_expiry'::timestamptz
+) as applied
+\gset lateral_retry_
+
+select ok(
+  :'lateral_first_applied'::boolean
+  and :'lateral_retry_applied'::boolean
+  and (
+    select state = 'collecting_patient_profile'
+      and context =
+        '{"expectedProfileField":"coverage","serviceId":"service-1"}'::jsonb
+      and expires_at = :'resume_expiry'::timestamptz
+    from public.automation_sessions
+    where conversation_id = '97000000-0000-4000-8000-000000000004'
+  )
+  and (
+    select current_flow = 'side-query-sentinel'
+    from public.conversations
+    where id = '97000000-0000-4000-8000-000000000004'
+  ),
+  'restoring a lateral flow is idempotent and preserves exact expiry and current_flow'
 );
 select throws_ok(
   format(

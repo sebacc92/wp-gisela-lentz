@@ -19,8 +19,41 @@ export interface ResolvedBusinessLocation {
 export interface InformationFlowSessionTarget<Context> {
   state: string;
   context?: Context;
-  expiresMinutes?: number;
+  expiresAt?: string | null;
 }
+
+export const INFORMATION_FOLLOW_UP_BUTTONS = [
+  { id: "flow:new", title: "Sacar un turno" },
+  { id: "flow:human", title: "Otra consulta" },
+] as const;
+
+const INFORMATION_FLOW_RESUME_PROMPTS: Record<string, string> = {
+  selecting_service: "Seguimos con tu turno 😊 ¿Qué tipo de turno necesitás?",
+  selecting_slot:
+    "Seguimos con tu turno 😊 Elegí uno de los horarios disponibles.",
+  confirming_appointment:
+    "Seguimos con tu turno 😊 ¿Querés pre-reservar el horario que elegiste?",
+  selecting_appointment_to_reschedule:
+    "Seguimos con tu turno 😊 ¿Qué turno querés reprogramar?",
+  confirming_reschedule_request:
+    "Seguimos con tu turno 😊 ¿Querés elegir otro horario?",
+  selecting_new_slot: "Seguimos con tu turno 😊 Elegí el nuevo horario.",
+  confirming_new_slot: "Seguimos con tu turno 😊 ¿Confirmás la reprogramación?",
+  selecting_appointment_to_cancel:
+    "Seguimos con tu turno 😊 ¿Qué turno querés cancelar?",
+  confirming_cancellation:
+    "Seguimos con tu turno 😊 ¿Confirmás la cancelación?",
+  reviewing_appointments: "Seguimos con tus turnos 😊 ¿Qué querés hacer?",
+  waiting_deposit: "Seguimos con tu turno 😊 Quedamos atentos al comprobante.",
+};
+
+const PROFILE_RESUME_PROMPTS: Record<string, string> = {
+  name: "Seguimos con tu turno 😊 ¿Cuál es tu nombre y apellido?",
+  is_existing_patient:
+    "Seguimos con tu turno 😊 ¿Ya te atendiste en el consultorio antes?",
+  contact_phone: "Seguimos con tu turno 😊 ¿Cuál es tu teléfono de contacto?",
+  coverage: "Seguimos con tu turno 😊 ¿Qué cobertura tenés?",
+};
 
 function cleanText(value: unknown, maximum: number): string | null {
   if (typeof value !== "string") return null;
@@ -84,25 +117,71 @@ export function resolveBusinessLocation(
   return { latitude, longitude, name, address, displayAddress, mapsUrl };
 }
 
+/** Copy breve previa al pin nativo; la URL estable queda fuera del texto. */
+export function conciseBusinessLocationMessage(
+  location: Pick<ResolvedBusinessLocation, "displayAddress"> | string,
+): string {
+  const address = (
+    typeof location === "string" ? location : location.displayAddress
+  )
+    .split(",")
+    .slice(0, 2)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(", ")
+    .replace(/[.\s]+$/, "");
+  return `📍 Estamos en ${address}.`;
+}
+
+/** Extracts the configured hours paragraph without repeating location data. */
+export function configuredBusinessHoursMessage(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const paragraphs = value
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  return (
+    paragraphs.find(
+      (paragraph) =>
+        /\b(?:lunes|martes|miércoles|jueves|viernes|sábado|domingo|horarios?)\b/i.test(
+          paragraph,
+        ) &&
+        !/\b(?:calle|dirección|miramar|provincia|argentina)\b/i.test(paragraph),
+    ) ?? null
+  );
+}
+
+/**
+ * Only states waiting for a concrete reply are resumed after a lateral
+ * administrative question. Passive/result states deliberately return null.
+ */
+export function informationFlowResumePrompt(
+  state: string,
+  context: object = {},
+): string | null {
+  if (state === "collecting_patient_profile") {
+    const expectedProfileField = (context as { expectedProfileField?: unknown })
+      .expectedProfileField;
+    return typeof expectedProfileField === "string"
+      ? (PROFILE_RESUME_PROMPTS[expectedProfileField] ?? null)
+      : null;
+  }
+  return INFORMATION_FLOW_RESUME_PROMPTS[state] ?? null;
+}
+
 export function informationFlowSessionTarget<Context>(args: {
   resumeCurrentFlow: boolean;
   state: string;
   context: Context;
   expiresAt: string | null;
-  now: Date;
 }): InformationFlowSessionTarget<Context> {
   if (!args.resumeCurrentFlow) return { state: "idle" };
-  const rawMinutes = args.expiresAt
-    ? Math.max(
-        1,
-        Math.ceil(
-          (new Date(args.expiresAt).getTime() - args.now.getTime()) / 60_000,
-        ),
-      )
-    : 30;
   return {
     state: args.state,
     context: args.context,
-    expiresMinutes: Number.isFinite(rawMinutes) ? rawMinutes : 30,
+    // Restore the claimed snapshot literally. Rounding it to a TTL can extend
+    // the flow and makes a lateral question mutate otherwise untouched state.
+    expiresAt: args.expiresAt,
   };
 }

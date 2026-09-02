@@ -33,6 +33,10 @@ import {
   type WhatsAppAutomationExecutionLease,
 } from "../_shared/app-automations.ts";
 import {
+  conciseBusinessLocationMessage,
+  configuredBusinessHoursMessage,
+  INFORMATION_FOLLOW_UP_BUTTONS,
+  informationFlowResumePrompt,
   informationFlowSessionTarget,
   resolveBusinessLocation,
 } from "../_shared/business-location.ts";
@@ -760,10 +764,10 @@ Deno.serve(async (request) => {
       `${compactDate(slot.startsAt)} · ${formatTime(slot.startsAt)}`;
 
     sessionWriteSequence = 0;
-    const saveSession = async (
+    const saveSessionAt = async (
       state: string,
-      context: AutomationContext = {},
-      ttlMinutes = 30,
+      context: AutomationContext,
+      expiresAt: string | null,
     ) => {
       const lease = executionLease;
       if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
@@ -775,12 +779,22 @@ Deno.serve(async (request) => {
         p_sequence: sequence,
         p_state: state,
         p_context: context,
-        p_expires_at: new Date(
-          executionNow.getTime() + Math.max(1, ttlMinutes) * 60 * 1000,
-        ).toISOString(),
+        p_expires_at: expiresAt,
       });
       if (result.error) throw result.error;
     };
+    const saveSession = async (
+      state: string,
+      context: AutomationContext = {},
+      ttlMinutes = 30,
+    ) =>
+      await saveSessionAt(
+        state,
+        context,
+        new Date(
+          executionNow.getTime() + Math.max(1, ttlMinutes) * 60 * 1000,
+        ).toISOString(),
+      );
 
     let decisionSequence = 0;
     const durableDecision = async <T>(key: string, value: T): Promise<T> => {
@@ -2141,7 +2155,8 @@ Deno.serve(async (request) => {
       await saveSession("reviewing_appointments", { invalidAttempts });
     };
 
-    const showClinicInfo = async (resumeCurrentFlow = false) => {
+    const showClinicInfo = async (resumePrompt: string | null = null) => {
+      const resumeCurrentFlow = resumePrompt !== null;
       const infoIntent =
         administrativeInfoIntent(inputValue) ?? "business_info";
       const configuredInfo =
@@ -2155,28 +2170,33 @@ Deno.serve(async (request) => {
       const businessLocation = resolveBusinessLocation(appSettings ?? {});
       const shouldSendLocation =
         infoIntent === "location" || infoIntent === "business_info";
-      const mapsUrl =
-        businessLocation?.mapsUrl ??
-        (configuredAddress
-          ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(configuredAddress)}`
-          : "");
-      const baseConfiguredAnswer =
-        infoIntent === "location" && configuredAddress
-          ? `El consultorio está en ${configuredAddress}.`
-          : configuredInfo;
+      const locationAnswer = businessLocation
+        ? conciseBusinessLocationMessage(businessLocation)
+        : configuredAddress
+          ? conciseBusinessLocationMessage(configuredAddress)
+          : "";
       const configuredAnswer =
-        baseConfiguredAnswer && shouldSendLocation && mapsUrl
-          ? `${baseConfiguredAnswer}\n\nMapa: ${mapsUrl}`
-          : baseConfiguredAnswer;
+        infoIntent === "location"
+          ? locationAnswer
+          : infoIntent === "business_hours" || infoIntent === "business_info"
+            ? (configuredBusinessHoursMessage(configuredInfo) ?? "")
+            : configuredInfo;
       const finishInfoFlow = async () => {
         const target = informationFlowSessionTarget({
           resumeCurrentFlow,
           state: session.state,
           context: session.context,
           expiresAt: session.expires_at,
-          now: executionNow,
         });
-        await saveSession(target.state, target.context, target.expiresMinutes);
+        if ("expiresAt" in target) {
+          await saveSessionAt(
+            target.state,
+            target.context ?? {},
+            target.expiresAt ?? null,
+          );
+        } else {
+          await saveSession(target.state, target.context);
+        }
       };
       const sendConfiguredLocation = async () => {
         if (!shouldSendLocation || !businessLocation) return;
@@ -2196,14 +2216,70 @@ Deno.serve(async (request) => {
           "business_location",
         );
       };
-      const infoPayload = (answer: string) =>
-        resumeCurrentFlow
-          ? textPayload(answer)
-          : buttonsPayload(answer, [
-              { id: "flow:new", title: "Sacar un turno" },
-              { id: "flow:human", title: "Otra consulta" },
-              { id: "flow:menu", title: "Menú principal" },
-            ]);
+      const sendInformationResume = async () => {
+        if (!resumePrompt) return;
+        const metadata = {
+          information_resume: true,
+          resumed_state: session.state,
+        };
+        const appointmentAction =
+          session.state === "selecting_appointment_to_reschedule"
+            ? "reschedule"
+            : session.state === "selecting_appointment_to_cancel"
+              ? "cancel"
+              : null;
+        if (appointmentAction) {
+          const appointments = await upcomingAppointments();
+          if (appointments.length) {
+            const rows = appointments.map((appointment) => ({
+              id: `turn:${appointmentAction}:${appointment.id}`,
+              title:
+                `${compactDate(appointment.startsAt)} · ${formatTime(appointment.startsAt)}`.slice(
+                  0,
+                  24,
+                ),
+              description: appointment.serviceName.slice(0, 72),
+            }));
+            await send(
+              listPayload(resumePrompt, "Elegir turno", rows),
+              resumePrompt,
+              metadata,
+            );
+            return;
+          }
+        }
+        await send(textPayload(resumePrompt), resumePrompt, metadata);
+      };
+      const sendInformationContinuation = async () => {
+        if (resumePrompt) {
+          await sendInformationResume();
+        } else {
+          const message = "¿Cómo querés seguir?";
+          await send(
+            buttonsPayload(message, [...INFORMATION_FOLLOW_UP_BUTTONS]),
+            message,
+            { information_follow_up: true },
+          );
+        }
+        await finishInfoFlow();
+      };
+      const sendInformationAnswer = async (
+        answer: string,
+        metadata: Record<string, unknown> = {},
+      ) => {
+        if (shouldSendLocation && locationAnswer) {
+          await send(textPayload(locationAnswer), locationAnswer, {
+            information_location_intro: true,
+          });
+          await sendConfiguredLocation();
+          if (infoIntent === "business_info") {
+            await send(textPayload(answer), answer, metadata);
+          }
+        } else {
+          await send(textPayload(answer), answer, metadata);
+        }
+        await sendInformationContinuation();
+      };
       const showConfiguredInfo = async () => {
         if (!configuredAnswer) {
           await handoff(
@@ -2211,9 +2287,7 @@ Deno.serve(async (request) => {
           );
           return;
         }
-        await send(infoPayload(configuredAnswer), configuredAnswer);
-        await sendConfiguredLocation();
-        await finishInfoFlow();
+        await sendInformationAnswer(configuredAnswer);
       };
       const fallbackAnswer = () =>
         configuredAnswer
@@ -2230,7 +2304,11 @@ Deno.serve(async (request) => {
               source: "fallback" as const,
             };
 
-      if (infoIntent === "location" || appSettings?.ai_enabled !== true) {
+      if (
+        infoIntent === "location" ||
+        infoIntent === "business_info" ||
+        appSettings?.ai_enabled !== true
+      ) {
         await showConfiguredInfo();
         return;
       }
@@ -2457,13 +2535,11 @@ Deno.serve(async (request) => {
         await saveSession("human_handoff");
         return;
       }
-      await send(infoPayload(answer.answer), answer.answer, {
+      await sendInformationAnswer(answer.answer, {
         ai_administrative: answer.source === "openai",
         ai_fallback: answer.source === "fallback",
         openai_response_id: answer.responseId,
       });
-      await sendConfiguredLocation();
-      await finishInfoFlow();
     };
 
     const showAppointmentConfirmation = async (
@@ -2656,12 +2732,14 @@ Deno.serve(async (request) => {
       return await finish({ processed: true, state: "idle" });
     }
     if (requestedIntent === "info") {
-      const resumeCurrentFlow =
-        !inputValue.startsWith("flow:") && session.state !== "idle";
-      await showClinicInfo(resumeCurrentFlow);
+      const resumePrompt = informationFlowResumePrompt(
+        session.state,
+        session.context,
+      );
+      await showClinicInfo(resumePrompt);
       return await finish({
         processed: true,
-        state: resumeCurrentFlow ? session.state : "info",
+        state: resumePrompt ? session.state : "info",
       });
     }
     if (
