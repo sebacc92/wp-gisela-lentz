@@ -76,7 +76,7 @@ test("el aviso fuera de horario no convierte los mensajes siguientes en silencio
 
 test("un fallo o apagado de IA administrativa nunca completa en silencio", () => {
   const automation = source("supabase/functions/whatsapp-automation/index.ts");
-  const infoStart = automation.indexOf("const showClinicInfo = async () =>");
+  const infoStart = automation.indexOf("const showClinicInfo = async (");
   const infoEnd = automation.indexOf(
     "const showAppointmentConfirmation",
     infoStart,

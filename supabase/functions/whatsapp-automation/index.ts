@@ -2,8 +2,12 @@ import {
   PATIENT_PROFILE_PROMPTS,
   MAIN_MENU_OPTIONS,
   MAX_SLOTS_OFFERED_PER_DAY,
+  asksAboutPrice,
   depositProofReviewMessage,
   formatDepositAmountArs,
+  isConversationAcknowledgement,
+  isConversationGreeting,
+  isOtherCoverageReply,
   isMainMenuRequest,
   missingPatientProfileFields,
   nextInvalidAttempt,
@@ -11,7 +15,7 @@ import {
   parseAppointmentSelection,
   parsePatientProfileReply,
   parseServiceReply,
-  parseSlotIndex,
+  parseSlotSelection,
   renderConfiguredMessage,
   selectSlotsForOffer,
   resolveAppointmentConfirmation,
@@ -19,6 +23,7 @@ import {
   resolveMainMenuIntent,
   resolveRescheduleConfirmation,
   resolveRescheduleRequest,
+  requestsMultipleAppointments,
   type MainMenuIntent,
   type PatientCoverage,
   type PatientProfileField,
@@ -27,6 +32,10 @@ import {
   whatsappConversationOperationallyEnabled,
   type WhatsAppAutomationExecutionLease,
 } from "../_shared/app-automations.ts";
+import {
+  informationFlowSessionTarget,
+  resolveBusinessLocation,
+} from "../_shared/business-location.ts";
 import { validateDepositProofForAutoConfirmation } from "../_shared/deposit-proof.ts";
 import {
   jsonResponse,
@@ -81,6 +90,7 @@ import {
   isRetryableWhatsAppAutomationFailure,
   isWhatsAppPolicyError,
   listPayload,
+  locationPayload,
   sendAndRecordMessage,
   WhatsAppPolicyError,
   textPayload,
@@ -132,6 +142,12 @@ interface AppSettingsSnapshot {
   automation_welcome_message?: string | null;
   urgent_message?: string | null;
   general_info_message?: string | null;
+  business_address?: string | null;
+  business_location_name?: string | null;
+  business_location_address?: string | null;
+  business_latitude?: number | null;
+  business_longitude?: number | null;
+  business_maps_url?: string | null;
   ai_enabled?: boolean;
   ai_media_enabled?: boolean;
   ai_model?: string | null;
@@ -436,6 +452,8 @@ interface AutomationContext {
   expectedProfileField?: PatientProfileField;
   contactPhoneConfirmed?: boolean;
   continueAfterProfile?: "services" | "reschedule";
+  depositHelpShown?: boolean;
+  depositAcknowledged?: boolean;
 }
 
 interface Session {
@@ -738,6 +756,8 @@ Deno.serve(async (request) => {
       formatAppointmentTime(value, businessTimezone);
     const compactDate = (value: string) =>
       compactAppointmentDate(value, businessTimezone);
+    const slotOptionLabel = (slot: AutomationSlot) =>
+      `${compactDate(slot.startsAt)} · ${formatTime(slot.startsAt)}`;
 
     sessionWriteSequence = 0;
     const saveSession = async (
@@ -1169,7 +1189,9 @@ Deno.serve(async (request) => {
     let contactPhoneConfirmed =
       session.context.contactPhoneConfirmed === true ||
       (typeof contact.alternate_phone_e164 === "string" &&
-        Boolean(contact.alternate_phone_e164));
+        Boolean(contact.alternate_phone_e164)) ||
+      (typeof contact.phone_e164 === "string" &&
+        /^\+[1-9][0-9]{7,14}$/.test(contact.phone_e164));
 
     const currentProfile = () => ({
       name: typeof contact.name === "string" ? contact.name : null,
@@ -1278,6 +1300,7 @@ Deno.serve(async (request) => {
           buttonsPayload(message, [
             { id: "profile:coverage:ioma", title: "IOMA" },
             { id: "profile:coverage:particular", title: "Particular" },
+            { id: "profile:coverage:other", title: "Otra cobertura" },
           ]),
           message,
         );
@@ -1847,11 +1870,7 @@ Deno.serve(async (request) => {
       const rows: Array<{ id: string; title: string; description?: string }> =
         slots.map((slot, index) => ({
           id: `slot:${index}`,
-          title:
-            `${compactDate(slot.startsAt)} · ${formatTime(slot.startsAt)}`.slice(
-              0,
-              24,
-            ),
+          title: slotOptionLabel(slot).slice(0, 24),
           description: slot.serviceName.slice(0, 72),
         }));
       rows.push(
@@ -2122,32 +2141,84 @@ Deno.serve(async (request) => {
       await saveSession("reviewing_appointments", { invalidAttempts });
     };
 
-    const showClinicInfo = async () => {
+    const showClinicInfo = async (resumeCurrentFlow = false) => {
+      const infoIntent =
+        administrativeInfoIntent(inputValue) ?? "business_info";
       const configuredInfo =
         typeof appSettings?.general_info_message === "string"
           ? appSettings.general_info_message.trim()
           : "";
+      const configuredAddress =
+        typeof appSettings?.business_address === "string"
+          ? appSettings.business_address.trim()
+          : "";
+      const businessLocation = resolveBusinessLocation(appSettings ?? {});
+      const shouldSendLocation =
+        infoIntent === "location" || infoIntent === "business_info";
+      const mapsUrl =
+        businessLocation?.mapsUrl ??
+        (configuredAddress
+          ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(configuredAddress)}`
+          : "");
+      const baseConfiguredAnswer =
+        infoIntent === "location" && configuredAddress
+          ? `El consultorio está en ${configuredAddress}.`
+          : configuredInfo;
+      const configuredAnswer =
+        baseConfiguredAnswer && shouldSendLocation && mapsUrl
+          ? `${baseConfiguredAnswer}\n\nMapa: ${mapsUrl}`
+          : baseConfiguredAnswer;
+      const finishInfoFlow = async () => {
+        const target = informationFlowSessionTarget({
+          resumeCurrentFlow,
+          state: session.state,
+          context: session.context,
+          expiresAt: session.expires_at,
+          now: executionNow,
+        });
+        await saveSession(target.state, target.context, target.expiresMinutes);
+      };
+      const sendConfiguredLocation = async () => {
+        if (!shouldSendLocation || !businessLocation) return;
+        const preview = `Ubicación: ${businessLocation.name}\n${businessLocation.address}`;
+        await send(
+          locationPayload({
+            latitude: businessLocation.latitude,
+            longitude: businessLocation.longitude,
+            name: businessLocation.name,
+            address: businessLocation.address,
+          }),
+          preview,
+          {
+            business_location: true,
+            business_maps_url: businessLocation.mapsUrl,
+          },
+          "business_location",
+        );
+      };
+      const infoPayload = (answer: string) =>
+        resumeCurrentFlow
+          ? textPayload(answer)
+          : buttonsPayload(answer, [
+              { id: "flow:new", title: "Sacar un turno" },
+              { id: "flow:human", title: "Otra consulta" },
+              { id: "flow:menu", title: "Menú principal" },
+            ]);
       const showConfiguredInfo = async () => {
-        if (!configuredInfo) {
+        if (!configuredAnswer) {
           await handoff(
             "Todavía no tenemos esa información configurada para responder automáticamente.",
           );
           return;
         }
-        await send(
-          buttonsPayload(configuredInfo, [
-            { id: "flow:new", title: "Sacar un turno" },
-            { id: "flow:human", title: "Otra consulta" },
-            { id: "flow:menu", title: "Menú principal" },
-          ]),
-          configuredInfo,
-        );
-        await saveSession("idle");
+        await send(infoPayload(configuredAnswer), configuredAnswer);
+        await sendConfiguredLocation();
+        await finishInfoFlow();
       };
       const fallbackAnswer = () =>
-        configuredInfo
+        configuredAnswer
           ? {
-              answer: configuredInfo,
+              answer: configuredAnswer,
               handoff: false,
               responseId: null,
               source: "fallback" as const,
@@ -2159,11 +2230,11 @@ Deno.serve(async (request) => {
               source: "fallback" as const,
             };
 
-      if (appSettings?.ai_enabled !== true) {
+      if (infoIntent === "location" || appSettings?.ai_enabled !== true) {
         await showConfiguredInfo();
         return;
       }
-      const intent = administrativeInfoIntent(inputValue);
+      const intent = infoIntent;
       if (!intent || !isAllowedAdministrativeQuestion(inputValue)) {
         await handoff(
           "Para cuidar tu privacidad, esa consulta necesita atención humana.",
@@ -2386,20 +2457,13 @@ Deno.serve(async (request) => {
         await saveSession("human_handoff");
         return;
       }
-      await send(
-        buttonsPayload(answer.answer, [
-          { id: "flow:new", title: "Sacar un turno" },
-          { id: "flow:human", title: "Otra consulta" },
-          { id: "flow:menu", title: "Menú principal" },
-        ]),
-        answer.answer,
-        {
-          ai_administrative: answer.source === "openai",
-          ai_fallback: answer.source === "fallback",
-          openai_response_id: answer.responseId,
-        },
-      );
-      await saveSession("idle");
+      await send(infoPayload(answer.answer), answer.answer, {
+        ai_administrative: answer.source === "openai",
+        ai_fallback: answer.source === "fallback",
+        openai_response_id: answer.responseId,
+      });
+      await sendConfiguredLocation();
+      await finishInfoFlow();
     };
 
     const showAppointmentConfirmation = async (
@@ -2554,12 +2618,6 @@ Deno.serve(async (request) => {
       return await finish({ processed: true, state: "human_handoff" });
     }
 
-    // El saludo va siempre primero, antes de pedir cualquier dato: si el primer
-    // mensaje ya pedía un turno, el flujo arrancaba sin saludar.
-    if (freshSession && welcomeMessage) {
-      await send(textPayload(welcomeMessage), welcomeMessage);
-    }
-
     const requestedIntent =
       resolveMainMenuIntent(inputValue) ?? administrativeInfoRoute(inputValue);
     const explicitHumanRequest =
@@ -2571,12 +2629,79 @@ Deno.serve(async (request) => {
       await handoff();
       return await finish({ processed: true, state: "human_handoff" });
     }
+    if (!replyId && requestsMultipleAppointments(inboundBody)) {
+      await handoff(
+        "Para coordinar turnos para más de una persona sin mezclar sus datos, necesitamos ayudarte personalmente.",
+        session.context,
+      );
+      return await finish({
+        processed: true,
+        state: "human_handoff",
+        reason: "MULTIPLE_APPOINTMENTS_REQUESTED",
+      });
+    }
+    if (!replyId && asksAboutPrice(inboundBody)) {
+      await handoff(
+        "Para darte el valor correcto según la prestación y la cobertura, necesitamos revisar tu consulta.",
+        session.context,
+      );
+      return await finish({
+        processed: true,
+        state: "human_handoff",
+        reason: "PRICE_QUESTION",
+      });
+    }
     if (isMainMenuRequest(inputValue) || inputValue === "flow:menu") {
       await showMainMenu();
       return await finish({ processed: true, state: "idle" });
     }
+    if (requestedIntent === "info") {
+      const resumeCurrentFlow =
+        !inputValue.startsWith("flow:") && session.state !== "idle";
+      await showClinicInfo(resumeCurrentFlow);
+      return await finish({
+        processed: true,
+        state: resumeCurrentFlow ? session.state : "info",
+      });
+    }
+    if (
+      session.state === "idle" &&
+      !replyId &&
+      isConversationGreeting(inboundBody)
+    ) {
+      await showMainMenu(
+        freshSession && welcomeMessage
+          ? welcomeMessage
+          : "¡Hola! ¿En qué podemos ayudarte?",
+      );
+      return await finish({ processed: true, state: "idle" });
+    }
+    if (
+      session.state === "idle" &&
+      !replyId &&
+      isConversationAcknowledgement(inboundBody)
+    ) {
+      const message = "¡De nada! Cuando necesites, escribinos por acá 😊";
+      await send(textPayload(message), message);
+      await saveSession("idle");
+      return await finish({ processed: true, state: "idle" });
+    }
 
     if (session.state === "collecting_patient_profile") {
+      if (
+        session.context.expectedProfileField === "coverage" &&
+        isOtherCoverageReply(inputValue)
+      ) {
+        await handoff(
+          "Para confirmar cómo se gestiona otra cobertura, necesitamos revisarlo con vos.",
+          session.context,
+        );
+        return await finish({
+          processed: true,
+          state: "human_handoff",
+          reason: "OTHER_COVERAGE",
+        });
+      }
       const parsed = await persistProfileInput(
         session.context.expectedProfileField ?? null,
       );
@@ -2607,6 +2732,9 @@ Deno.serve(async (request) => {
     }
 
     if (!replyId && (await persistProfileInput(null, true))) {
+      if (freshSession && welcomeMessage) {
+        await send(textPayload(welcomeMessage), welcomeMessage);
+      }
       if (!(await askForMissingProfile())) await showServices();
       return await finish({
         processed: true,
@@ -2625,6 +2753,9 @@ Deno.serve(async (request) => {
         session.state === "idle" ||
         session.state === "reviewing_appointments")
     ) {
+      if (freshSession && requestedIntent === "new" && welcomeMessage) {
+        await send(textPayload(welcomeMessage), welcomeMessage);
+      }
       await handleMainIntent(requestedIntent);
       return await finish({
         processed: true,
@@ -2634,9 +2765,7 @@ Deno.serve(async (request) => {
 
     if (session.state === "idle") {
       if (freshSession) {
-        // La bienvenida promete iniciar el alta: continuamos con un único dato
-        // en vez de volver a mostrar la lista completa o un menú intermedio.
-        await startNewAppointmentFlow();
+        await showMainMenu(welcomeMessage ?? "¿En qué podemos ayudarte?");
       } else {
         await showMainMenu();
       }
@@ -2710,9 +2839,9 @@ Deno.serve(async (request) => {
       if (inputValue === "nav:services") {
         await showServices();
       } else {
-        const index = parseSlotIndex(
+        const index = parseSlotSelection(
           inputValue,
-          session.context.slots?.length ?? 0,
+          (session.context.slots ?? []).map(slotOptionLabel),
         );
         const slot =
           index === null ? undefined : session.context.slots?.[index];
@@ -2973,9 +3102,9 @@ Deno.serve(async (request) => {
       if (inputValue === "reschedule:back") {
         await showMainMenu("Tu turno queda sin cambios.");
       } else {
-        const index = parseSlotIndex(
+        const index = parseSlotSelection(
           inputValue,
-          session.context.slots?.length ?? 0,
+          (session.context.slots ?? []).map(slotOptionLabel),
         );
         const slot =
           index === null ? undefined : session.context.slots?.[index];
@@ -3208,14 +3337,9 @@ Deno.serve(async (request) => {
         await showMainMenu(
           "Esa pre-reserva ya no está activa. Si querés, podemos buscarte otro horario.",
         );
+      } else if (inputValue === "deposit:cancel") {
+        await showCancellationRequest(appointment);
       } else {
-        const message =
-          appointment.depositStatus === "proof_received"
-            ? "Ya recibimos tu comprobante y quedó pendiente de revisión."
-            : "Tu horario sigue pre-reservado. Enviá el comprobante como imagen o PDF. Si se leen el monto exacto y el destinatario, te confirmamos el turno.";
-        await send(textPayload(message), message, {
-          appointment_id: appointment.id,
-        });
         const remainingMinutes = appointment.holdExpiresAt
           ? Math.max(
               1,
@@ -3226,7 +3350,55 @@ Deno.serve(async (request) => {
               ),
             )
           : 30;
-        await saveSession("waiting_deposit", session.context, remainingMinutes);
+        const acknowledgement =
+          inputValue === "deposit:ack" ||
+          (!replyId && isConversationAcknowledgement(inboundBody));
+        if (acknowledgement) {
+          if (session.context.depositAcknowledged !== true) {
+            const message =
+              appointment.depositStatus === "proof_received"
+                ? "¡Gracias! Ya recibimos el comprobante y está pendiente de revisión."
+                : "Perfecto, quedamos atentos al comprobante 😊";
+            await send(textPayload(message), message, {
+              appointment_id: appointment.id,
+            });
+          }
+          await saveSession(
+            "waiting_deposit",
+            {
+              ...session.context,
+              depositAcknowledged: true,
+            },
+            remainingMinutes,
+          );
+        } else if (session.context.depositHelpShown === true) {
+          await handoff(
+            "Vemos que necesitás ayuda antes de completar la seña.",
+            session.context,
+          );
+        } else {
+          const message =
+            appointment.depositStatus === "proof_received"
+              ? "Ya recibimos tu comprobante y quedó pendiente de revisión. Si necesitás consultar algo, elegí “Hablar con una persona”."
+              : "Tu horario sigue pre-reservado. Para confirmarlo, enviá el comprobante como imagen o PDF. Si necesitás ayuda antes de pagar, elegí una opción.";
+          await send(
+            buttonsPayload(message, [
+              { id: "deposit:ack", title: "Ya lo envío" },
+              { id: "flow:human", title: "Hablar con persona" },
+              { id: "deposit:cancel", title: "Cancelar reserva" },
+            ]),
+            message,
+            { appointment_id: appointment.id },
+          );
+          await saveSession(
+            "waiting_deposit",
+            {
+              ...session.context,
+              depositHelpShown: true,
+            },
+            remainingMinutes,
+          );
+        }
       }
     } else {
       await showMainMenu();

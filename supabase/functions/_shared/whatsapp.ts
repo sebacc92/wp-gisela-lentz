@@ -56,6 +56,19 @@ export interface RecordedMessage {
   deduplicated: boolean;
 }
 
+type WhatsAppOutboundMessageType =
+  | "text"
+  | "template"
+  | "interactive"
+  | "location";
+
+export interface WhatsAppLocationPayload {
+  latitude: number;
+  longitude: number;
+  name: string;
+  address: string;
+}
+
 export type ExistingWhatsAppDispatchDisposition =
   | "completed"
   | "in_progress"
@@ -467,6 +480,7 @@ export function isAutomaticWhatsAppSource(value: string | null): boolean {
     value === "deposit_confirmation" ||
     value === "proof_acknowledgement" ||
     value === "late_proof_acknowledgement" ||
+    value === "business_location" ||
     value === "hold_expiration"
   );
 }
@@ -483,7 +497,8 @@ export function requiresWhatsAppAutomationExecutionLease(
     value === "deposit_request" ||
     value === "deposit_confirmation" ||
     value === "proof_acknowledgement" ||
-    value === "late_proof_acknowledgement"
+    value === "late_proof_acknowledgement" ||
+    value === "business_location"
   );
 }
 
@@ -610,6 +625,98 @@ export function textPayload(body: string): Record<string, unknown> {
   return { type: "text", text: { preview_url: false, body } };
 }
 
+function invalidLocationPayload(): never {
+  throw new WhatsAppPolicyError("INVALID_LOCATION_PAYLOAD");
+}
+
+function cleanLocationText(value: unknown, maximum: number): string {
+  if (typeof value !== "string") invalidLocationPayload();
+  const clean = value.trim().replace(/\s+/g, " ");
+  if (!clean || clean.length > maximum) invalidLocationPayload();
+  return clean;
+}
+
+function canonicalWhatsAppLocation(
+  value: unknown,
+  requireCanonicalText = false,
+): WhatsAppLocationPayload {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    invalidLocationPayload();
+  }
+  const candidate = value as Record<string, unknown>;
+  const latitude = candidate.latitude;
+  const longitude = candidate.longitude;
+  if (
+    typeof latitude !== "number" ||
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    typeof longitude !== "number" ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    invalidLocationPayload();
+  }
+  const name = cleanLocationText(candidate.name, 120);
+  const address = cleanLocationText(candidate.address, 500);
+  if (
+    requireCanonicalText &&
+    (candidate.name !== name || candidate.address !== address)
+  ) {
+    invalidLocationPayload();
+  }
+  return { latitude, longitude, name, address };
+}
+
+function locationFromPayload(
+  payload: Record<string, unknown>,
+): WhatsAppLocationPayload | null {
+  return payload.type === "location"
+    ? canonicalWhatsAppLocation(payload.location)
+    : null;
+}
+
+/**
+ * A location is part of the logical idempotent message, not mutable display
+ * metadata. A retry therefore has to prove it is sending the exact reserved
+ * point, name and address.
+ */
+export function assertWhatsAppLocationSnapshot(args: {
+  metadata: Record<string, unknown>;
+  location: WhatsAppLocationPayload;
+}): void {
+  let existing: WhatsAppLocationPayload;
+  try {
+    existing = canonicalWhatsAppLocation(args.metadata.location, true);
+  } catch {
+    throw new Error("IDEMPOTENCY_CONFLICT");
+  }
+  if (
+    args.metadata.location_snapshot_version !== 1 ||
+    existing.latitude !== args.location.latitude ||
+    existing.longitude !== args.location.longitude ||
+    existing.name !== args.location.name ||
+    existing.address !== args.location.address
+  ) {
+    throw new Error("IDEMPOTENCY_CONFLICT");
+  }
+}
+
+/**
+ * Builds the native WhatsApp static-location payload. Coordinates must come
+ * from verified business configuration; this helper deliberately never
+ * geocodes or infers a point from an address at send time.
+ */
+export function locationPayload(
+  location: WhatsAppLocationPayload,
+): Record<string, unknown> {
+  return {
+    type: "location",
+    location: canonicalWhatsAppLocation(location),
+  };
+}
+
 export function buttonsPayload(
   body: string,
   buttons: Array<{ id: string; title: string }>,
@@ -723,10 +830,14 @@ export function templatePayload(
 
 function messageTypeFromPayload(
   payload: Record<string, unknown>,
-): "text" | "template" | "interactive" {
+): WhatsAppOutboundMessageType {
   if (payload.type === "template") return "template";
   if (payload.type === "interactive") return "interactive";
   if (payload.type === "text") return "text";
+  if (payload.type === "location") {
+    canonicalWhatsAppLocation(payload.location);
+    return "location";
+  }
   throw new WhatsAppPolicyError("UNSUPPORTED_OUTBOUND_MESSAGE_TYPE");
 }
 
@@ -770,7 +881,7 @@ async function assertOutboundPolicy(args: {
   client: SupabaseClient;
   conversation: WhatsAppConversation;
   contact: WhatsAppContact;
-  type: "text" | "template" | "interactive";
+  type: WhatsAppOutboundMessageType;
   templateName: string | null;
   templateKey: string | null;
   appointmentId: string | null;
@@ -1266,7 +1377,7 @@ async function assertTestRecipientAllowed(args: {
   recipient: string;
   sentBy: string | null;
   source: string | null;
-  type: "text" | "template" | "interactive";
+  type: WhatsAppOutboundMessageType;
 }): Promise<void> {
   const { client, conversation, contact, recipient, sentBy, source, type } =
     args;
@@ -1332,6 +1443,13 @@ export async function sendAndRecordMessage(args: {
   } = args;
 
   const type = messageTypeFromPayload(payload);
+  const outboundLocation = locationFromPayload(payload);
+  // Strip any caller-supplied location extras before the Graph request. The
+  // native payload and its idempotency snapshot always share one canonical
+  // representation.
+  const outboundPayload = outboundLocation
+    ? locationPayload(outboundLocation)
+    : payload;
   const source = typeof metadata.source === "string" ? metadata.source : null;
   const automationOwnerMessageId =
     typeof metadata.inbound_message_id === "string"
@@ -1343,7 +1461,7 @@ export async function sendAndRecordMessage(args: {
   ) {
     throw new WhatsAppPolicyError("AUTOMATION_EXECUTION_REQUIRED");
   }
-  assertAdministrativePayload(bodyPreview, payload);
+  assertAdministrativePayload(bodyPreview, outboundPayload);
   if (!validIdempotencyKey(idempotencyKey)) {
     throw new Error("INVALID_IDEMPOTENCY_KEY");
   }
@@ -1387,6 +1505,9 @@ export async function sendAndRecordMessage(args: {
     ...(interactiveOptions.length
       ? { interactive_options: interactiveOptions }
       : {}),
+    ...(outboundLocation
+      ? { location: outboundLocation, location_snapshot_version: 1 }
+      : {}),
     ...(type === "template"
       ? { template_key: templateKey, appointment_id: appointmentId }
       : {}),
@@ -1423,6 +1544,12 @@ export async function sendAndRecordMessage(args: {
           rowMetadata.appointment_id !== appointmentId))
     ) {
       throw new Error("IDEMPOTENCY_CONFLICT");
+    }
+    if (outboundLocation) {
+      assertWhatsAppLocationSnapshot({
+        metadata: rowMetadata,
+        location: outboundLocation,
+      });
     }
     assertWhatsAppRecipientSnapshot({
       metadata: rowMetadata,
@@ -1585,7 +1712,7 @@ export async function sendAndRecordMessage(args: {
       source,
       type,
     });
-    assertAdministrativePayload(bodyPreview, payload);
+    assertAdministrativePayload(bodyPreview, outboundPayload);
     const currentRecipientIdentity = await resolveWhatsAppRecipientIdentity({
       client,
       contact,
@@ -1631,7 +1758,7 @@ export async function sendAndRecordMessage(args: {
     const dispatched = await dispatchWhatsAppPayload({
       recipient,
       recipientKind: recipientIdentity.kind,
-      payload,
+      payload: outboundPayload,
       opaqueMessageId: pending.id as string,
       credentials,
       fetchImpl,

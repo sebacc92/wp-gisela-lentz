@@ -14,6 +14,14 @@ export type DepositStatus =
   | "confirmed"
   | "expired";
 
+export interface MessageLocation {
+  latitude: number;
+  longitude: number;
+  name: string;
+  address: string;
+  mapUrl: string;
+}
+
 export interface Message {
   id: string;
   body: string;
@@ -30,11 +38,13 @@ export interface Message {
     | "image"
     | "document"
     | "audio"
+    | "location"
     | "system";
   filename?: string;
   mimeType?: string;
   hasMedia?: boolean;
   depositProofLate?: boolean;
+  location?: MessageLocation;
 }
 
 export interface AppointmentSummary {
