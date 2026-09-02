@@ -29,6 +29,13 @@ import {
   type PatientProfileField,
 } from "../_shared/automation-flow.ts";
 import {
+  isSecretaryRequest,
+  resolveTypedServiceOption,
+  SECRETARY_HANDOFF_MESSAGE,
+  SECRETARY_REPLY_ID,
+  withSecretaryMenuOption,
+} from "./flow-options.ts";
+import {
   whatsappConversationOperationallyEnabled,
   type WhatsAppAutomationExecutionLease,
 } from "../_shared/app-automations.ts";
@@ -108,6 +115,9 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 interface AutomationInput {
   messageId: string;
 }
+
+const APPOINTMENT_MAIN_MENU_OPTIONS =
+  withSecretaryMenuOption(MAIN_MENU_OPTIONS);
 
 interface InboundSnapshot {
   id: string;
@@ -1091,11 +1101,16 @@ Deno.serve(async (request) => {
     normalizedInboundBody = normalizeUserInput(inboundBody);
     inputValue = replyId || inboundBody;
 
-    const handoff = async (reason = "", context: AutomationContext = {}) => {
+    const handoff = async (
+      reason = "",
+      context: AutomationContext = {},
+      confirmationMessage?: string,
+    ) => {
       await claimInboundHandoff(client, inbound.id);
       const handoffMessage =
+        confirmationMessage ??
         `${reason ? `${reason.trim()} ` : ""}` +
-        "Voy a derivar tu consulta para que puedan ayudarte 😊";
+          "Voy a derivar tu consulta para que puedan ayudarte 😊";
       await send(
         textPayload(handoffMessage),
         handoffMessage,
@@ -1274,6 +1289,10 @@ Deno.serve(async (request) => {
     const askForMissingProfile = async (
       invalidAttempts = 0,
       continueAfterProfile: AutomationContext["continueAfterProfile"] = "services",
+      continuationContext: Pick<
+        AutomationContext,
+        "serviceId" | "serviceName"
+      > = {},
     ): Promise<boolean> => {
       const missing = missingPatientProfileFields(currentProfile());
       const field = missing[0];
@@ -1323,6 +1342,7 @@ Deno.serve(async (request) => {
       await saveSession(
         "collecting_patient_profile",
         {
+          ...continuationContext,
           expectedProfileField: field,
           contactPhoneConfirmed,
           continueAfterProfile,
@@ -1624,6 +1644,15 @@ Deno.serve(async (request) => {
       return await finish({ ignored: true });
     }
 
+    if (isSecretaryRequest(inputValue)) {
+      await handoff("", {}, SECRETARY_HANDOFF_MESSAGE);
+      return await finish({
+        processed: true,
+        state: "human_handoff",
+        reason: "SECRETARY_REQUESTED",
+      });
+    }
+
     if (
       freshSession &&
       appSettings?.out_of_hours_enabled === true &&
@@ -1725,7 +1754,7 @@ Deno.serve(async (request) => {
 
     const showMainMenu = async (message = "¿En qué más podemos ayudarte?") => {
       await send(
-        listPayload(message, "Ver opciones", MAIN_MENU_OPTIONS),
+        listPayload(message, "Ver opciones", APPOINTMENT_MAIN_MENU_OPTIONS),
         message,
       );
       await saveSession("idle");
@@ -1800,11 +1829,6 @@ Deno.serve(async (request) => {
       });
     };
 
-    const startNewAppointmentFlow = async () => {
-      if (await askForMissingProfile(0, "services")) return;
-      await showServices();
-    };
-
     const findSlots = async (
       professionalId: string,
       professionalName: string,
@@ -1862,13 +1886,13 @@ Deno.serve(async (request) => {
       state: "selecting_slot" | "selecting_new_slot",
       context: AutomationContext = {},
       invalidAttempts = 0,
-    ) => {
+    ): Promise<boolean> => {
       const slotCoverage = currentProfile().coverage;
       if (!slotCoverage) {
         await handoff(
           "Necesitamos revisar la cobertura de este turno antes de reprogramarlo.",
         );
-        return;
+        return false;
       }
       const slots = await findSlots(
         professionalId,
@@ -1879,7 +1903,7 @@ Deno.serve(async (request) => {
       );
       if (!slots.length) {
         await handoff("No encontramos horarios disponibles.");
-        return;
+        return false;
       }
       const rows: Array<{ id: string; title: string; description?: string }> =
         slots.map((slot, index) => ({
@@ -1911,6 +1935,80 @@ Deno.serve(async (request) => {
         slots,
         invalidAttempts,
       });
+      return true;
+    };
+
+    const findTypedService = async (value: string) => {
+      const { data, error } = await client
+        .from("services")
+        .select("id,name")
+        .eq("active", true);
+      if (error) throw error;
+      const serviceOptions = await durableDecision(
+        "typed_service_options",
+        (data ?? []) as Array<{ id: string; name: string }>,
+      );
+      return resolveTypedServiceOption(value, serviceOptions);
+    };
+
+    const selectServiceAndShowSlots = async (
+      serviceId: string,
+    ): Promise<"shown" | "handoff" | "missing"> => {
+      const [serviceResult, professionalResult] = await Promise.all([
+        client
+          .from("services")
+          .select("id,name")
+          .eq("id", serviceId)
+          .eq("active", true)
+          .maybeSingle(),
+        client
+          .from("professionals")
+          .select("id,name")
+          .eq("active", true)
+          .order("created_at")
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (serviceResult.error || professionalResult.error) {
+        throw serviceResult.error ?? professionalResult.error;
+      }
+      const selection = await durableDecision("service_professional", {
+        service: serviceResult.data,
+        professional: professionalResult.data,
+      });
+      if (!selection.service || !selection.professional) {
+        return "missing";
+      }
+      const shown = await showSlots(
+        selection.professional.id as string,
+        selection.professional.name as string,
+        selection.service.id as string,
+        selection.service.name as string,
+        "selecting_slot",
+      );
+      return shown ? "shown" : "handoff";
+    };
+
+    const startNewAppointmentFlow = async (
+      requestedService: { id: string; name: string } | null = null,
+    ) => {
+      const continuationContext = requestedService
+        ? {
+            serviceId: requestedService.id,
+            serviceName: requestedService.name,
+          }
+        : {};
+      if (await askForMissingProfile(0, "services", continuationContext)) {
+        return;
+      }
+      if (requestedService) {
+        const result = await selectServiceAndShowSlots(requestedService.id);
+        if (result === "missing") {
+          await showServices();
+        }
+        return;
+      }
+      await showServices();
     };
 
     const upcomingAppointments = async (limit = 10) => {
@@ -2604,8 +2702,11 @@ Deno.serve(async (request) => {
       });
     };
 
-    const handleMainIntent = async (intent: MainMenuIntent) => {
-      if (intent === "new") await startNewAppointmentFlow();
+    const handleMainIntent = async (
+      intent: MainMenuIntent,
+      requestedService: { id: string; name: string } | null = null,
+    ) => {
+      if (intent === "new") await startNewAppointmentFlow(requestedService);
       else if (intent === "reschedule") {
         if (await askForMissingProfile(0, "reschedule")) return;
         await selectAppointmentFor("reschedule");
@@ -2694,7 +2795,7 @@ Deno.serve(async (request) => {
       return await finish({ processed: true, state: "human_handoff" });
     }
 
-    const requestedIntent =
+    let requestedIntent =
       resolveMainMenuIntent(inputValue) ?? administrativeInfoRoute(inputValue);
     const explicitHumanRequest =
       inputValue === "flow:human" ||
@@ -2783,18 +2884,34 @@ Deno.serve(async (request) => {
       const parsed = await persistProfileInput(
         session.context.expectedProfileField ?? null,
       );
+      const continuationContext = {
+        serviceId: session.context.serviceId,
+        serviceName: session.context.serviceName,
+      };
+      let requestedServiceOutcome: "shown" | "handoff" | "missing" | null =
+        null;
       if (!parsed) {
         await invalid(async (attempts) => {
           await askForMissingProfile(
             attempts,
             session.context.continueAfterProfile,
+            continuationContext,
           );
         });
       } else if (
-        !(await askForMissingProfile(0, session.context.continueAfterProfile))
+        !(await askForMissingProfile(
+          0,
+          session.context.continueAfterProfile,
+          continuationContext,
+        ))
       ) {
         if (session.context.continueAfterProfile === "reschedule") {
           await selectAppointmentFor("reschedule");
+        } else if (session.context.serviceId) {
+          requestedServiceOutcome = await selectServiceAndShowSlots(
+            session.context.serviceId,
+          );
+          if (requestedServiceOutcome === "missing") await showServices();
         } else {
           await showServices();
         }
@@ -2805,7 +2922,11 @@ Deno.serve(async (request) => {
           ? "collecting_patient_profile"
           : session.context.continueAfterProfile === "reschedule"
             ? "selecting_appointment_to_reschedule"
-            : "selecting_service",
+            : requestedServiceOutcome === "shown"
+              ? "selecting_slot"
+              : requestedServiceOutcome === "handoff"
+                ? "human_handoff"
+                : "selecting_service",
       });
     }
 
@@ -2825,6 +2946,13 @@ Deno.serve(async (request) => {
       await handoff();
       return await finish({ processed: true, state: "human_handoff" });
     }
+    const requestedService =
+      !replyId &&
+      (requestedIntent === "new" || requestedIntent === null) &&
+      (session.state === "idle" || session.state === "reviewing_appointments")
+        ? await findTypedService(inputValue)
+        : null;
+    if (requestedService && requestedIntent === null) requestedIntent = "new";
     if (
       requestedIntent &&
       (inputValue.startsWith("flow:") ||
@@ -2834,7 +2962,7 @@ Deno.serve(async (request) => {
       if (freshSession && requestedIntent === "new" && welcomeMessage) {
         await send(textPayload(welcomeMessage), welcomeMessage);
       }
-      await handleMainIntent(requestedIntent);
+      await handleMainIntent(requestedIntent, requestedService);
       return await finish({
         processed: true,
         state: requestedIntent,
@@ -2855,60 +2983,17 @@ Deno.serve(async (request) => {
       } else {
         let serviceId = parseServiceReply(inputValue);
         if (!serviceId && !replyId) {
-          const { data: services, error } = await client
-            .from("services")
-            .select("id,name")
-            .eq("active", true);
-          if (error) throw error;
-          const serviceOptions = await durableDecision(
-            "typed_service_options",
-            services ?? [],
-          );
-          const typedService = serviceOptions.find(
-            (service) =>
-              normalizeUserInput(service.name as string) ===
-              normalizedInboundBody,
-          );
-          serviceId = typedService?.id as string | null;
+          serviceId = (await findTypedService(inputValue))?.id ?? null;
         }
         if (!serviceId) {
           await invalid((attempts) =>
             showServices(session.context.professionalPage ?? 0, attempts),
           );
         } else {
-          const [serviceResult, professionalResult] = await Promise.all([
-            client
-              .from("services")
-              .select("id,name")
-              .eq("id", serviceId)
-              .eq("active", true)
-              .maybeSingle(),
-            client
-              .from("professionals")
-              .select("id,name")
-              .eq("active", true)
-              .order("created_at")
-              .limit(1)
-              .maybeSingle(),
-          ]);
-          if (serviceResult.error || professionalResult.error) {
-            throw serviceResult.error ?? professionalResult.error;
-          }
-          const selection = await durableDecision("service_professional", {
-            service: serviceResult.data,
-            professional: professionalResult.data,
-          });
-          if (!selection.service || !selection.professional) {
+          const selectionResult = await selectServiceAndShowSlots(serviceId);
+          if (selectionResult === "missing") {
             await invalid((attempts) =>
               showServices(session.context.professionalPage ?? 0, attempts),
-            );
-          } else {
-            await showSlots(
-              selection.professional.id as string,
-              selection.professional.name as string,
-              selection.service.id as string,
-              selection.service.name as string,
-              "selecting_slot",
             );
           }
         }
@@ -2924,8 +3009,8 @@ Deno.serve(async (request) => {
         const slot =
           index === null ? undefined : session.context.slots?.[index];
         if (!slot) {
-          await invalid((attempts) =>
-            showSlots(
+          await invalid(async (attempts) => {
+            await showSlots(
               session.context.professionalId ?? "",
               session.context.professionalName ?? "Gisela Lentz",
               session.context.serviceId ?? "",
@@ -2933,8 +3018,8 @@ Deno.serve(async (request) => {
               "selecting_slot",
               {},
               attempts,
-            ),
-          );
+            );
+          });
         } else {
           await showAppointmentConfirmation(slot);
         }
@@ -3187,8 +3272,8 @@ Deno.serve(async (request) => {
         const slot =
           index === null ? undefined : session.context.slots?.[index];
         if (!slot) {
-          await invalid((attempts) =>
-            showSlots(
+          await invalid(async (attempts) => {
+            await showSlots(
               session.context.professionalId ?? "",
               session.context.professionalName ?? "Gisela Lentz",
               session.context.serviceId ?? "",
@@ -3196,8 +3281,8 @@ Deno.serve(async (request) => {
               "selecting_new_slot",
               { appointmentId: session.context.appointmentId },
               attempts,
-            ),
-          );
+            );
+          });
         } else {
           const appointment = session.context.appointmentId
             ? await activeAppointmentById(session.context.appointmentId)
@@ -3457,12 +3542,12 @@ Deno.serve(async (request) => {
         } else {
           const message =
             appointment.depositStatus === "proof_received"
-              ? "Ya recibimos tu comprobante y quedó pendiente de revisión. Si necesitás consultar algo, elegí “Hablar con una persona”."
+              ? "Ya recibimos tu comprobante y quedó pendiente de revisión. Si necesitás consultar algo, elegí “Hablar con la secretaria”."
               : "Tu horario sigue pre-reservado. Para confirmarlo, enviá el comprobante como imagen o PDF. Si necesitás ayuda antes de pagar, elegí una opción.";
           await send(
             buttonsPayload(message, [
               { id: "deposit:ack", title: "Ya lo envío" },
-              { id: "flow:human", title: "Hablar con persona" },
+              { id: SECRETARY_REPLY_ID, title: "Secretaria" },
               { id: "deposit:cancel", title: "Cancelar reserva" },
             ]),
             message,

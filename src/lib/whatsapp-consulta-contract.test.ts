@@ -25,11 +25,12 @@ test("el mensaje escrito Consulta conserva la ruta de selección de servicio", (
 
   const selection = automation.slice(selectionStart, selectionEnd);
   assert.match(selection, /if \(!serviceId && !replyId\)/);
-  assert.match(selection, /\.from\("services"\)/);
-  assert.match(selection, /\.eq\("active", true\)/);
+  assert.match(selection, /findTypedService\(inputValue\)/);
+  assert.match(automation, /\.from\("services"\)/);
+  assert.match(automation, /\.eq\("active", true\)/);
   assert.match(
-    selection,
-    /normalizeUserInput\(service\.name as string\)\s*===\s*normalizedInboundBody/,
+    automation,
+    /resolveTypedServiceOption\(value, serviceOptions\)/,
   );
 });
 

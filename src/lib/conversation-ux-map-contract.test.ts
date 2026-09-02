@@ -152,7 +152,8 @@ test("la espera de seña ofrece ayuda una vez y luego deriva", () => {
   assert.match(waitingFlow, /depositHelpShown/);
   assert.match(waitingFlow, /deposit:ack/);
   assert.match(waitingFlow, /deposit:cancel/);
-  assert.match(waitingFlow, /Hablar con persona/);
+  assert.match(waitingFlow, /Hablar con (?:la )?secretaria/);
+  assert.match(waitingFlow, /SECRETARY_REPLY_ID/);
   assert.match(waitingFlow, /await handoff/);
 });
 
