@@ -262,7 +262,7 @@ test("una ubicación se registra y se despacha con un único snapshot canónico"
       payload: locationPayload({
         latitude: -38.2657317,
         longitude: -57.8353134,
-        name: "Consultorio de la Dra. Gisela Lentz",
+        name: "Consultorio de la Odontóloga Gisela Lentz",
         address: "Calle 11 1375, Miramar, Buenos Aires",
       }),
       bodyPreview: "Ubicación del consultorio",
@@ -287,7 +287,7 @@ test("una ubicación se registra y se despacha con un único snapshot canónico"
     assert.deepEqual(metadata.location, {
       latitude: -38.2657317,
       longitude: -57.8353134,
-      name: "Consultorio de la Dra. Gisela Lentz",
+      name: "Consultorio de la Odontóloga Gisela Lentz",
       address: "Calle 11 1375, Miramar, Buenos Aires",
     });
     const graphPayload = graphPayloads[0];

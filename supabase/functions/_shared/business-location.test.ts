@@ -13,7 +13,7 @@ const mapsUrl =
 const settings = {
   business_address:
     "Calle 11 1375, Miramar, Provincia de Buenos Aires, Argentina",
-  business_location_name: "Consultorio de la Dra. Gisela Lentz",
+  business_location_name: "Consultorio de la Odontóloga Gisela Lentz",
   business_location_address: "Calle 11 1375, Miramar, Buenos Aires",
   business_latitude: -38.2657317,
   business_longitude: -57.8353134,
@@ -35,7 +35,7 @@ test("la ubicación confirmada genera el payload nativo exacto de WhatsApp", () 
       location: {
         latitude: -38.2657317,
         longitude: -57.8353134,
-        name: "Consultorio de la Dra. Gisela Lentz",
+        name: "Consultorio de la Odontóloga Gisela Lentz",
         address: "Calle 11 1375, Miramar, Buenos Aires",
       },
     },

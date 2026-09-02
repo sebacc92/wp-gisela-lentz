@@ -40,7 +40,7 @@ select ok(
   (
     select business_address =
         'Calle 11 1375, Miramar, Provincia de Buenos Aires, Argentina'
-      and business_location_name = 'Consultorio de la Dra. Gisela Lentz'
+      and business_location_name = 'Consultorio de la Odontóloga Gisela Lentz'
       and business_location_address =
         'Calle 11 1375, Miramar, Buenos Aires'
       and business_latitude = -38.2657317::double precision
