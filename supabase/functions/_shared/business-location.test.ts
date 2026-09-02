@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  conciseBusinessLocationMessage,
+  configuredBusinessHoursMessage,
+  INFORMATION_FOLLOW_UP_BUTTONS,
+  informationFlowResumePrompt,
   informationFlowSessionTarget,
   resolveBusinessLocation,
   stableGoogleMapsUrl,
@@ -49,6 +53,43 @@ test("conserva la URL estable de Google Maps como fallback", () => {
   assert.equal(stableGoogleMapsUrl("javascript:alert(1)"), null);
 });
 
+test("la copia automática previa al pin es breve y no expone el fallback", () => {
+  const resolved = resolveBusinessLocation(settings);
+  assert.ok(resolved);
+  const message = conciseBusinessLocationMessage(resolved);
+
+  assert.equal(message, "📍 Estamos en Calle 11 1375, Miramar.");
+  assert.doesNotMatch(message, /Provincia de Buenos Aires|Argentina|https?:/);
+  assert.equal(
+    conciseBusinessLocationMessage(settings.business_address),
+    message,
+  );
+  assert.deepEqual(INFORMATION_FOLLOW_UP_BUTTONS, [
+    { id: "flow:new", title: "Sacar un turno" },
+    { id: "flow:human", title: "Otra consulta" },
+  ]);
+});
+
+test("la respuesta combinada separa horarios de la ubicación", () => {
+  const configuredInfo =
+    "El consultorio está en Calle 11 1375, Miramar, Provincia de Buenos Aires.\n\n" +
+    "La atención es con turno: lunes de 9:30 a 15 y martes de 13:30 a 17. Los feriados permanece cerrado.\n\n" +
+    "Podés escribirnos por WhatsApp.";
+  const hours = configuredBusinessHoursMessage(configuredInfo);
+
+  assert.equal(
+    hours,
+    "La atención es con turno: lunes de 9:30 a 15 y martes de 13:30 a 17. Los feriados permanece cerrado.",
+  );
+  assert.doesNotMatch(hours ?? "", /Calle|Miramar|Provincia|Argentina/);
+  assert.equal(
+    configuredBusinessHoursMessage(
+      "Calle 11 1375, Miramar. Horarios: lunes de 9 a 15.",
+    ),
+    null,
+  );
+});
+
 test("location permanece separado de texto y media", () => {
   const resolved = resolveBusinessLocation(settings);
   assert.ok(resolved);
@@ -70,7 +111,6 @@ test("repetir ubicación conserva el mismo pin y una sesión idle limpia", () =>
     state: "idle",
     context: {},
     expiresAt: null,
-    now: new Date("2026-09-01T15:00:00.000Z"),
   };
   assert.deepEqual(informationFlowSessionTarget(sessionArgs), {
     state: "idle",
@@ -89,14 +129,13 @@ test("consultar ubicación durante otro flujo conserva estado, contexto y vencim
     resumeCurrentFlow: true,
     state: "collecting_patient_profile",
     context,
-    expiresAt: "2026-09-01T15:15:00.000Z",
-    now: new Date("2026-09-01T15:00:00.000Z"),
+    expiresAt: "2026-09-01T15:15:00.321Z",
   });
 
   assert.deepEqual(target, {
     state: "collecting_patient_profile",
     context,
-    expiresMinutes: 15,
+    expiresAt: "2026-09-01T15:15:00.321Z",
   });
   assert.equal(target.context, context);
   assert.deepEqual(
@@ -104,13 +143,12 @@ test("consultar ubicación durante otro flujo conserva estado, contexto y vencim
       resumeCurrentFlow: true,
       state: "reviewing_appointments",
       context: { invalidAttempts: 1 },
-      expiresAt: "2026-09-01T15:15:00.000Z",
-      now: new Date("2026-09-01T15:00:00.000Z"),
+      expiresAt: "2026-09-01T15:15:00.321Z",
     }),
     {
       state: "reviewing_appointments",
       context: { invalidAttempts: 1 },
-      expiresMinutes: 15,
+      expiresAt: "2026-09-01T15:15:00.321Z",
     },
   );
   assert.deepEqual(
@@ -119,8 +157,88 @@ test("consultar ubicación durante otro flujo conserva estado, contexto y vencim
       state: "selecting_service",
       context,
       expiresAt: null,
-      now: new Date("2026-09-01T15:00:00.000Z"),
     }),
     { state: "idle" },
   );
+});
+
+test("la consulta lateral retoma la pregunta exacta sin menú genérico", () => {
+  assert.equal(
+    informationFlowResumePrompt("collecting_patient_profile", {
+      expectedProfileField: "coverage",
+    }),
+    "Seguimos con tu turno 😊 ¿Qué cobertura tenés?",
+  );
+  assert.equal(
+    informationFlowResumePrompt("selecting_slot", {
+      slots: [{ startsAt: "2026-09-03T13:00:00.000Z" }],
+    }),
+    "Seguimos con tu turno 😊 Elegí uno de los horarios disponibles.",
+  );
+  assert.equal(
+    informationFlowResumePrompt("waiting_deposit", {
+      appointmentId: "appointment-1",
+      depositHelpShown: true,
+    }),
+    "Seguimos con tu turno 😊 Quedamos atentos al comprobante.",
+  );
+  for (const activeState of [
+    "selecting_service",
+    "selecting_slot",
+    "confirming_appointment",
+    "selecting_appointment_to_reschedule",
+    "confirming_reschedule_request",
+    "selecting_new_slot",
+    "confirming_new_slot",
+    "selecting_appointment_to_cancel",
+    "confirming_cancellation",
+    "reviewing_appointments",
+    "waiting_deposit",
+  ]) {
+    assert.match(
+      informationFlowResumePrompt(activeState) ?? "",
+      /^Seguimos /,
+      activeState,
+    );
+  }
+  for (const passiveState of [
+    "idle",
+    "out_of_hours",
+    "human_handoff",
+    "deposit_confirmed",
+  ]) {
+    assert.equal(informationFlowResumePrompt(passiveState), null);
+  }
+});
+
+test("repetir ubicación en un flujo produce la misma reanudación", () => {
+  const context = {
+    expectedProfileField: "coverage",
+    serviceId: "service-1",
+  };
+  const firstPrompt = informationFlowResumePrompt(
+    "collecting_patient_profile",
+    context,
+  );
+  const secondPrompt = informationFlowResumePrompt(
+    "collecting_patient_profile",
+    { ...context },
+  );
+  assert.equal(secondPrompt, firstPrompt);
+
+  const target = {
+    resumeCurrentFlow: true,
+    state: "collecting_patient_profile",
+    context,
+    expiresAt: "2026-09-01T15:15:00.321Z",
+  };
+  const firstTarget = informationFlowSessionTarget({ ...target });
+  const secondTarget = informationFlowSessionTarget({ ...target });
+  assert.deepEqual(firstTarget, {
+    state: "collecting_patient_profile",
+    context,
+    expiresAt: "2026-09-01T15:15:00.321Z",
+  });
+  assert.deepEqual(secondTarget, firstTarget);
+  assert.equal(firstTarget.context, context);
 });
