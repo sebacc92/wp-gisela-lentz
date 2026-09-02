@@ -220,7 +220,7 @@ test("la ubicación nativa normaliza texto y rechaza puntos inválidos", () => {
   const location = locationPayload({
     latitude: -38.2657317,
     longitude: -57.8353134,
-    name: "  Consultorio de la Dra. Gisela Lentz ",
+    name: "  Consultorio de la Odontóloga Gisela Lentz ",
     address: "Calle 11 1375, Miramar, Buenos Aires",
   });
 
@@ -229,7 +229,7 @@ test("la ubicación nativa normaliza texto y rechaza puntos inválidos", () => {
     location: {
       latitude: -38.2657317,
       longitude: -57.8353134,
-      name: "Consultorio de la Dra. Gisela Lentz",
+      name: "Consultorio de la Odontóloga Gisela Lentz",
       address: "Calle 11 1375, Miramar, Buenos Aires",
     },
   });
@@ -261,7 +261,7 @@ test("el snapshot idempotente de ubicación no permite cambiar el pin", () => {
   const location = {
     latitude: -38.2657317,
     longitude: -57.8353134,
-    name: "Consultorio de la Dra. Gisela Lentz",
+    name: "Consultorio de la Odontóloga Gisela Lentz",
     address: "Calle 11 1375, Miramar, Buenos Aires",
   };
   assert.doesNotThrow(() =>

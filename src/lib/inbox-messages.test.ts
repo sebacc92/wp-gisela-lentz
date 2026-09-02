@@ -46,7 +46,7 @@ test("mapea una ubicación validada a un enlace seguro de Google Maps", () => {
       location: {
         latitude: -38.2657317,
         longitude: -57.8353134,
-        name: "  Consultorio de la Dra. Gisela Lentz  ",
+        name: "  Consultorio de la Odontóloga Gisela Lentz  ",
         address: "Calle 11 1375, Miramar, Buenos Aires",
         mapUrl: "javascript:alert(1)",
       },
@@ -58,7 +58,7 @@ test("mapea una ubicación validada a un enlace seguro de Google Maps", () => {
   assert.deepEqual(message?.location, {
     latitude: -38.2657317,
     longitude: -57.8353134,
-    name: "Consultorio de la Dra. Gisela Lentz",
+    name: "Consultorio de la Odontóloga Gisela Lentz",
     address: "Calle 11 1375, Miramar, Buenos Aires",
     mapUrl:
       "https://www.google.com/maps/search/?api=1&query=Centro%20de%20Atenci%C3%B3n%20Profesional%20%28C.A.P.%29&query_place_id=ChIJK5iJNYYQhZURBREHhxeQ9PQ",
