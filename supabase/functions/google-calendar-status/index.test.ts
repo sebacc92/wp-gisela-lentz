@@ -139,3 +139,101 @@ Deno.test(
     });
   },
 );
+
+Deno.test(
+  "el estado del panel expone contadores de la sincronización, nunca detalles",
+  async () => {
+    const client = {
+      rpc: () =>
+        Promise.resolve({
+          data: [
+            {
+              connected: true,
+              status: "connected",
+              google_account_email: "calendar@example.com",
+              google_calendar_name: "Gisela Lentz · Turnos",
+              last_synced_at: null,
+              last_checked_at: "2026-09-02T21:42:00Z",
+              last_sync_completed_at: "2026-09-02T21:42:00Z",
+              last_sync_summary: {
+                blocksImported: 1,
+                fullResync: true,
+                // Un título de evento nunca debería llegar hasta acá; si
+                // llegara, la proyección igual tiene que descartarlo.
+                eventSummary: "Cumpleaños de un paciente",
+                "raro!": 3,
+              },
+              last_sync_error: null,
+              inbound_sync_state: "incremental",
+              inbound_first_import_approved: true,
+              pending_count: 0,
+              failed_count: 0,
+              active_block_count: 1,
+              unsupported_event_count: 2,
+              pending_conflict_count: 1,
+            },
+          ],
+          error: null,
+        }),
+    } as unknown as SupabaseClient;
+
+    const response = await handleGoogleCalendarStatusRequest(
+      new Request("http://127.0.0.1/functions/v1/google-calendar-status", {
+        method: "GET",
+      }),
+      {
+        createClient: () => client,
+        authorize: authorization("ADMIN"),
+        environment: (name) => CALENDAR_ENVIRONMENT[name],
+      },
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 200);
+    assert.equal(body.lastCheckedAt, "2026-09-02T21:42:00Z");
+    assert.equal(body.lastSyncedAt, null);
+    assert.equal(body.blockCount, 1);
+    assert.equal(body.unsupportedCount, 2);
+    assert.equal(body.conflictCount, 1);
+    assert.equal(body.firstImportApproved, true);
+    assert.equal(body.inboundSyncState, "incremental");
+    // Un conflicto pendiente pide revisión aunque la cola saliente esté al día.
+    assert.equal(body.status, "attention");
+    // El título y la clave inválida se descartan por completo.
+    assert.deepEqual(body.lastSyncSummary, {
+      blocksImported: 1,
+      fullResync: true,
+    });
+  },
+);
+
+Deno.test("un código de error de sincronización llega sanitizado", async () => {
+  const client = {
+    rpc: () =>
+      Promise.resolve({
+        data: [
+          {
+            connected: true,
+            status: "connected",
+            last_sync_error: "detalle crudo con espacios y datos",
+            pending_count: 0,
+            failed_count: 0,
+          },
+        ],
+        error: null,
+      }),
+  } as unknown as SupabaseClient;
+
+  const response = await handleGoogleCalendarStatusRequest(
+    new Request("http://127.0.0.1/functions/v1/google-calendar-status", {
+      method: "GET",
+    }),
+    {
+      createClient: () => client,
+      authorize: authorization("ADMIN"),
+      environment: (name) => CALENDAR_ENVIRONMENT[name],
+    },
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(body.lastSyncError, null);
+});

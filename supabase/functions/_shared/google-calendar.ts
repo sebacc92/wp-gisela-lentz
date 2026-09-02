@@ -614,3 +614,233 @@ export function safeGoogleErrorCode(error: unknown): string {
 export function googleErrorRetryable(error: unknown): boolean {
   return error instanceof GoogleIntegrationError && error.retryable;
 }
+
+// ---------------------------------------------------------------------------
+// Lectura incremental del calendario dedicado (Google -> App)
+// ---------------------------------------------------------------------------
+//
+// El scope `calendar.app.created` habilita `events.list` sobre los calendarios
+// secundarios creados por la aplicación, así que no hace falta ampliar
+// permisos para leer. Se usa el sync token oficial: la primera corrida pagina
+// hasta obtener `nextSyncToken` y las siguientes envían `syncToken`.
+
+export const GOOGLE_MANAGED_BY = "gisela_lentz_agenda";
+
+export interface GoogleCalendarEventTime {
+  dateTime?: string;
+  date?: string;
+  timeZone?: string;
+}
+
+export interface GoogleCalendarEvent {
+  id?: string;
+  status?: string;
+  summary?: string;
+  etag?: string;
+  updated?: string;
+  recurrence?: string[];
+  recurringEventId?: string;
+  start?: GoogleCalendarEventTime;
+  end?: GoogleCalendarEventTime;
+  extendedProperties?: { private?: Record<string, string> };
+}
+
+export interface GoogleCalendarEventsPage {
+  items: GoogleCalendarEvent[];
+  nextPageToken: string | null;
+  nextSyncToken: string | null;
+}
+
+export async function listGoogleCalendarEvents(input: {
+  accessToken: string;
+  calendarId: string;
+  syncToken?: string | null;
+  pageToken?: string | null;
+  maxResults?: number;
+  fetcher?: typeof fetch;
+}): Promise<GoogleCalendarEventsPage> {
+  const fetcher = input.fetcher ?? fetch;
+  const url = new URL(
+    `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(input.calendarId)}/events`,
+  );
+  url.searchParams.set(
+    "maxResults",
+    String(Math.max(1, Math.min(input.maxResults ?? 250, 2500))),
+  );
+  // Sin `singleEvents`: una serie recurrente se reporta como no soportada en
+  // vez de expandirse en instancias inventadas.
+  url.searchParams.set("showDeleted", "true");
+  if (input.syncToken) {
+    url.searchParams.set("syncToken", input.syncToken);
+  }
+  if (input.pageToken) url.searchParams.set("pageToken", input.pageToken);
+
+  const response = await googleFetch(fetcher, url.toString(), {
+    headers: { Authorization: `Bearer ${input.accessToken}` },
+  });
+
+  if (response.status === 410) {
+    // El sync token caducó. Quien llama debe reintentar sin token.
+    throw new GoogleIntegrationError("GOOGLE_SYNC_TOKEN_EXPIRED", {
+      status: 410,
+      retryable: false,
+    });
+  }
+  if (response.status === 404) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_RECONNECT_REQUIRED", {
+      status: 404,
+      retryable: true,
+    });
+  }
+  await assertGoogleResponse(response, "GOOGLE_EVENTS_LIST_FAILED");
+  const page = await parseJson<{
+    items?: unknown;
+    nextPageToken?: unknown;
+    nextSyncToken?: unknown;
+  }>(response, "GOOGLE_EVENTS_LIST_INVALID");
+
+  return {
+    items: Array.isArray(page.items)
+      ? (page.items as GoogleCalendarEvent[])
+      : [],
+    nextPageToken:
+      typeof page.nextPageToken === "string" && page.nextPageToken
+        ? page.nextPageToken
+        : null,
+    nextSyncToken:
+      typeof page.nextSyncToken === "string" && page.nextSyncToken
+        ? page.nextSyncToken
+        : null,
+  };
+}
+
+export type UnsupportedGoogleEventReason =
+  | "ALL_DAY"
+  | "RECURRING"
+  | "MISSING_RANGE"
+  | "INVALID_RANGE";
+
+export type ClassifiedGoogleEvent =
+  | {
+      kind: "managed";
+      eventId: string;
+      appointmentId: string;
+      cancelled: boolean;
+      startsAt: string | null;
+      endsAt: string | null;
+      updatedAt: string | null;
+    }
+  | {
+      kind: "external_block";
+      eventId: string;
+      summary: string | null;
+      startsAt: string;
+      endsAt: string;
+      etag: string | null;
+      updatedAt: string | null;
+    }
+  | {
+      kind: "external_unsupported";
+      eventId: string;
+      reason: UnsupportedGoogleEventReason;
+      summary: string | null;
+      etag: string | null;
+      updatedAt: string | null;
+    }
+  | { kind: "external_removed"; eventId: string; updatedAt: string | null }
+  | { kind: "ignored"; eventId: string | null; reason: string };
+
+const APPOINTMENT_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isoOrNull(value: string | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
+ * Distingue lo que administra la aplicación de lo que alguien creó a mano.
+ * `extendedProperties.private` es la señal primaria; el id determinista actúa
+ * de respaldo por si alguien editó las propiedades en Google.
+ */
+export function classifyGoogleCalendarEvent(
+  event: GoogleCalendarEvent,
+): ClassifiedGoogleEvent {
+  const eventId = typeof event.id === "string" ? event.id.trim() : "";
+  if (!eventId) return { kind: "ignored", eventId: null, reason: "NO_ID" };
+
+  const properties = event.extendedProperties?.private ?? {};
+  const declaredAppointmentId =
+    properties.managed_by === GOOGLE_MANAGED_BY &&
+    typeof properties.appointment_id === "string" &&
+    APPOINTMENT_UUID_PATTERN.test(properties.appointment_id.trim())
+      ? properties.appointment_id.trim()
+      : null;
+  const deterministicMatch = /^gl([0-9a-f]{32})$/.exec(eventId);
+  const derivedAppointmentId = deterministicMatch
+    ? [
+        deterministicMatch[1].slice(0, 8),
+        deterministicMatch[1].slice(8, 12),
+        deterministicMatch[1].slice(12, 16),
+        deterministicMatch[1].slice(16, 20),
+        deterministicMatch[1].slice(20),
+      ].join("-")
+    : null;
+  const appointmentId = declaredAppointmentId ?? derivedAppointmentId;
+  const cancelled = event.status === "cancelled";
+  const updatedAt = isoOrNull(event.updated);
+
+  if (appointmentId) {
+    return {
+      kind: "managed",
+      eventId,
+      appointmentId,
+      cancelled,
+      startsAt: isoOrNull(event.start?.dateTime),
+      endsAt: isoOrNull(event.end?.dateTime),
+      updatedAt,
+    };
+  }
+
+  if (cancelled) return { kind: "external_removed", eventId, updatedAt };
+
+  const summary =
+    typeof event.summary === "string" && event.summary.trim()
+      ? event.summary.trim().slice(0, 120)
+      : null;
+  const etag = typeof event.etag === "string" ? event.etag.slice(0, 255) : null;
+  const unsupported = (reason: UnsupportedGoogleEventReason) =>
+    ({
+      kind: "external_unsupported",
+      eventId,
+      reason,
+      summary,
+      etag,
+      updatedAt,
+    }) as const;
+
+  if (
+    (Array.isArray(event.recurrence) && event.recurrence.length > 0) ||
+    typeof event.recurringEventId === "string"
+  ) {
+    return unsupported("RECURRING");
+  }
+  if (event.start?.date || event.end?.date) return unsupported("ALL_DAY");
+
+  const startsAt = isoOrNull(event.start?.dateTime);
+  const endsAt = isoOrNull(event.end?.dateTime);
+  if (!startsAt || !endsAt) return unsupported("MISSING_RANGE");
+  if (new Date(endsAt) <= new Date(startsAt))
+    return unsupported("INVALID_RANGE");
+
+  return {
+    kind: "external_block",
+    eventId,
+    summary,
+    startsAt,
+    endsAt,
+    etag,
+    updatedAt,
+  };
+}

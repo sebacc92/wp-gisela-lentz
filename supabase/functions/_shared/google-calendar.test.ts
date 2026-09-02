@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   appSettingsRedirect,
   buildGoogleAuthorizationUrl,
+  classifyGoogleCalendarEvent,
+  listGoogleCalendarEvents,
   deleteGoogleCalendarEvent,
   deterministicGoogleEventId,
   GOOGLE_CALENDAR_SCOPE,
@@ -308,4 +310,192 @@ test("backoff queda acotado y reintenta sólo estados transitorios", () => {
   assert.equal(isRetryableGoogleStatus(429), true);
   assert.equal(isRetryableGoogleStatus(503), true);
   assert.equal(isRetryableGoogleStatus(403), false);
+});
+
+test("un evento administrado por la app se reconoce por sus propiedades privadas", () => {
+  const classified = classifyGoogleCalendarEvent({
+    id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
+    status: "confirmed",
+    updated: "2026-09-02T10:00:00.000Z",
+    extendedProperties: {
+      private: {
+        managed_by: "gisela_lentz_agenda",
+        appointment_id: "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
+      },
+    },
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T14:30:00.000Z" },
+  });
+  assert.equal(classified.kind, "managed");
+  assert.equal(
+    classified.kind === "managed" ? classified.appointmentId : "",
+    "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
+  );
+  assert.equal(
+    classified.kind === "managed" ? classified.cancelled : true,
+    false,
+  );
+});
+
+test("el id determinista alcanza si alguien borró las propiedades privadas", () => {
+  const classified = classifyGoogleCalendarEvent({
+    id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
+    status: "cancelled",
+  });
+  assert.equal(classified.kind, "managed");
+  assert.equal(
+    classified.kind === "managed" ? classified.appointmentId : "",
+    "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
+  );
+  assert.equal(
+    classified.kind === "managed" ? classified.cancelled : false,
+    true,
+  );
+});
+
+test("un evento creado a mano se clasifica como bloqueo con título acotado", () => {
+  const classified = classifyGoogleCalendarEvent({
+    id: "evento-manual",
+    summary: `  ${"t".repeat(200)}  `,
+    etag: '"etag-value"',
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T15:00:00.000Z" },
+  });
+  assert.equal(classified.kind, "external_block");
+  if (classified.kind !== "external_block") return;
+  assert.equal(classified.summary?.length, 120);
+  assert.equal(classified.startsAt, "2026-09-04T14:00:00.000Z");
+  assert.equal(classified.endsAt, "2026-09-04T15:00:00.000Z");
+});
+
+test("todo el día, recurrente y rango inválido quedan como no soportados", () => {
+  const allDay = classifyGoogleCalendarEvent({
+    id: "a",
+    start: { date: "2026-09-05" },
+    end: { date: "2026-09-06" },
+  });
+  const recurring = classifyGoogleCalendarEvent({
+    id: "b",
+    recurrence: ["RRULE:FREQ=WEEKLY"],
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T15:00:00.000Z" },
+  });
+  const instance = classifyGoogleCalendarEvent({
+    id: "c",
+    recurringEventId: "b",
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T15:00:00.000Z" },
+  });
+  const inverted = classifyGoogleCalendarEvent({
+    id: "d",
+    start: { dateTime: "2026-09-04T15:00:00.000Z" },
+    end: { dateTime: "2026-09-04T14:00:00.000Z" },
+  });
+  const missing = classifyGoogleCalendarEvent({ id: "e" });
+
+  assert.equal(
+    allDay.kind === "external_unsupported" ? allDay.reason : "",
+    "ALL_DAY",
+  );
+  assert.equal(
+    recurring.kind === "external_unsupported" ? recurring.reason : "",
+    "RECURRING",
+  );
+  assert.equal(
+    instance.kind === "external_unsupported" ? instance.reason : "",
+    "RECURRING",
+  );
+  assert.equal(
+    inverted.kind === "external_unsupported" ? inverted.reason : "",
+    "INVALID_RANGE",
+  );
+  assert.equal(
+    missing.kind === "external_unsupported" ? missing.reason : "",
+    "MISSING_RANGE",
+  );
+});
+
+test("events.list pide showDeleted, pagina y devuelve el sync token", async () => {
+  const requested: string[] = [];
+  const fetcher: typeof fetch = (input) => {
+    const url = String(input);
+    requested.push(url);
+    const body = url.includes("pageToken=page-2")
+      ? { items: [{ id: "b" }], nextSyncToken: "sync-token" }
+      : { items: [{ id: "a" }], nextPageToken: "page-2" };
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  const first = await listGoogleCalendarEvents({
+    accessToken: "token",
+    calendarId: "calendar-id",
+    fetcher,
+  });
+  assert.equal(first.nextPageToken, "page-2");
+  assert.equal(first.nextSyncToken, null);
+
+  const second = await listGoogleCalendarEvents({
+    accessToken: "token",
+    calendarId: "calendar-id",
+    pageToken: first.nextPageToken,
+    fetcher,
+  });
+  assert.equal(second.nextPageToken, null);
+  assert.equal(second.nextSyncToken, "sync-token");
+  assert.ok(requested[0].includes("showDeleted=true"));
+  assert.ok(!requested[0].includes("singleEvents"));
+  assert.ok(requested[1].includes("pageToken=page-2"));
+});
+
+test("al paginar una corrida incremental el syncToken viaja en cada página", async () => {
+  let requestedUrl = "";
+  const fetcher: typeof fetch = (input) => {
+    requestedUrl = String(input);
+    return Promise.resolve(
+      new Response(JSON.stringify({ items: [], nextSyncToken: "next" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  await listGoogleCalendarEvents({
+    accessToken: "token",
+    calendarId: "calendar-id",
+    syncToken: "sync-1",
+    pageToken: "page-2",
+    fetcher,
+  });
+  // Google exige el mismo juego de parámetros en todas las páginas.
+  assert.ok(requestedUrl.includes("syncToken=sync-1"));
+  assert.ok(requestedUrl.includes("pageToken=page-2"));
+});
+
+test("un syncToken vencido se reporta como 410 sin marcar reconexión", async () => {
+  const fetcher: typeof fetch = () =>
+    Promise.resolve(
+      new Response(JSON.stringify({ error: { message: "gone" } }), {
+        status: 410,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+  await assert.rejects(
+    () =>
+      listGoogleCalendarEvents({
+        accessToken: "token",
+        calendarId: "calendar-id",
+        syncToken: "expired",
+        fetcher,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_SYNC_TOKEN_EXPIRED" &&
+      error.status === 410,
+  );
 });

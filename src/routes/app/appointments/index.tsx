@@ -26,14 +26,22 @@ import {
 } from "~/lib/date-time";
 import type { ProfessionalOption, ServiceOption } from "~/lib/inbox-types";
 import type { BookingDurationSettings, DepositStatus } from "~/lib/inbox-types";
-import { confirmDepositAndNotify } from "~/lib/deposit-confirmation";
+import {
+  confirmDepositManually,
+  reviewDepositProof,
+  type DepositReviewDecision,
+} from "~/lib/deposit-review";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
   loadAppointments,
   loadBookingDurationSettings,
+  loadCalendarBlocks,
+  loadDepositProofReviews,
   loadProfessionals,
   loadServices,
   type AppointmentListItem,
+  type CalendarBlock,
+  type DepositProofReview,
 } from "~/lib/supabase/data";
 
 const statusLabels: Record<AppointmentListItem["status"], string> = {
@@ -190,6 +198,8 @@ export default component$(() => {
   const rescheduling = useSignal(false);
   const savingStatus = useSignal<AppointmentListItem["status"] | "">("");
   const confirmingDeposit = useSignal(false);
+  const reviewingDeposit = useSignal<DepositReviewDecision | "">("");
+  const detailRef = useSignal<HTMLElement>();
   const reloadVersion = useSignal(0);
   const notice = useSignal("");
   const printState = useStore<{
@@ -208,6 +218,9 @@ export default component$(() => {
     professionals: ProfessionalOption[];
     services: ServiceOption[];
     bookingDurations: BookingDurationSettings;
+    blocks: CalendarBlock[];
+    depositReviews: DepositProofReview[];
+    isAdmin: boolean;
     loading: boolean;
     error: boolean;
   }>({
@@ -215,6 +228,9 @@ export default component$(() => {
     professionals: [],
     services: [],
     bookingDurations: { iomaMinutes: 0, privateMinutes: 0 },
+    blocks: [],
+    depositReviews: [],
+    isAdmin: false,
     loading: true,
     error: false,
   });
@@ -228,21 +244,38 @@ export default component$(() => {
     try {
       const range = dateRange(selectedDate.value);
       const client = getSupabaseClient();
-      const [appointments, professionals, services, bookingDurations] =
+      const fromIso = futureDepositMode.value
+        ? new Date().toISOString()
+        : range.from;
+      const toIso = futureDepositMode.value ? undefined : range.to;
+      const [appointments, professionals, services, bookingDurations, blocks] =
         await Promise.all([
-          loadAppointments(
-            client,
-            futureDepositMode.value ? new Date().toISOString() : range.from,
-            futureDepositMode.value ? undefined : range.to,
-          ),
+          loadAppointments(client, fromIso, toIso),
           loadProfessionals(client),
           loadServices(client),
           loadBookingDurationSettings(client),
+          loadCalendarBlocks(client, fromIso, toIso).catch(
+            (): CalendarBlock[] => [],
+          ),
         ]);
       state.appointments = appointments;
       state.professionals = professionals;
       state.services = services;
       state.bookingDurations = bookingDurations;
+      state.blocks = blocks;
+      state.depositReviews = await loadDepositProofReviews(
+        client,
+        appointments.map((appointment) => appointment.id),
+      ).catch((): DepositProofReview[] => []);
+      const { data: user } = await client.auth.getUser();
+      if (user.user) {
+        const { data: profile } = await client
+          .from("profiles")
+          .select("role")
+          .eq("id", user.user.id)
+          .maybeSingle();
+        state.isAdmin = profile?.role === "ADMIN";
+      }
     } catch {
       state.error = true;
     } finally {
@@ -261,6 +294,24 @@ export default component$(() => {
       )
       .subscribe();
     cleanup(() => void client.removeChannel(channel));
+  });
+
+  // El detalle es un diálogo modal: al abrirlo recibe el foco y al cerrarlo lo
+  // devuelve a la fila que lo abrió, para que el teclado no quede perdido.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const openId = track(() => selectedId.value);
+    if (!openId) return;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : undefined;
+    detailRef.value?.focus();
+    cleanup(() => {
+      if (previousFocus && document.contains(previousFocus)) {
+        previousFocus.focus();
+      }
+    });
   });
 
   // Printing must run in the browser after the independently loaded sheet is rendered.
@@ -345,17 +396,21 @@ export default component$(() => {
   );
 
   const confirmDeposit = $(async (appointment: AppointmentListItem) => {
-    if (confirmingDeposit.value) return;
+    if (confirmingDeposit.value || reviewingDeposit.value) return;
+    const dateAndTime = formatBusinessDate(new Date(appointment.startsAt), {
+      dateStyle: "full",
+      timeStyle: "short",
+    });
     if (
       !window.confirm(
-        `¿Confirmar la seña de ${appointment.contactName}? El turno quedará confirmado.`,
+        `¿Confirmar la seña y el turno?\n\nPaciente: ${appointment.contactName}\nFecha: ${dateAndTime}\nServicio: ${appointment.serviceName}\n\nEl turno queda confirmado y se le avisa por WhatsApp.`,
       )
     ) {
       return;
     }
     confirmingDeposit.value = true;
     try {
-      const result = await confirmDepositAndNotify(getSupabaseClient(), {
+      const result = await confirmDepositManually(getSupabaseClient(), {
         appointmentId: appointment.id,
         contactId: appointment.contactId,
         startsAt: appointment.startsAt,
@@ -366,15 +421,61 @@ export default component$(() => {
       }
       selectedId.value = "";
       reloadVersion.value += 1;
-      notice.value = result.notified
-        ? `Seña confirmada. Avisamos a ${appointment.contactName} por WhatsApp.`
-        : `Seña confirmada. El turno quedó guardado, pero no pudimos enviar el aviso por WhatsApp.`;
+      notice.value = result.alreadyConfirmed
+        ? `El turno de ${appointment.contactName} ya estaba confirmado.`
+        : result.notified
+          ? `Seña confirmada. Avisamos a ${appointment.contactName} por WhatsApp.`
+          : "Seña confirmada. El turno quedó guardado, pero no pudimos enviar el aviso por WhatsApp.";
     } catch {
       notice.value = "No pudimos confirmar la seña. Intentá nuevamente.";
     } finally {
       confirmingDeposit.value = false;
     }
   });
+
+  const decideDepositProof = $(
+    async (
+      appointment: AppointmentListItem,
+      decision: DepositReviewDecision,
+    ) => {
+      if (confirmingDeposit.value || reviewingDeposit.value) return;
+      const question =
+        decision === "rejected"
+          ? `¿Rechazar el comprobante de ${appointment.contactName}?\n\nSe le avisa por WhatsApp y el turno sigue sin confirmar.`
+          : `¿Pedirle a ${appointment.contactName} otro comprobante?\n\nSe le envía un mensaje para que mande una imagen más clara.`;
+      if (!window.confirm(question)) return;
+
+      reviewingDeposit.value = decision;
+      try {
+        const result = await reviewDepositProof(getSupabaseClient(), {
+          appointmentId: appointment.id,
+          contactId: appointment.contactId,
+          decision,
+          notify: true,
+        });
+        if (result.error) {
+          notice.value =
+            "No pudimos registrar la revisión. No se hicieron cambios; intentá de nuevo.";
+          return;
+        }
+        reloadVersion.value += 1;
+        notice.value = !result.changed
+          ? "Ese comprobante ya había sido revisado."
+          : decision === "rejected"
+            ? result.notified
+              ? "Comprobante rechazado. Le avisamos por WhatsApp."
+              : "Comprobante rechazado. No pudimos enviar el aviso por WhatsApp."
+            : result.notified
+              ? "Le pedimos otro comprobante por WhatsApp."
+              : "Registramos el pedido, pero no pudimos enviar el mensaje por WhatsApp.";
+      } catch {
+        notice.value =
+          "No pudimos registrar la revisión. No se hicieron cambios; intentá de nuevo.";
+      } finally {
+        reviewingDeposit.value = "";
+      }
+    },
+  );
 
   const normalizedQuery = query.value.trim().toLocaleLowerCase("es-AR");
   const visibleAppointments = state.appointments
@@ -408,6 +509,42 @@ export default component$(() => {
         selectedAppointment.status === "confirmed") &&
       selectedAppointment.depositStatus !== "expired"
     : false;
+  const selectedReview = selectedAppointment
+    ? state.depositReviews.find(
+        (review) => review.appointmentId === selectedAppointment.id,
+      )
+    : undefined;
+  const selectedProofMessageId =
+    selectedAppointment?.depositProofMessageId ??
+    selectedReview?.proofMessageId ??
+    null;
+  // La confirmación manual no exige que la IA haya podido leer nada: alcanza
+  // con que la pre-reserva siga viva. El RPC vuelve a verificar el rol ADMIN.
+  const canConfirmDeposit = Boolean(
+    selectedAppointment &&
+    state.isAdmin &&
+    selectedAppointment.status === "scheduled" &&
+    selectedAppointment.depositStatus !== "expired" &&
+    selectedAppointment.depositStatus !== "not_required",
+  );
+  const canReviewProof = Boolean(
+    canConfirmDeposit && (selectedProofMessageId || selectedReview),
+  );
+  const depositBadgeLabel = !selectedAppointment
+    ? ""
+    : selectedAppointment.depositStatus === "confirmed"
+      ? "Seña confirmada"
+      : selectedAppointment.depositStatus === "not_required"
+        ? "Sin seña"
+        : selectedAppointment.depositStatus === "expired"
+          ? "Seña vencida"
+          : selectedAppointment.depositStatus === "proof_received"
+            ? "Comprobante recibido"
+            : "Seña pendiente";
+  const detailBusy =
+    Boolean(savingStatus.value) ||
+    confirmingDeposit.value ||
+    Boolean(reviewingDeposit.value);
   const isToday = selectedDate.value === businessDateInput();
   const noticeIsError = notice.value.startsWith("No pudimos");
 
@@ -586,6 +723,35 @@ export default component$(() => {
           )}
         </div>
 
+        {state.blocks.length > 0 && (
+          <section
+            class="agenda-blocks"
+            aria-label="Bloqueos de Google Calendar"
+          >
+            <h2>Bloqueos de Google Calendar</h2>
+            <ul>
+              {state.blocks.map((block) => (
+                <li key={block.googleEventId}>
+                  <strong>
+                    {formatBusinessDate(new Date(block.startsAt), {
+                      timeStyle: "short",
+                    })}
+                    {" – "}
+                    {formatBusinessDate(new Date(block.endsAt), {
+                      timeStyle: "short",
+                    })}
+                  </strong>
+                  <span>{block.summary || "Evento sin título"}</span>
+                </li>
+              ))}
+            </ul>
+            <small>
+              Vienen de un evento creado a mano en Google Calendar. Ocupan el
+              horario, pero no son turnos de pacientes.
+            </small>
+          </section>
+        )}
+
         <div class="agenda-list">
           <div class="agenda-label">
             <span>
@@ -751,126 +917,261 @@ export default component$(() => {
         <div
           class="drawer-layer"
           role="presentation"
-          onClick$={() => (selectedId.value = "")}
+          onClick$={() => {
+            if (!detailBusy) selectedId.value = "";
+          }}
         >
           <aside
+            ref={detailRef}
             class="drawer appointment-detail-drawer"
             role="dialog"
             aria-modal="true"
             aria-labelledby="appointment-detail-title"
+            aria-busy={detailBusy}
+            tabIndex={-1}
             onClick$={(event) => event.stopPropagation()}
+            onKeyDown$={(event) => {
+              if (event.key === "Escape" && !detailBusy) {
+                event.preventDefault();
+                selectedId.value = "";
+              }
+            }}
           >
-            <header class="drawer-header">
+            <header class="drawer-header detail-drawer-header">
               <div>
-                <span class="eyebrow">Detalle</span>
-                <h2 id="appointment-detail-title">Turno</h2>
+                <span class="eyebrow">Detalle del turno</span>
+                <h2 id="appointment-detail-title">
+                  {selectedAppointment.contactName}
+                </h2>
               </div>
               <button
                 class="icon-button"
                 type="button"
-                aria-label="Cerrar"
-                onClick$={() => (selectedId.value = "")}
+                aria-label="Cerrar el detalle del turno"
+                disabled={detailBusy}
+                onClick$={() => {
+                  if (!detailBusy) selectedId.value = "";
+                }}
               >
                 <Icon name="x" size={20} />
               </button>
             </header>
+
             <div class="drawer-content appointment-detail-content">
-              <h3>{selectedAppointment.contactName}</h3>
-              <p>{selectedAppointment.contactPhone}</p>
-              <dl>
-                <div>
-                  <dt>Fecha y hora</dt>
-                  <dd>
-                    {formatBusinessDate(
-                      new Date(selectedAppointment.startsAt),
-                      { dateStyle: "full", timeStyle: "short" },
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Servicio</dt>
-                  <dd>{selectedAppointment.serviceName}</dd>
-                </div>
-                <div>
-                  <dt>Cobertura y duración</dt>
-                  <dd>
-                    {coverageAndDuration(
-                      selectedAppointment.coverage,
-                      selectedAppointment.durationMinutes,
-                    )}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Profesional</dt>
-                  <dd>{selectedAppointment.professionalName}</dd>
-                </div>
-                <div>
-                  <dt>Estado</dt>
-                  <dd>{displayStatus(selectedAppointment)}</dd>
-                </div>
-                {selectedAppointment.depositConfirmationActor ===
-                  "automatic_system" && (
+              <div class="detail-badges">
+                <span
+                  class={`detail-badge status-${appointmentStatusTone(
+                    selectedAppointment.status,
+                    selectedAppointment.depositStatus,
+                  )}`}
+                >
+                  {displayStatus(selectedAppointment)}
+                </span>
+                <span
+                  class={{
+                    "detail-badge": true,
+                    "detail-badge-deposit": true,
+                    confirmed:
+                      selectedAppointment.depositStatus === "confirmed",
+                    attention:
+                      selectedAppointment.depositStatus === "proof_received",
+                    expired: selectedAppointment.depositStatus === "expired",
+                  }}
+                >
+                  {depositBadgeLabel}
+                </span>
+              </div>
+
+              <section class="detail-section">
+                <h3>Paciente</h3>
+                <dl class="detail-grid">
                   <div>
-                    <dt>Confirmación de seña</dt>
-                    <dd>Automática · comprobante disponible para revisión</dd>
+                    <dt>Nombre</dt>
+                    <dd>{selectedAppointment.contactName}</dd>
                   </div>
-                )}
-                {selectedAppointment.internalNote && (
                   <div>
-                    <dt>Nota administrativa</dt>
-                    <dd>{selectedAppointment.internalNote}</dd>
+                    <dt>Teléfono</dt>
+                    <dd>{selectedAppointment.contactPhone || "—"}</dd>
                   </div>
-                )}
-              </dl>
-              {selectedAppointmentActive && !selectedAppointmentHasStarted && (
-                <p class="appointment-status-help">
-                  Podrás marcar “Atendido” o “No asistió” después de la hora del
-                  turno.
-                </p>
-              )}
-              <div class="appointment-actions-grid">
-                {selectedAppointment.depositProofMessageId && (
+                </dl>
+              </section>
+
+              <section class="detail-section">
+                <h3>Fecha y hora</h3>
+                <dl class="detail-grid">
+                  <div>
+                    <dt>Comienza</dt>
+                    <dd>
+                      {formatBusinessDate(
+                        new Date(selectedAppointment.startsAt),
+                        { dateStyle: "full", timeStyle: "short" },
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Termina</dt>
+                    <dd>
+                      {formatBusinessDate(
+                        new Date(selectedAppointment.endsAt),
+                        {
+                          timeStyle: "short",
+                        },
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section class="detail-section">
+                <h3>Atención</h3>
+                <dl class="detail-grid">
+                  <div>
+                    <dt>Servicio</dt>
+                    <dd>{selectedAppointment.serviceName}</dd>
+                  </div>
+                  <div>
+                    <dt>Cobertura y duración</dt>
+                    <dd>
+                      {coverageAndDuration(
+                        selectedAppointment.coverage,
+                        selectedAppointment.durationMinutes,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Profesional</dt>
+                    <dd>{selectedAppointment.professionalName}</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section class="detail-section">
+                <h3>Seña y comprobante</h3>
+                <dl class="detail-grid">
+                  <div>
+                    <dt>Estado de la seña</dt>
+                    <dd>{depositBadgeLabel}</dd>
+                  </div>
+                  {selectedReview && (
+                    <div>
+                      <dt>Revisión</dt>
+                      <dd>
+                        {selectedReview.status === "pending"
+                          ? "Comprobante esperando revisión"
+                          : selectedReview.status === "confirmed"
+                            ? "Comprobante aprobado"
+                            : selectedReview.status === "rejected"
+                              ? "Comprobante rechazado"
+                              : "Le pedimos otro comprobante"}
+                      </dd>
+                    </div>
+                  )}
+                  {selectedAppointment.depositConfirmationActor ===
+                    "automatic_system" && (
+                    <div>
+                      <dt>Confirmación de seña</dt>
+                      <dd>Automática · comprobante disponible para revisión</dd>
+                    </div>
+                  )}
+                </dl>
+                {selectedProofMessageId ? (
                   <a
-                    class="secondary-button"
-                    href={`/app/inbox?patient=${selectedAppointment.contactId}&message=${selectedAppointment.depositProofMessageId}`}
+                    class="secondary-button detail-inline-action"
+                    href={`/app/inbox?patient=${selectedAppointment.contactId}&message=${selectedProofMessageId}`}
                   >
+                    <Icon name="file" size={17} />
                     {selectedAppointment.depositConfirmationActor ===
                     "automatic_system"
                       ? "Revisar comprobante"
                       : "Ver comprobante"}
                   </a>
+                ) : (
+                  <p class="detail-hint">
+                    Todavía no recibimos un comprobante por WhatsApp.
+                  </p>
                 )}
-                {selectedAppointment.depositStatus === "proof_received" && (
-                  <button
-                    class="primary-button"
-                    type="button"
-                    disabled={
-                      Boolean(savingStatus.value) || confirmingDeposit.value
-                    }
-                    onClick$={() => confirmDeposit(selectedAppointment)}
-                  >
-                    {confirmingDeposit.value
-                      ? "Confirmando…"
-                      : "Confirmar seña"}
-                  </button>
-                )}
-                {selectedAppointmentActive && (
+              </section>
+
+              {selectedAppointment.internalNote && (
+                <section class="detail-section">
+                  <h3>Nota administrativa</h3>
+                  <p class="detail-note">{selectedAppointment.internalNote}</p>
+                </section>
+              )}
+
+              {selectedAppointmentActive && !selectedAppointmentHasStarted && (
+                <p class="detail-hint" role="note">
+                  Vas a poder marcar “Atendido” o “No asistió” después de la
+                  hora del turno.
+                </p>
+              )}
+              {selectedAppointmentActive && !state.isAdmin && (
+                <p class="detail-hint" role="note">
+                  Confirmar o rechazar una seña lo hace la persona
+                  administradora.
+                </p>
+              )}
+            </div>
+
+            <footer class="detail-drawer-actions">
+              {canConfirmDeposit && (
+                <button
+                  class="primary-button detail-action-primary"
+                  type="button"
+                  disabled={detailBusy}
+                  onClick$={() => confirmDeposit(selectedAppointment)}
+                >
+                  {confirmingDeposit.value
+                    ? "Confirmando…"
+                    : "Confirmar seña y turno"}
+                </button>
+              )}
+              {canReviewProof && (
+                <div class="detail-action-row">
                   <button
                     class="secondary-button"
                     type="button"
-                    disabled={Boolean(savingStatus.value)}
+                    disabled={detailBusy}
+                    onClick$={() =>
+                      decideDepositProof(selectedAppointment, "more_requested")
+                    }
+                  >
+                    {reviewingDeposit.value === "more_requested"
+                      ? "Enviando…"
+                      : "Pedir otro comprobante"}
+                  </button>
+                  <button
+                    class="secondary-button"
+                    type="button"
+                    disabled={detailBusy}
+                    onClick$={() =>
+                      decideDepositProof(selectedAppointment, "rejected")
+                    }
+                  >
+                    {reviewingDeposit.value === "rejected"
+                      ? "Guardando…"
+                      : "Rechazar comprobante"}
+                  </button>
+                </div>
+              )}
+              {selectedAppointmentActive && (
+                <div class="detail-action-row">
+                  <button
+                    class="secondary-button"
+                    type="button"
+                    disabled={detailBusy}
                     onClick$={() => (rescheduling.value = true)}
                   >
                     Reprogramar
                   </button>
-                )}
-                {selectedAppointmentActive && (
                   <button
                     class="secondary-button"
                     type="button"
-                    disabled={
-                      Boolean(savingStatus.value) ||
-                      !selectedAppointmentHasStarted
+                    disabled={detailBusy || !selectedAppointmentHasStarted}
+                    title={
+                      selectedAppointmentHasStarted
+                        ? undefined
+                        : "Disponible después de la hora del turno"
                     }
                     onClick$={() =>
                       changeStatus(selectedAppointment, "completed")
@@ -880,14 +1181,14 @@ export default component$(() => {
                       ? "Guardando…"
                       : "Marcar atendido"}
                   </button>
-                )}
-                {selectedAppointmentActive && (
                   <button
                     class="secondary-button"
                     type="button"
-                    disabled={
-                      Boolean(savingStatus.value) ||
-                      !selectedAppointmentHasStarted
+                    disabled={detailBusy || !selectedAppointmentHasStarted}
+                    title={
+                      selectedAppointmentHasStarted
+                        ? undefined
+                        : "Disponible después de la hora del turno"
                     }
                     onClick$={() =>
                       changeStatus(selectedAppointment, "no_show")
@@ -897,12 +1198,10 @@ export default component$(() => {
                       ? "Guardando…"
                       : "No asistió"}
                   </button>
-                )}
-                {selectedAppointmentActive && (
                   <button
                     class="secondary-button danger-button"
                     type="button"
-                    disabled={Boolean(savingStatus.value)}
+                    disabled={detailBusy}
                     onClick$={() =>
                       changeStatus(selectedAppointment, "cancelled")
                     }
@@ -911,9 +1210,9 @@ export default component$(() => {
                       ? "Guardando…"
                       : "Cancelar turno"}
                   </button>
-                )}
-              </div>
-            </div>
+                </div>
+              )}
+            </footer>
           </aside>
         </div>
       )}
