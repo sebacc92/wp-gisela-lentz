@@ -40,7 +40,8 @@
     "test:cloudflare:remote": "node scripts/test-cloudflare-remote.mjs",
     "test:cloudflare:smoke:production": "node scripts/test-cloudflare-smoke.mjs --config wrangler.jsonc --label production",
     "test:cloudflare:smoke:staging": "node scripts/test-cloudflare-smoke.mjs --config wrangler.staging.jsonc --label staging",
-    "test:automation": "pnpm run build.types:functions && node --test supabase/functions/_shared/*.test.ts supabase/functions/process-calendar-sync/*.test.ts supabase/functions/process-reminders/*.test.ts src/lib/*.test.ts",
+    "test:automation": "pnpm run build.types:functions && node --test supabase/functions/_shared/*.test.ts supabase/functions/process-calendar-sync/inbound-policy.test.ts supabase/functions/process-calendar-sync/sync-policy.test.ts supabase/functions/process-reminders/*.test.ts src/lib/*.test.ts && pnpm run test:functions",
+    "test:functions": "deno test --allow-env --allow-net --no-check supabase/functions/google-calendar-status/index.test.ts supabase/functions/process-calendar-sync/orchestration.test.ts",
     "qwik": "qwik"
   },
   "devDependencies": {

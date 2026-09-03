@@ -15,6 +15,7 @@ import { Icon } from "~/components/ui/Icon";
 import { BUSINESS_CONFIG, getPageTitle } from "~/config/business";
 import {
   describeCalendarSync,
+  parseCalendarSyncOutcome,
   parseCalendarSyncSummary,
 } from "~/lib/calendar-sync-summary";
 import { getSupabaseClient } from "~/lib/supabase/client";
@@ -2098,12 +2099,17 @@ export default component$(() => {
                                 const summary = parseCalendarSyncSummary(
                                   data?.summary,
                                 );
-                                googleCalendar.error = summary.failed > 0;
+                                const outcome = parseCalendarSyncOutcome(
+                                  data?.outcome,
+                                );
+                                googleCalendar.error =
+                                  outcome === "error" || summary.failed > 0;
                                 googleCalendar.message =
                                   summary.failed > 0
                                     ? "Algunos turnos necesitan revisión. La agenda sigue guardada de forma segura."
                                     : describeCalendarSync({
                                         summary,
+                                        outcome,
                                         checkedAt:
                                           googleCalendar.lastCheckedAt ||
                                           new Date(),

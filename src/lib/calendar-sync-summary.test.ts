@@ -5,6 +5,7 @@ import {
   describeCalendarSync,
   emptyCalendarSyncSummary,
   formatSyncClock,
+  parseCalendarSyncOutcome,
   parseCalendarSyncSummary,
 } from "./calendar-sync-summary.ts";
 
@@ -107,4 +108,42 @@ test("el contador de cambios ignora lo que ya estaba en sincronía", () => {
 test("el reloj usa la zona horaria del consultorio", () => {
   assert.equal(formatSyncClock("2026-09-02T21:42:00.000Z"), "18:42");
   assert.equal(formatSyncClock("no-es-fecha"), "");
+});
+
+test("una ejecución parcial no se anuncia como sincronización completa", () => {
+  const message = describeCalendarSync({
+    summary: { ...emptyCalendarSyncSummary(), pushed: 1, retried: 2 },
+    outcome: "partial",
+    checkedAt: "2026-09-03T21:42:00.000Z",
+  });
+  assert.match(message, /incompleta/);
+  assert.doesNotMatch(message, /completada/);
+  assert.match(message, /se reintentan solos/);
+});
+
+test("una ejecución omitida por lease ocupado no se anuncia como exitosa", () => {
+  const message = describeCalendarSync({
+    summary: { ...emptyCalendarSyncSummary(), pushed: 1 },
+    outcome: "skipped",
+    skippedReason: "INBOUND_SYNC_IN_PROGRESS",
+  });
+  assert.match(message, /Ya había una sincronización en curso/);
+  assert.doesNotMatch(message, /completada/);
+});
+
+test("el outcome del servidor manda sobre los contadores", () => {
+  // Cero cambios y cero errores, pero el pull no llegó a terminar.
+  const message = describeCalendarSync({
+    summary: emptyCalendarSyncSummary(),
+    outcome: "partial",
+  });
+  assert.doesNotMatch(message, /Sin cambios/);
+  assert.match(message, /incompleta/);
+});
+
+test("un outcome desconocido se trata como error, nunca como éxito", () => {
+  assert.equal(parseCalendarSyncOutcome("todo bien"), "error");
+  assert.equal(parseCalendarSyncOutcome(undefined), "error");
+  assert.equal(parseCalendarSyncOutcome("completed"), "completed");
+  assert.equal(parseCalendarSyncOutcome("skipped"), "skipped");
 });

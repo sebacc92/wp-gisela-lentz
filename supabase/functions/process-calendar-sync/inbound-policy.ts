@@ -136,3 +136,34 @@ export function applyManagedEventOutcome(
       return { ...summary, skipped: summary.skipped + 1 };
   }
 }
+
+export type CalendarSyncOutcome = "completed" | "partial" | "skipped" | "error";
+
+export interface CalendarSyncOutcomeInput {
+  inboundError: string | null;
+  inboundSkippedReason: string | null;
+  truncated: boolean;
+  retried: number;
+  failed: number;
+  cleanupFailed: number;
+}
+
+/**
+ * Una ejecución omitida o incompleta nunca puede presentarse como una revisión
+ * completa y exitosa: el panel muestra cosas distintas para cada caso.
+ */
+export function calendarSyncOutcome(
+  input: CalendarSyncOutcomeInput,
+): CalendarSyncOutcome {
+  if (input.inboundError) return "error";
+  if (input.inboundSkippedReason) return "skipped";
+  if (
+    input.truncated ||
+    input.retried > 0 ||
+    input.failed > 0 ||
+    input.cleanupFailed > 0
+  ) {
+    return "partial";
+  }
+  return "completed";
+}

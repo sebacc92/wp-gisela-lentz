@@ -93,27 +93,18 @@ function pluralize(value: number, singular: string, plural: string): string {
   return `${value} ${value === 1 ? singular : plural}`;
 }
 
-/**
- * Mensaje que ve Gisela después de tocar «Sincronizar ahora». Nunca incluye
- * nombres, títulos de eventos ni identificadores: sólo cantidades.
- */
-export function describeCalendarSync(input: {
-  summary: CalendarSyncSummary;
-  checkedAt?: string | Date | null;
-  skippedReason?: string | null;
-  error?: string | null;
-}): string {
-  const { summary } = input;
-  if (input.error) {
-    return "No pudimos completar la revisión del calendario. Los turnos siguen guardados de forma segura acá.";
-  }
-  if (input.skippedReason === "FIRST_IMPORT_APPROVAL_REQUIRED") {
-    return "Los turnos se enviaron a Google. Para traer los eventos que ya existen en Google falta aprobar la primera importación.";
-  }
-  if (input.skippedReason === "INBOUND_SYNC_IN_PROGRESS") {
-    return "Ya había una sincronización en curso. Esperá unos segundos y volvé a intentar.";
-  }
+export type CalendarSyncOutcome = "completed" | "partial" | "skipped" | "error";
 
+export function parseCalendarSyncOutcome(value: unknown): CalendarSyncOutcome {
+  return value === "completed" ||
+    value === "partial" ||
+    value === "skipped" ||
+    value === "error"
+    ? value
+    : "error";
+}
+
+function changeParts(summary: CalendarSyncSummary): string[] {
   const parts: string[] = [];
   if (summary.pushed > 0) {
     parts.push(pluralize(summary.pushed, "enviado", "enviados"));
@@ -156,8 +147,54 @@ export function describeCalendarSync(input: {
       ),
     );
   }
+  return parts;
+}
 
+/**
+ * Mensaje que ve Gisela después de tocar «Sincronizar ahora». Nunca incluye
+ * nombres, títulos de eventos ni identificadores: sólo cantidades. Una
+ * ejecución omitida o parcial jamás se presenta como completa y exitosa.
+ */
+export function describeCalendarSync(input: {
+  summary: CalendarSyncSummary;
+  outcome?: CalendarSyncOutcome;
+  checkedAt?: string | Date | null;
+  skippedReason?: string | null;
+  error?: string | null;
+}): string {
+  const { summary } = input;
+  const outcome =
+    input.outcome ??
+    (input.error
+      ? "error"
+      : input.skippedReason
+        ? "skipped"
+        : summary.failed > 0 || summary.retried > 0
+          ? "partial"
+          : "completed");
+
+  if (outcome === "error") {
+    return "No pudimos completar la revisión del calendario. Los turnos siguen guardados de forma segura acá.";
+  }
+  if (outcome === "skipped") {
+    if (input.skippedReason === "FIRST_IMPORT_APPROVAL_REQUIRED") {
+      return "Los turnos se enviaron a Google. Para traer los eventos que ya existen en Google falta aprobar la primera importación.";
+    }
+    if (input.skippedReason === "INBOUND_SYNC_IN_PROGRESS") {
+      return "Ya había una sincronización en curso. Esperá unos segundos y volvé a intentar.";
+    }
+    return "No revisamos el calendario esta vez. Volvé a intentar en unos minutos.";
+  }
+
+  const parts = changeParts(summary);
   const clock = input.checkedAt ? formatSyncClock(input.checkedAt) : "";
+
+  if (outcome === "partial") {
+    const detail =
+      parts.length > 0 ? ` Se procesaron ${parts.join(", ")}.` : "";
+    return `Sincronización incompleta: quedaron cambios sin terminar y se reintentan solos.${detail}`;
+  }
+
   if (parts.length === 0) {
     const suffix = clock ? ` Calendario revisado a las ${clock}.` : "";
     return `Sin cambios.${suffix}`.trim();

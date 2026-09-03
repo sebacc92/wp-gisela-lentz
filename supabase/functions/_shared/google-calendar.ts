@@ -514,12 +514,39 @@ function googleEventUrl(calendarId: string, eventId?: string): string {
   return `${url}?sendUpdates=none`;
 }
 
+/** Un 412 significa que el evento cambió después de que lo leímos. Nunca se
+ * fuerza la escritura: el job se reintenta y el próximo pull incremental
+ * reporta ese cambio, que se convierte en un conflicto para revisión. */
+function assertPreconditionHeld(response: Response): void {
+  if (response.status !== 412) return;
+  throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+    status: 412,
+    retryable: true,
+  });
+}
+
+async function eventEtag(response: Response): Promise<string | null> {
+  const header = response.headers.get("etag");
+  if (header) return header.slice(0, 255);
+  try {
+    const body = (await response.clone().json()) as { etag?: unknown };
+    return typeof body.etag === "string" ? body.etag.slice(0, 255) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertGoogleCalendarEvent(input: {
   accessToken: string;
   calendarId: string;
   appointment: CalendarSyncAppointment;
+  etag?: string | null;
   fetcher?: typeof fetch;
-}): Promise<{ eventId: string; operation: "inserted" | "patched" }> {
+}): Promise<{
+  eventId: string;
+  operation: "inserted" | "patched";
+  etag: string | null;
+}> {
   const fetcher = input.fetcher ?? fetch;
   const eventId = deterministicGoogleEventId(input.appointment.appointment_id);
   const insertResponse = await googleFetch(
@@ -543,6 +570,7 @@ export async function upsertGoogleCalendarEvent(input: {
   }
 
   if (insertResponse.status === 409) {
+    const conditionalEtag = input.etag?.trim();
     const patchResponse = await googleFetch(
       fetcher,
       googleEventUrl(input.calendarId, eventId),
@@ -551,10 +579,12 @@ export async function upsertGoogleCalendarEvent(input: {
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
           "Content-Type": "application/json",
+          ...(conditionalEtag ? { "If-Match": conditionalEtag } : {}),
         },
         body: JSON.stringify(googleCalendarEventPayload(input.appointment)),
       },
     );
+    assertPreconditionHeld(patchResponse);
     if (patchResponse.status === 404 || patchResponse.status === 410) {
       // Google conserva tombstones de eventos eliminados. Un ID determinista
       // no se puede recrear inmediatamente; el worker conserva el job para
@@ -565,31 +595,60 @@ export async function upsertGoogleCalendarEvent(input: {
       });
     }
     await assertGoogleResponse(patchResponse, "GOOGLE_EVENT_PATCH_FAILED");
-    return { eventId, operation: "patched" };
+    return {
+      eventId,
+      operation: "patched",
+      etag: await eventEtag(patchResponse),
+    };
   }
 
   await assertGoogleResponse(insertResponse, "GOOGLE_EVENT_INSERT_FAILED");
-  return { eventId, operation: "inserted" };
+  return {
+    eventId,
+    operation: "inserted",
+    etag: await eventEtag(insertResponse),
+  };
+}
+
+export async function deleteGoogleCalendarEventById(input: {
+  accessToken: string;
+  calendarId: string;
+  eventId: string;
+  etag?: string | null;
+  fetcher?: typeof fetch;
+}): Promise<void> {
+  const fetcher = input.fetcher ?? fetch;
+  const conditionalEtag = input.etag?.trim();
+  const response = await googleFetch(
+    fetcher,
+    googleEventUrl(input.calendarId, input.eventId),
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        ...(conditionalEtag ? { "If-Match": conditionalEtag } : {}),
+      },
+    },
+  );
+  assertPreconditionHeld(response);
+  if (response.ok || response.status === 404 || response.status === 410) return;
+  await assertGoogleResponse(response, "GOOGLE_EVENT_DELETE_FAILED");
 }
 
 export async function deleteGoogleCalendarEvent(input: {
   accessToken: string;
   calendarId: string;
   appointmentId: string;
+  etag?: string | null;
   fetcher?: typeof fetch;
 }): Promise<void> {
-  const fetcher = input.fetcher ?? fetch;
-  const eventId = deterministicGoogleEventId(input.appointmentId);
-  const response = await googleFetch(
-    fetcher,
-    googleEventUrl(input.calendarId, eventId),
-    {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${input.accessToken}` },
-    },
-  );
-  if (response.ok || response.status === 404 || response.status === 410) return;
-  await assertGoogleResponse(response, "GOOGLE_EVENT_DELETE_FAILED");
+  await deleteGoogleCalendarEventById({
+    accessToken: input.accessToken,
+    calendarId: input.calendarId,
+    eventId: deterministicGoogleEventId(input.appointmentId),
+    etag: input.etag,
+    fetcher: input.fetcher,
+  });
 }
 
 export async function revokeGoogleToken(
@@ -729,6 +788,7 @@ export type ClassifiedGoogleEvent =
       startsAt: string | null;
       endsAt: string | null;
       updatedAt: string | null;
+      etag: string | null;
     }
   | {
       kind: "external_block";
@@ -800,6 +860,7 @@ export function classifyGoogleCalendarEvent(
       startsAt: isoOrNull(event.start?.dateTime),
       endsAt: isoOrNull(event.end?.dateTime),
       updatedAt,
+      etag: typeof event.etag === "string" ? event.etag.slice(0, 255) : null,
     };
   }
 
