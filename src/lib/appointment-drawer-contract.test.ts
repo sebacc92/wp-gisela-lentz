@@ -70,3 +70,30 @@ test("la confirmación aclara que es una decisión, no una verificación bancari
   // Un rechazo del RPC explica qué acción corresponde.
   assert.match(page, /describeDepositConfirmationError/);
 });
+
+test("la conversión de un bloqueo está conectada a su RPC transaccional", () => {
+  const page = drawer();
+  const converter = source(
+    "src/components/appointments/ConvertBlockDrawer.tsx",
+  );
+  const lib = source("src/lib/calendar-block-conversion.ts");
+
+  // La acción existe en la agenda y abre el formulario dedicado.
+  assert.match(page, /ConvertBlockDrawer/);
+  assert.match(page, /Convertir en turno/);
+  assert.match(page, /convertingBlockId/);
+
+  // El formulario explica la sustitución antes de convertir.
+  assert.match(converter, /se reemplaza por el turno/);
+
+  // Una sola vía de creación: el RPC transaccional, nunca una segunda
+  // implementación de reserva desde el navegador.
+  assert.match(lib, /convert_google_calendar_block_to_appointment/);
+  assert.doesNotMatch(
+    converter,
+    /create_service_appointment|create_appointment/,
+  );
+  assert.doesNotMatch(lib, /create_service_appointment|create_appointment/);
+  // El RPC viejo, que exigía un turno ya creado, no puede volver.
+  assert.doesNotMatch(converter, /"convert_google_calendar_block"/);
+});

@@ -729,12 +729,16 @@ begin
     on connection.id = true
     and connection.status = 'connected'
     and connection.google_calendar_id = event.google_calendar_id
-  -- Sólo después de que el turno tenga su propio evento en Google: si se
-  -- borrara antes, un fallo de exportación dejaría el horario invisible.
+  -- Sólo después de que el turno tenga su propio evento exportado, en ESTE
+  -- calendario y en ESTA generación: si se borrara antes, o si la proyección
+  -- fuera de una conexión anterior, el horario quedaría invisible en Google.
   join public.google_calendar_sync_jobs job
     on job.appointment_id = event.converted_appointment_id
     and job.google_event_id is not null
+    and job.projected_operation = 'upsert'
+    and job.connection_generation = connection.connection_generation
   where event.external_cleanup_status = 'pending'
+    and event.connection_generation = connection.connection_generation
   order by event.updated_at
   limit greatest(1, least(coalesce(p_limit, 3), 10));
 end;

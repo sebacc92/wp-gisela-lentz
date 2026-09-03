@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(19);
+select plan(22);
 
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
@@ -307,6 +307,60 @@ select is(
   ),
   'skipped_converted',
   'el siguiente pull no recrea el bloqueo ya convertido'
+);
+
+-- ---------------------------------------------------------------------------
+-- Un conflicto no autoriza por sí solo a borrar en Google
+-- ---------------------------------------------------------------------------
+
+-- Se reabre un conflicto sobre el turno, que sigue vivo en la app.
+select public.observe_google_calendar_managed_event(
+  safety_generation.generation, safety_lease.lease_token,
+  'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
+  '97000000-0000-4000-8000-000000000004', true, null, null,
+  clock_timestamp(), null
+) from safety_generation, safety_lease;
+
+select ok(
+  exists (
+    select 1 from public.google_calendar_sync_conflicts
+    where appointment_id = '97000000-0000-4000-8000-000000000004'
+      and status = 'pending' and kind = 'cancellation_requested'
+  )
+  and not exists (
+    select 1 from public.google_calendar_sync_jobs
+    where appointment_id = '97000000-0000-4000-8000-000000000004'
+      and operation = 'delete'
+  ),
+  'una cancelación pedida desde Google no genera por sí sola un borrado saliente'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from safety_generation, lateral public.claim_google_calendar_sync_jobs(
+      5, safety_generation.generation
+    ) job
+    where job.operation = 'delete'
+  ),
+  0,
+  'mientras el turno siga vivo en la app no se reclama ningún delete'
+);
+
+-- ---------------------------------------------------------------------------
+-- El cleanup exige el evento sustituto exportado en la conexión vigente
+-- ---------------------------------------------------------------------------
+
+select is(
+  (
+    select count(*)::integer
+    from safety_generation, safety_lease,
+      lateral public.claim_google_calendar_external_cleanup(
+        safety_generation.generation, safety_lease.lease_token, 5
+      ) cleanup
+  ),
+  0,
+  'sin el evento del turno exportado todavía no se retira el evento original'
 );
 
 -- ---------------------------------------------------------------------------

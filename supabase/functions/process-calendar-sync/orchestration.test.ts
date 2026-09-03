@@ -720,3 +720,300 @@ Deno.test(
     assert.deepEqual(body.cleanup, { done: 1, failed: 0 });
   },
 );
+
+Deno.test(
+  "un error de lectura no anuncia sincronización completa ni pierde el token",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        fail_google_calendar_inbound_sync: () => ({ data: true, error: null }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? jsonResponseOf({ error: { message: "backend error" } }, 503)
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(body.outcome, "error");
+    // El token anterior se conserva: no se guarda uno nuevo tras un fallo.
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
+    );
+    assert.ok(
+      rpcCalls.some(
+        (call) => call.name === "fail_google_calendar_inbound_sync",
+      ),
+    );
+    // Nada se escribió sobre eventos existentes.
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["PATCH", "DELETE", "POST"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "una paginación incompleta no persiste el syncToken ni reconcilia bajas",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        apply_google_calendar_external_event: () => ({
+          data: "created",
+          error: null,
+        }),
+      }),
+    );
+    // Cada página devuelve otro nextPageToken: el recorrido nunca termina.
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? jsonResponseOf({
+            items: [
+              {
+                id: `manual-${Math.random()}`,
+                summary: "Evento sintético",
+                start: { dateTime: "2099-01-01T10:00:00.000Z" },
+                end: { dateTime: "2099-01-01T11:00:00.000Z" },
+              },
+            ],
+            nextPageToken: "otra-pagina",
+          })
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal((body.inbound as { truncated: boolean }).truncated, true);
+    assert.equal(body.outcome, "partial");
+    const completion = rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_inbound_sync",
+    );
+    assert.equal(completion?.args.p_next_sync_token, null);
+    // Sin recorrido completo no se puede saber qué desapareció.
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "reconcile_google_calendar_external_events",
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un evento sincronizado antes de estas migraciones no se parchea a ciegas",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        // Observación previa: el turno legado no tiene proyección registrada,
+        // así que cualquier diferencia se trata como conflicto, no como push.
+        observe_google_calendar_managed_event: () => ({
+          data: "conflict_recorded",
+          error: null,
+        }),
+        claim_google_calendar_sync_jobs: () => ({ data: [], error: null }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: MANAGED_EVENT_ID,
+              status: "confirmed",
+              // Sin etag: el evento se exportó con el runtime anterior.
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: APPOINTMENT_ID,
+                },
+              },
+              start: { dateTime: MOVED_START },
+              end: { dateTime: MOVED_END },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    const observe = rpcCalls.find(
+      (call) => call.name === "observe_google_calendar_managed_event",
+    );
+    assert.equal(observe?.args.p_google_etag, null);
+    assert.equal(
+      calls.some((call) => ["PATCH", "DELETE"].includes(call.method)),
+      false,
+      "un evento legado nunca se modifica sin haberlo observado antes",
+    );
+    assert.equal(
+      (body.summary as { conflictsOpened: number }).conflictsOpened,
+      1,
+    );
+  },
+);
+
+Deno.test(
+  "un job legado sin ETag se envía sin If-Match sólo tras observarlo",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        observe_google_calendar_managed_event: () => ({
+          data: "in_sync",
+          error: null,
+        }),
+        claim_google_calendar_sync_jobs: () => ({
+          data: [
+            {
+              job_id: "55555555-5555-4555-8555-555555555555",
+              appointment_id: APPOINTMENT_ID,
+              operation: "upsert",
+              desired_version: 4,
+              attempts: 1,
+              starts_at: APP_START,
+              ends_at: APP_END,
+              patient_name: "Paciente Sintético",
+              timezone: "America/Argentina/Buenos_Aires",
+              connection_generation: 1,
+              // Job creado antes de la migración: sin ETag ni proyección.
+              google_etag: null,
+            },
+          ],
+          error: null,
+        }),
+        complete_google_calendar_sync_job: () => ({ data: true, error: null }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        return eventsListResponse([
+          {
+            id: MANAGED_EVENT_ID,
+            status: "confirmed",
+            extendedProperties: {
+              private: {
+                managed_by: "gisela_lentz_agenda",
+                appointment_id: APPOINTMENT_ID,
+              },
+            },
+            start: { dateTime: APP_START },
+            end: { dateTime: APP_END },
+          },
+        ]);
+      }
+      if (call.method === "POST" && call.url.includes("/events?")) {
+        return jsonResponseOf({ error: { message: "duplicate" } }, 409);
+      }
+      if (call.method === "PATCH") {
+        return jsonResponseOf({ id: MANAGED_EVENT_ID }, 200, '"etag-fresco"');
+      }
+      return null;
+    });
+
+    await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    const listIndex = calls.findIndex(
+      (call) => call.method === "GET" && call.url.includes("/events?"),
+    );
+    const patchIndex = calls.findIndex((call) => call.method === "PATCH");
+    assert.ok(
+      listIndex >= 0 && patchIndex > listIndex,
+      "la observación remota precede a cualquier modificación",
+    );
+    const patch = calls[patchIndex];
+    assert.equal(patch.headers["if-match"], undefined);
+    // A partir de acá el job queda con ETag para la próxima escritura.
+    const completion = rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_sync_job",
+    );
+    assert.equal(completion?.args.p_google_etag, '"etag-fresco"');
+  },
+);
+
+Deno.test(
+  "el cleanup de un evento convertido no borra nada si Google falla",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        claim_google_calendar_external_cleanup: () => ({
+          data: [
+            {
+              google_event_id: "evento-manual-convertido",
+              appointment_id: APPOINTMENT_ID,
+            },
+          ],
+          error: null,
+        }),
+        complete_google_calendar_external_cleanup: () => ({
+          data: true,
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        return eventsListResponse([]);
+      }
+      if (call.method === "DELETE") {
+        return jsonResponseOf({ error: { message: "server" } }, 500);
+      }
+      return null;
+    });
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    const completion = rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_external_cleanup",
+    );
+    assert.equal(completion?.args.p_succeeded, false);
+    assert.deepEqual(body.cleanup, { done: 0, failed: 1 });
+    assert.equal(body.outcome, "partial");
+  },
+);

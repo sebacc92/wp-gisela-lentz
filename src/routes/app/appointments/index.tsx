@@ -9,6 +9,7 @@ import { useLocation, type DocumentHead } from "@qwik.dev/router";
 import "./agenda-print.css";
 import { AppNavigation } from "~/components/app/AppNavigation";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
+import { ConvertBlockDrawer } from "~/components/appointments/ConvertBlockDrawer";
 import { ManualAppointmentDrawer } from "~/components/appointments/ManualAppointmentDrawer";
 import { RescheduleAppointmentDrawer } from "~/components/appointments/RescheduleAppointmentDrawer";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
@@ -200,6 +201,7 @@ export default component$(() => {
   const savingStatus = useSignal<AppointmentListItem["status"] | "">("");
   const confirmingDeposit = useSignal(false);
   const reviewingDeposit = useSignal<DepositReviewDecision | "">("");
+  const convertingBlockId = useSignal("");
   const detailRef = useSignal<HTMLElement>();
   const reloadVersion = useSignal(0);
   const notice = useSignal("");
@@ -544,6 +546,9 @@ export default component$(() => {
           : selectedAppointment.depositStatus === "proof_received"
             ? "Comprobante recibido"
             : "Seña pendiente";
+  const convertingBlock = state.blocks.find(
+    (block) => block.googleEventId === convertingBlockId.value,
+  );
   const detailBusy =
     Boolean(savingStatus.value) ||
     confirmingDeposit.value ||
@@ -745,6 +750,17 @@ export default component$(() => {
                     })}
                   </strong>
                   <span>{block.summary || "Evento sin título"}</span>
+                  {state.isAdmin && (
+                    <button
+                      class="secondary-button agenda-block-action"
+                      type="button"
+                      onClick$={() =>
+                        (convertingBlockId.value = block.googleEventId)
+                      }
+                    >
+                      Convertir en turno
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -1232,6 +1248,20 @@ export default component$(() => {
             </footer>
           </aside>
         </div>
+      )}
+
+      {convertingBlock && (
+        <ConvertBlockDrawer
+          block={convertingBlock}
+          professionals={state.professionals}
+          services={state.services}
+          onClose$={() => (convertingBlockId.value = "")}
+          onConverted$={(message) => {
+            convertingBlockId.value = "";
+            reloadVersion.value += 1;
+            notice.value = message;
+          }}
+        />
       )}
 
       {creating.value && (

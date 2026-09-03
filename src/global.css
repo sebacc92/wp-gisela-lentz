@@ -8667,3 +8667,37 @@ textarea::placeholder {
   font-size: 12.5px;
   line-height: 1.45;
 }
+
+.agenda-block-action {
+  min-height: 34px;
+  margin-left: auto;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+
+.convert-block-summary {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+
+.convert-block-summary > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.convert-block-summary strong {
+  font-size: 14px;
+}
+
+.convert-block-summary span {
+  overflow-wrap: anywhere;
+  color: var(--ink-500);
+  font-size: 12.5px;
+}
