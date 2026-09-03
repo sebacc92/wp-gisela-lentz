@@ -443,3 +443,176 @@ export async function loadAvailableSlots(
     }),
   );
 }
+
+export interface CalendarBlock {
+  googleEventId: string;
+  summary: string | null;
+  startsAt: string;
+  endsAt: string;
+}
+
+export interface CalendarUnsupportedEvent {
+  googleEventId: string;
+  summary: string | null;
+  reason: "ALL_DAY" | "RECURRING" | "MISSING_RANGE" | "INVALID_RANGE";
+}
+
+/** Bloqueos importados desde Google que ocupan la agenda del día mostrado. */
+export async function loadCalendarBlocks(
+  client: SupabaseClient,
+  fromIso: string,
+  toIso?: string,
+): Promise<CalendarBlock[]> {
+  let query = client
+    .from("google_calendar_external_events")
+    .select("google_event_id,summary,starts_at,ends_at")
+    .eq("kind", "block")
+    .eq("status", "active");
+  if (toIso) query = query.lt("starts_at", toIso);
+  const { data, error } = await query
+    .gte("ends_at", fromIso)
+    .order("starts_at")
+    .limit(200);
+  if (error) throw error;
+
+  return (data ?? []).map((raw) => {
+    const row = raw as unknown as {
+      google_event_id: string;
+      summary: string | null;
+      starts_at: string;
+      ends_at: string;
+    };
+    return {
+      googleEventId: row.google_event_id,
+      summary: row.summary,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+    };
+  });
+}
+
+export async function loadCalendarUnsupportedEvents(
+  client: SupabaseClient,
+): Promise<CalendarUnsupportedEvent[]> {
+  const { data, error } = await client
+    .from("google_calendar_external_events")
+    .select("google_event_id,summary,unsupported_reason")
+    .eq("kind", "unsupported")
+    .eq("status", "active")
+    .order("imported_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+
+  return (data ?? []).map((raw) => {
+    const row = raw as unknown as {
+      google_event_id: string;
+      summary: string | null;
+      unsupported_reason: CalendarUnsupportedEvent["reason"];
+    };
+    return {
+      googleEventId: row.google_event_id,
+      summary: row.summary,
+      reason: row.unsupported_reason,
+    };
+  });
+}
+
+export interface CalendarConflict {
+  id: string;
+  appointmentId: string;
+  kind: "reschedule_requested" | "cancellation_requested";
+  proposedStartsAt: string | null;
+  proposedEndsAt: string | null;
+  observedStartsAt: string | null;
+  observedEndsAt: string | null;
+  detectedAt: string;
+  contactName: string;
+}
+
+/** Cambios hechos en Google sobre turnos reales, esperando decisión ADMIN. */
+export async function loadCalendarConflicts(
+  client: SupabaseClient,
+): Promise<CalendarConflict[]> {
+  const { data, error } = await client
+    .from("google_calendar_sync_conflicts")
+    .select(
+      "id,appointment_id,kind,proposed_starts_at,proposed_ends_at,observed_starts_at,observed_ends_at,detected_at,appointments!google_calendar_sync_conflicts_appointment_id_fkey(contacts!appointments_contact_id_fkey(name))",
+    )
+    .eq("status", "pending")
+    .order("detected_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+
+  return (data ?? []).map((raw) => {
+    const row = raw as unknown as {
+      id: string;
+      appointment_id: string;
+      kind: CalendarConflict["kind"];
+      proposed_starts_at: string | null;
+      proposed_ends_at: string | null;
+      observed_starts_at: string | null;
+      observed_ends_at: string | null;
+      detected_at: string;
+      appointments:
+        | { contacts: { name: string } | Array<{ name: string }> | null }
+        | Array<{ contacts: { name: string } | Array<{ name: string }> | null }>
+        | null;
+    };
+    const appointment = Array.isArray(row.appointments)
+      ? row.appointments[0]
+      : row.appointments;
+    const contact = Array.isArray(appointment?.contacts)
+      ? appointment?.contacts[0]
+      : appointment?.contacts;
+    return {
+      id: row.id,
+      appointmentId: row.appointment_id,
+      kind: row.kind,
+      proposedStartsAt: row.proposed_starts_at,
+      proposedEndsAt: row.proposed_ends_at,
+      observedStartsAt: row.observed_starts_at,
+      observedEndsAt: row.observed_ends_at,
+      detectedAt: row.detected_at,
+      contactName: contact?.name ?? "Turno",
+    };
+  });
+}
+
+export interface DepositProofReview {
+  id: string;
+  appointmentId: string;
+  proofMessageId: string;
+  status: "pending" | "confirmed" | "rejected" | "more_requested";
+  acknowledgedAt: string | null;
+}
+
+/** Comprobantes esperando una decisión humana para los turnos visibles. */
+export async function loadDepositProofReviews(
+  client: SupabaseClient,
+  appointmentIds: string[],
+): Promise<DepositProofReview[]> {
+  if (appointmentIds.length === 0) return [];
+  const { data, error } = await client
+    .from("deposit_proof_reviews")
+    .select("id,appointment_id,proof_message_id,status,acknowledged_at")
+    .in("appointment_id", appointmentIds.slice(0, 200))
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+
+  return (data ?? []).map((raw) => {
+    const row = raw as unknown as {
+      id: string;
+      appointment_id: string;
+      proof_message_id: string;
+      status: DepositProofReview["status"];
+      acknowledged_at: string | null;
+    };
+    return {
+      id: row.id,
+      appointmentId: row.appointment_id,
+      proofMessageId: row.proof_message_id,
+      status: row.status,
+      acknowledgedAt: row.acknowledged_at,
+    };
+  });
+}

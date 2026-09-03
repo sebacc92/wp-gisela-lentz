@@ -1610,6 +1610,81 @@ Deno.serve(async (request) => {
       return await respondToDepositProofResult(proof);
     }
 
+    // Un comprobante que llega fuera de la ventana `waiting_deposit` —sesión
+    // vencida, turno cargado desde el panel, atención humana en curso— antes
+    // no recibía ninguna respuesta: la ejecución terminaba en `ignored` unas
+    // líneas más abajo. Ahora se acusa recibo una sola vez por archivo y el
+    // comprobante queda en la cola de revisión humana. El acuse no promete
+    // que la seña haya sido validada.
+    if (depositProofMediaMessage && !depositProofMediaContextReady) {
+      const reviewClaim = await client.rpc("claim_deposit_proof_review", {
+        p_contact_id: contact.id,
+        p_message_id: inbound.id,
+        p_received_at: executionNow.toISOString(),
+      });
+      if (reviewClaim.error) throw reviewClaim.error;
+      const review = (
+        Array.isArray(reviewClaim.data) ? reviewClaim.data[0] : reviewClaim.data
+      ) as {
+        appointment_id?: string | null;
+        recognized?: boolean;
+        acknowledge?: boolean;
+      } | null;
+
+      if (review?.recognized && review.appointment_id) {
+        if (review.acknowledge !== true) {
+          // Ya se acusó recibo de este mismo archivo. Un reintento del worker
+          // no vuelve a escribirle al paciente.
+          return await finish({
+            processed: true,
+            state: "human_handoff",
+            reason: "DEPOSIT_PROOF_ALREADY_ACKNOWLEDGED",
+            appointmentId: review.appointment_id,
+          });
+        }
+        const acknowledgement = depositProofReviewMessage(
+          appSettings.deposit_proof_received_message_template,
+          false,
+        );
+        await claimInboundHandoff(
+          client,
+          inbound.id,
+          false,
+          "deposit_proof_received",
+        );
+        await send(
+          textPayload(acknowledgement),
+          acknowledgement,
+          {
+            appointment_id: review.appointment_id,
+            proof_message_id: inbound.id,
+            deposit_review_required: true,
+            deposit_review_source: "out_of_session_media",
+          },
+          "proof_acknowledgement",
+          review.appointment_id,
+        );
+        // El acuse se marca recién DESPUÉS de que la entrega quedó registrada.
+        // Si `send` falla, el reintento vuelve a ver `acknowledge = true` y
+        // reevalúa todos los gates antes de intentar de nuevo; la clave de
+        // idempotencia del envío impide un mensaje duplicado.
+        const acknowledged = await client.rpc(
+          "mark_deposit_proof_acknowledged",
+          { p_message_id: inbound.id },
+        );
+        if (acknowledged.error) throw acknowledged.error;
+        await saveSession("human_handoff", {
+          appointmentId: review.appointment_id,
+        });
+        return await finish({
+          processed: true,
+          state: "human_handoff",
+          reason: "DEPOSIT_PROOF_PENDING_REVIEW",
+          appointmentId: review.appointment_id,
+        });
+      }
+    }
+
     if (conversation.priority === true || transcribedAudioPriority) {
       await claimInboundHandoff(client, inbound.id, true, "urgent_handoff");
       const urgentMessage =

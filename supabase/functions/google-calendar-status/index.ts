@@ -9,9 +9,18 @@ interface CalendarStatus {
   google_account_email?: string | null;
   google_calendar_name?: string | null;
   last_synced_at?: string | null;
+  last_checked_at?: string | null;
+  last_sync_completed_at?: string | null;
+  last_sync_summary?: Record<string, unknown> | null;
+  last_sync_error?: string | null;
   last_error?: string | null;
+  inbound_sync_state?: string | null;
+  inbound_first_import_approved?: boolean | null;
   pending_count?: number | string | null;
   failed_count?: number | string | null;
+  active_block_count?: number | string | null;
+  unsupported_event_count?: number | string | null;
+  pending_conflict_count?: number | string | null;
 }
 
 type CalendarConnectionState =
@@ -36,6 +45,27 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function nonNegativeSafeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+/** Sólo contadores. Ningún título de evento ni dato de paciente sale de acá. */
+function sanitizedSummary(value: unknown): Record<string, number | boolean> {
+  const source = record(value);
+  if (!source) return {};
+  const result: Record<string, number | boolean> = {};
+  for (const [key, entry] of Object.entries(source)) {
+    if (!/^[a-zA-Z]{3,40}$/.test(key)) continue;
+    if (typeof entry === "boolean") result[key] = entry;
+    else if (typeof entry === "number" && Number.isFinite(entry)) {
+      result[key] = entry;
+    }
+  }
+  return result;
+}
+
+function sanitizedErrorCode(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Z0-9_]{3,100}$/.test(value)
     ? value
     : null;
 }
@@ -127,6 +157,7 @@ export async function handleGoogleCalendarStatusRequest(
 
     // Backwards-compatible response used by the existing Calendar Settings UI.
     const connected = configured && rawConnected === true;
+    const conflictCount = Number(status?.pending_conflict_count ?? 0);
     const pendingCount = Number(status?.pending_count ?? 0);
     const failedCount = Number(status?.failed_count ?? 0);
     const connectionState = !configured
@@ -135,9 +166,11 @@ export async function handleGoogleCalendarStatusRequest(
     const state =
       connectionState === "connected" && failedCount > 0
         ? "error"
-        : connectionState === "connected" && pendingCount > 0
-          ? "pending"
-          : connectionState;
+        : connectionState === "connected" && conflictCount > 0
+          ? "attention"
+          : connectionState === "connected" && pendingCount > 0
+            ? "pending"
+            : connectionState;
 
     return jsonResponse(request, {
       configured,
@@ -146,8 +179,22 @@ export async function handleGoogleCalendarStatusRequest(
       email: status?.google_account_email ?? null,
       calendarName: status?.google_calendar_name ?? null,
       lastSyncedAt: status?.last_synced_at ?? null,
+      // «Última revisión» es lo que el panel muestra: avanza en cada corrida
+      // correcta aunque no haya habido un solo cambio para procesar.
+      lastCheckedAt: status?.last_checked_at ?? null,
+      lastSyncCompletedAt: status?.last_sync_completed_at ?? null,
+      lastSyncSummary: sanitizedSummary(status?.last_sync_summary),
+      lastSyncError: sanitizedErrorCode(status?.last_sync_error),
+      inboundSyncState:
+        typeof status?.inbound_sync_state === "string"
+          ? status.inbound_sync_state
+          : null,
+      firstImportApproved: status?.inbound_first_import_approved === true,
       pendingCount,
       failedCount,
+      blockCount: Number(status?.active_block_count ?? 0),
+      unsupportedCount: Number(status?.unsupported_event_count ?? 0),
+      conflictCount,
       message: !configured
         ? "Falta configurar Google Calendar en el servidor."
         : connectionState === "reconnect_required"

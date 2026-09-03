@@ -46,12 +46,55 @@ test("el comprobante sigue accesible después de una confirmación automática",
 
   assert.match(data, /deposit_confirmation_actor/);
   assert.match(data, /deposit_confirmation_policy_version/);
+  // El detalle rediseñado sigue abriendo el comprobante del turno y además
+  // cae al de la cola de revisión cuando el turno todavía no lo tiene enlazado.
   assert.match(
     appointments,
-    /selectedAppointment\.depositProofMessageId\s*&&\s*\(/,
+    /selectedAppointment\?\.depositProofMessageId\s*\?\?/,
   );
+  assert.match(appointments, /selectedProofMessageId \?\s*\(/);
   assert.match(appointments, /Revisar comprobante/);
   assert.match(appointments, /Confirmación de seña/);
+});
+
+test("la confirmación manual no depende de ninguna decisión de la IA", () => {
+  const appointments = source("src/routes/app/appointments/index.tsx");
+  const review = source("src/lib/deposit-review.ts");
+
+  // La acción existe aunque el comprobante no haya podido validarse solo.
+  assert.match(appointments, /canConfirmDeposit = Boolean\(/);
+  assert.match(appointments, /state\.isAdmin/);
+  assert.match(appointments, /Confirmar seña y turno/);
+  assert.match(appointments, /¿Confirmar la seña y el turno\?/);
+  assert.match(appointments, /Rechazar comprobante/);
+  assert.match(appointments, /Pedir otro comprobante/);
+
+  // La autorización vive en el RPC, nunca sólo en el navegador.
+  assert.match(review, /admin_confirm_appointment_deposit/);
+  assert.match(review, /admin_review_deposit_proof/);
+  assert.match(review, /already_confirmed/);
+  assert.match(review, /deposit-confirm-\$\{input\.appointmentId\}/);
+  assert.doesNotMatch(review, /service_role/);
+  assert.match(
+    review,
+    /No pudimos verificar el comprobante\. ¿Podés enviarnos una imagen más clara\?/,
+  );
+});
+
+test("un comprobante fuera de sesión recibe un acuse idempotente", () => {
+  const automation = source("supabase/functions/whatsapp-automation/index.ts");
+  const acknowledgement = automation.indexOf('"claim_deposit_proof_review"');
+  assert.ok(acknowledgement > 0);
+
+  const block = automation.slice(acknowledgement - 800, acknowledgement + 2200);
+  assert.match(
+    block,
+    /depositProofMediaMessage && !depositProofMediaContextReady/,
+  );
+  assert.match(block, /review\.acknowledge !== true/);
+  assert.match(block, /DEPOSIT_PROOF_ALREADY_ACKNOWLEDGED/);
+  assert.match(block, /depositProofReviewMessage\(/);
+  assert.match(block, /deposit_review_required: true/);
 });
 
 test("un archivo sólo sale hacia IA con una pre-reserva y switches vivos", () => {

@@ -514,12 +514,39 @@ function googleEventUrl(calendarId: string, eventId?: string): string {
   return `${url}?sendUpdates=none`;
 }
 
+/** Un 412 significa que el evento cambió después de que lo leímos. Nunca se
+ * fuerza la escritura: el job se reintenta y el próximo pull incremental
+ * reporta ese cambio, que se convierte en un conflicto para revisión. */
+function assertPreconditionHeld(response: Response): void {
+  if (response.status !== 412) return;
+  throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+    status: 412,
+    retryable: true,
+  });
+}
+
+async function eventEtag(response: Response): Promise<string | null> {
+  const header = response.headers.get("etag");
+  if (header) return header.slice(0, 255);
+  try {
+    const body = (await response.clone().json()) as { etag?: unknown };
+    return typeof body.etag === "string" ? body.etag.slice(0, 255) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertGoogleCalendarEvent(input: {
   accessToken: string;
   calendarId: string;
   appointment: CalendarSyncAppointment;
+  etag?: string | null;
   fetcher?: typeof fetch;
-}): Promise<{ eventId: string; operation: "inserted" | "patched" }> {
+}): Promise<{
+  eventId: string;
+  operation: "inserted" | "patched";
+  etag: string | null;
+}> {
   const fetcher = input.fetcher ?? fetch;
   const eventId = deterministicGoogleEventId(input.appointment.appointment_id);
   const insertResponse = await googleFetch(
@@ -543,6 +570,7 @@ export async function upsertGoogleCalendarEvent(input: {
   }
 
   if (insertResponse.status === 409) {
+    const conditionalEtag = input.etag?.trim();
     const patchResponse = await googleFetch(
       fetcher,
       googleEventUrl(input.calendarId, eventId),
@@ -551,10 +579,12 @@ export async function upsertGoogleCalendarEvent(input: {
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
           "Content-Type": "application/json",
+          ...(conditionalEtag ? { "If-Match": conditionalEtag } : {}),
         },
         body: JSON.stringify(googleCalendarEventPayload(input.appointment)),
       },
     );
+    assertPreconditionHeld(patchResponse);
     if (patchResponse.status === 404 || patchResponse.status === 410) {
       // Google conserva tombstones de eventos eliminados. Un ID determinista
       // no se puede recrear inmediatamente; el worker conserva el job para
@@ -565,31 +595,60 @@ export async function upsertGoogleCalendarEvent(input: {
       });
     }
     await assertGoogleResponse(patchResponse, "GOOGLE_EVENT_PATCH_FAILED");
-    return { eventId, operation: "patched" };
+    return {
+      eventId,
+      operation: "patched",
+      etag: await eventEtag(patchResponse),
+    };
   }
 
   await assertGoogleResponse(insertResponse, "GOOGLE_EVENT_INSERT_FAILED");
-  return { eventId, operation: "inserted" };
+  return {
+    eventId,
+    operation: "inserted",
+    etag: await eventEtag(insertResponse),
+  };
+}
+
+export async function deleteGoogleCalendarEventById(input: {
+  accessToken: string;
+  calendarId: string;
+  eventId: string;
+  etag?: string | null;
+  fetcher?: typeof fetch;
+}): Promise<void> {
+  const fetcher = input.fetcher ?? fetch;
+  const conditionalEtag = input.etag?.trim();
+  const response = await googleFetch(
+    fetcher,
+    googleEventUrl(input.calendarId, input.eventId),
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${input.accessToken}`,
+        ...(conditionalEtag ? { "If-Match": conditionalEtag } : {}),
+      },
+    },
+  );
+  assertPreconditionHeld(response);
+  if (response.ok || response.status === 404 || response.status === 410) return;
+  await assertGoogleResponse(response, "GOOGLE_EVENT_DELETE_FAILED");
 }
 
 export async function deleteGoogleCalendarEvent(input: {
   accessToken: string;
   calendarId: string;
   appointmentId: string;
+  etag?: string | null;
   fetcher?: typeof fetch;
 }): Promise<void> {
-  const fetcher = input.fetcher ?? fetch;
-  const eventId = deterministicGoogleEventId(input.appointmentId);
-  const response = await googleFetch(
-    fetcher,
-    googleEventUrl(input.calendarId, eventId),
-    {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${input.accessToken}` },
-    },
-  );
-  if (response.ok || response.status === 404 || response.status === 410) return;
-  await assertGoogleResponse(response, "GOOGLE_EVENT_DELETE_FAILED");
+  await deleteGoogleCalendarEventById({
+    accessToken: input.accessToken,
+    calendarId: input.calendarId,
+    eventId: deterministicGoogleEventId(input.appointmentId),
+    etag: input.etag,
+    fetcher: input.fetcher,
+  });
 }
 
 export async function revokeGoogleToken(
@@ -613,4 +672,236 @@ export function safeGoogleErrorCode(error: unknown): string {
 
 export function googleErrorRetryable(error: unknown): boolean {
   return error instanceof GoogleIntegrationError && error.retryable;
+}
+
+// ---------------------------------------------------------------------------
+// Lectura incremental del calendario dedicado (Google -> App)
+// ---------------------------------------------------------------------------
+//
+// El scope `calendar.app.created` habilita `events.list` sobre los calendarios
+// secundarios creados por la aplicación, así que no hace falta ampliar
+// permisos para leer. Se usa el sync token oficial: la primera corrida pagina
+// hasta obtener `nextSyncToken` y las siguientes envían `syncToken`.
+
+export const GOOGLE_MANAGED_BY = "gisela_lentz_agenda";
+
+export interface GoogleCalendarEventTime {
+  dateTime?: string;
+  date?: string;
+  timeZone?: string;
+}
+
+export interface GoogleCalendarEvent {
+  id?: string;
+  status?: string;
+  summary?: string;
+  etag?: string;
+  updated?: string;
+  recurrence?: string[];
+  recurringEventId?: string;
+  start?: GoogleCalendarEventTime;
+  end?: GoogleCalendarEventTime;
+  extendedProperties?: { private?: Record<string, string> };
+}
+
+export interface GoogleCalendarEventsPage {
+  items: GoogleCalendarEvent[];
+  nextPageToken: string | null;
+  nextSyncToken: string | null;
+}
+
+export async function listGoogleCalendarEvents(input: {
+  accessToken: string;
+  calendarId: string;
+  syncToken?: string | null;
+  pageToken?: string | null;
+  maxResults?: number;
+  fetcher?: typeof fetch;
+}): Promise<GoogleCalendarEventsPage> {
+  const fetcher = input.fetcher ?? fetch;
+  const url = new URL(
+    `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(input.calendarId)}/events`,
+  );
+  url.searchParams.set(
+    "maxResults",
+    String(Math.max(1, Math.min(input.maxResults ?? 250, 2500))),
+  );
+  // Sin `singleEvents`: una serie recurrente se reporta como no soportada en
+  // vez de expandirse en instancias inventadas.
+  url.searchParams.set("showDeleted", "true");
+  if (input.syncToken) {
+    url.searchParams.set("syncToken", input.syncToken);
+  }
+  if (input.pageToken) url.searchParams.set("pageToken", input.pageToken);
+
+  const response = await googleFetch(fetcher, url.toString(), {
+    headers: { Authorization: `Bearer ${input.accessToken}` },
+  });
+
+  if (response.status === 410) {
+    // El sync token caducó. Quien llama debe reintentar sin token.
+    throw new GoogleIntegrationError("GOOGLE_SYNC_TOKEN_EXPIRED", {
+      status: 410,
+      retryable: false,
+    });
+  }
+  if (response.status === 404) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_RECONNECT_REQUIRED", {
+      status: 404,
+      retryable: true,
+    });
+  }
+  await assertGoogleResponse(response, "GOOGLE_EVENTS_LIST_FAILED");
+  const page = await parseJson<{
+    items?: unknown;
+    nextPageToken?: unknown;
+    nextSyncToken?: unknown;
+  }>(response, "GOOGLE_EVENTS_LIST_INVALID");
+
+  return {
+    items: Array.isArray(page.items)
+      ? (page.items as GoogleCalendarEvent[])
+      : [],
+    nextPageToken:
+      typeof page.nextPageToken === "string" && page.nextPageToken
+        ? page.nextPageToken
+        : null,
+    nextSyncToken:
+      typeof page.nextSyncToken === "string" && page.nextSyncToken
+        ? page.nextSyncToken
+        : null,
+  };
+}
+
+export type UnsupportedGoogleEventReason =
+  | "ALL_DAY"
+  | "RECURRING"
+  | "MISSING_RANGE"
+  | "INVALID_RANGE";
+
+export type ClassifiedGoogleEvent =
+  | {
+      kind: "managed";
+      eventId: string;
+      appointmentId: string;
+      cancelled: boolean;
+      startsAt: string | null;
+      endsAt: string | null;
+      updatedAt: string | null;
+      etag: string | null;
+    }
+  | {
+      kind: "external_block";
+      eventId: string;
+      summary: string | null;
+      startsAt: string;
+      endsAt: string;
+      etag: string | null;
+      updatedAt: string | null;
+    }
+  | {
+      kind: "external_unsupported";
+      eventId: string;
+      reason: UnsupportedGoogleEventReason;
+      summary: string | null;
+      etag: string | null;
+      updatedAt: string | null;
+    }
+  | { kind: "external_removed"; eventId: string; updatedAt: string | null }
+  | { kind: "ignored"; eventId: string | null; reason: string };
+
+const APPOINTMENT_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isoOrNull(value: string | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
+ * Distingue lo que administra la aplicación de lo que alguien creó a mano.
+ * `extendedProperties.private` es la señal primaria; el id determinista actúa
+ * de respaldo por si alguien editó las propiedades en Google.
+ */
+export function classifyGoogleCalendarEvent(
+  event: GoogleCalendarEvent,
+): ClassifiedGoogleEvent {
+  const eventId = typeof event.id === "string" ? event.id.trim() : "";
+  if (!eventId) return { kind: "ignored", eventId: null, reason: "NO_ID" };
+
+  const properties = event.extendedProperties?.private ?? {};
+  const declaredAppointmentId =
+    properties.managed_by === GOOGLE_MANAGED_BY &&
+    typeof properties.appointment_id === "string" &&
+    APPOINTMENT_UUID_PATTERN.test(properties.appointment_id.trim())
+      ? properties.appointment_id.trim()
+      : null;
+  const deterministicMatch = /^gl([0-9a-f]{32})$/.exec(eventId);
+  const derivedAppointmentId = deterministicMatch
+    ? [
+        deterministicMatch[1].slice(0, 8),
+        deterministicMatch[1].slice(8, 12),
+        deterministicMatch[1].slice(12, 16),
+        deterministicMatch[1].slice(16, 20),
+        deterministicMatch[1].slice(20),
+      ].join("-")
+    : null;
+  const appointmentId = declaredAppointmentId ?? derivedAppointmentId;
+  const cancelled = event.status === "cancelled";
+  const updatedAt = isoOrNull(event.updated);
+
+  if (appointmentId) {
+    return {
+      kind: "managed",
+      eventId,
+      appointmentId,
+      cancelled,
+      startsAt: isoOrNull(event.start?.dateTime),
+      endsAt: isoOrNull(event.end?.dateTime),
+      updatedAt,
+      etag: typeof event.etag === "string" ? event.etag.slice(0, 255) : null,
+    };
+  }
+
+  if (cancelled) return { kind: "external_removed", eventId, updatedAt };
+
+  const summary =
+    typeof event.summary === "string" && event.summary.trim()
+      ? event.summary.trim().slice(0, 120)
+      : null;
+  const etag = typeof event.etag === "string" ? event.etag.slice(0, 255) : null;
+  const unsupported = (reason: UnsupportedGoogleEventReason) =>
+    ({
+      kind: "external_unsupported",
+      eventId,
+      reason,
+      summary,
+      etag,
+      updatedAt,
+    }) as const;
+
+  if (
+    (Array.isArray(event.recurrence) && event.recurrence.length > 0) ||
+    typeof event.recurringEventId === "string"
+  ) {
+    return unsupported("RECURRING");
+  }
+  if (event.start?.date || event.end?.date) return unsupported("ALL_DAY");
+
+  const startsAt = isoOrNull(event.start?.dateTime);
+  const endsAt = isoOrNull(event.end?.dateTime);
+  if (!startsAt || !endsAt) return unsupported("MISSING_RANGE");
+  if (new Date(endsAt) <= new Date(startsAt))
+    return unsupported("INVALID_RANGE");
+
+  return {
+    kind: "external_block",
+    eventId,
+    summary,
+    startsAt,
+    endsAt,
+    etag,
+    updatedAt,
+  };
 }

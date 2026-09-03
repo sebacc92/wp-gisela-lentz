@@ -8265,3 +8265,439 @@ textarea::placeholder {
     color: var(--danger);
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Detalle de turno: drawer legible
+   ---------------------------------------------------------------------------
+   El panel de detalle compartía el ancho de 400px de los demás drawers y su
+   contenido no tenía padding lateral propio: `.drawer-content` sólo aporta el
+   scroll, y a diferencia de `.appointment-form` nadie agregaba márgenes. Por
+   eso el texto quedaba pegado al borde y las acciones amontonadas.
+   --------------------------------------------------------------------------- */
+
+.drawer.appointment-detail-drawer {
+  width: clamp(420px, 34vw, 540px);
+  max-width: 100vw;
+}
+
+.detail-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  align-items: flex-start;
+  padding: 16px 20px 14px 24px;
+  background: #fff;
+  gap: 12px;
+}
+
+.detail-drawer-header h2 {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.appointment-detail-content {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+  padding: 20px 24px 24px;
+}
+
+.detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-badge {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 11px;
+  background: var(--surface-soft);
+  color: var(--ink-700);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.detail-badge-deposit {
+  border: 1px solid var(--line-strong);
+  background: #fff;
+}
+
+.detail-badge-deposit.confirmed {
+  border-color: #bcd7c8;
+  background: var(--sage-soft);
+  color: #2f5a45;
+}
+
+.detail-badge-deposit.attention {
+  border-color: #e8d2ae;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.detail-badge-deposit.expired {
+  border-color: #e5c8ca;
+  background: #fdf1f2;
+  color: var(--danger);
+}
+
+.detail-section {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detail-section:last-of-type {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.detail-section > h3 {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+/* Las reglas históricas `.appointment-detail-content dl` y `... dl div` pintan
+   un separador y 14px de padding bajo CADA campo. Acá los separadores los pone
+   la sección, así que estos selectores igualan su especificidad para anularlos. */
+.appointment-detail-content .detail-grid {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.appointment-detail-content .detail-grid > div {
+  display: grid;
+  gap: 3px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.appointment-detail-content .detail-grid dt {
+  color: var(--ink-500);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.appointment-detail-content .detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-900);
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.45;
+}
+
+.detail-note {
+  margin: 0;
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: var(--surface-soft);
+  color: var(--ink-800);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.detail-hint {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.detail-inline-action {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.detail-drawer-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 14px 24px calc(16px + env(safe-area-inset-bottom));
+  background: #fff;
+  box-shadow: 0 -8px 20px rgb(52 43 49 / 6%);
+}
+
+.detail-drawer-actions:empty {
+  display: none;
+}
+
+.detail-action-primary {
+  min-height: 44px;
+  width: 100%;
+}
+
+.detail-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.detail-action-row > button {
+  min-height: 44px;
+  width: 100%;
+}
+
+.detail-action-row > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* Con poco ancho las acciones pasan a una sola columna: dos botones con textos
+   como «Pedir otro comprobante» no entran sin romperse. */
+@media (max-width: 900px) {
+  .drawer.appointment-detail-drawer {
+    width: min(480px, 100vw);
+  }
+}
+
+@media (max-width: 680px) {
+  /* En un teléfono la hoja se recorre como una sola página: si el cuerpo y el
+     pie compiten por el alto, queda una ventana de lectura de unos 200px. */
+  .drawer.appointment-detail-drawer {
+    width: 100%;
+    height: min(94dvh, 900px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .drawer.appointment-detail-drawer .appointment-detail-content {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .detail-drawer-header {
+    padding: 14px 16px 12px 18px;
+  }
+
+  .appointment-detail-content {
+    gap: 18px;
+    padding: 18px 18px 20px;
+  }
+
+  /* Con seis acciones apiladas un pie fijo se comería la hoja entera en un
+     teléfono chico: acá el pie acompaña al scroll y el header queda sticky. */
+  .detail-drawer-actions {
+    position: static;
+    padding: 14px 18px calc(16px + env(safe-area-inset-bottom));
+    box-shadow: none;
+  }
+
+  .detail-action-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Bloqueos importados de Google Calendar. */
+.agenda-blocks {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--surface-soft);
+}
+
+.agenda-blocks h2 {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.agenda-blocks ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agenda-blocks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--ink-800);
+  font-size: 13px;
+}
+
+.agenda-blocks li strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.agenda-blocks li span {
+  overflow-wrap: anywhere;
+}
+
+.agenda-blocks small {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+/* Primera importación y conflictos de Google Calendar. */
+.calendar-first-import,
+.calendar-conflicts {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--surface-soft);
+}
+
+.calendar-conflicts {
+  border-color: #e8d2ae;
+  background: var(--warning-soft);
+}
+
+.calendar-first-import h3,
+.calendar-conflicts h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.calendar-first-import > p,
+.calendar-conflicts > p {
+  margin: 0;
+  color: var(--ink-600);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.calendar-preview-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-700);
+  font-size: 13px;
+}
+
+.calendar-first-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.calendar-first-import-actions > button {
+  min-height: 44px;
+  flex: 1 1 190px;
+}
+
+.calendar-conflicts ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calendar-conflicts li {
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+}
+
+.calendar-conflicts li > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.calendar-conflicts li span {
+  color: var(--ink-600);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.calendar-conflict-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.calendar-conflict-actions > button {
+  min-height: 44px;
+  width: 100%;
+}
+
+@media (max-width: 680px) {
+  .calendar-conflict-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* La explicación de una acción deshabilitada tiene que verse también en un
+   teléfono: un `title` sólo aparece al pasar el puntero. */
+.detail-disabled-hint {
+  margin: 0;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: var(--surface-soft);
+  color: var(--ink-600);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.agenda-block-action {
+  min-height: 34px;
+  margin-left: auto;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+
+.convert-block-summary {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+
+.convert-block-summary > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.convert-block-summary strong {
+  font-size: 14px;
+}
+
+.convert-block-summary span {
+  overflow-wrap: anywhere;
+  color: var(--ink-500);
+  font-size: 12.5px;
+}
