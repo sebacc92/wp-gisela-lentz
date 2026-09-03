@@ -28,6 +28,7 @@ import type { ProfessionalOption, ServiceOption } from "~/lib/inbox-types";
 import type { BookingDurationSettings, DepositStatus } from "~/lib/inbox-types";
 import {
   confirmDepositManually,
+  describeDepositConfirmationError,
   reviewDepositProof,
   type DepositReviewDecision,
 } from "~/lib/deposit-review";
@@ -403,7 +404,7 @@ export default component$(() => {
     });
     if (
       !window.confirm(
-        `¿Confirmar la seña y el turno?\n\nPaciente: ${appointment.contactName}\nFecha: ${dateAndTime}\nServicio: ${appointment.serviceName}\n\nEl turno queda confirmado y se le avisa por WhatsApp.`,
+        `¿Confirmar la seña y el turno?\n\nPaciente: ${appointment.contactName}\nFecha: ${dateAndTime}\nServicio: ${appointment.serviceName}\n\nQueda registrado como tu decisión: el sistema no verifica la transferencia con el banco. El turno queda confirmado y se le avisa por WhatsApp.`,
       )
     ) {
       return;
@@ -416,7 +417,9 @@ export default component$(() => {
         startsAt: appointment.startsAt,
       });
       if (!result.confirmed) {
-        notice.value = "No pudimos confirmar la seña. Intentá nuevamente.";
+        notice.value = describeDepositConfirmationError(
+          result.error ?? "UNKNOWN",
+        );
         return;
       }
       selectedId.value = "";
@@ -1086,9 +1089,19 @@ export default component$(() => {
                       : "Ver comprobante"}
                   </a>
                 ) : (
-                  <p class="detail-hint">
-                    Todavía no recibimos un comprobante por WhatsApp.
-                  </p>
+                  <>
+                    <p class="detail-hint">
+                      No hay un comprobante asociado a este turno. Puede haber
+                      llegado sin que la automatización lo asociara.
+                    </p>
+                    <a
+                      class="secondary-button detail-inline-action"
+                      href={`/app/inbox?patient=${selectedAppointment.contactId}`}
+                    >
+                      <Icon name="message" size={17} />
+                      Ver conversación
+                    </a>
+                  </>
                 )}
               </section>
 
@@ -1099,12 +1112,6 @@ export default component$(() => {
                 </section>
               )}
 
-              {selectedAppointmentActive && !selectedAppointmentHasStarted && (
-                <p class="detail-hint" role="note">
-                  Vas a poder marcar “Atendido” o “No asistió” después de la
-                  hora del turno.
-                </p>
-              )}
               {selectedAppointmentActive && !state.isAdmin && (
                 <p class="detail-hint" role="note">
                   Confirmar o rechazar una seña lo hace la persona
@@ -1114,6 +1121,16 @@ export default component$(() => {
             </div>
 
             <footer class="detail-drawer-actions">
+              {selectedAppointmentActive && !selectedAppointmentHasStarted && (
+                <p
+                  class="detail-disabled-hint"
+                  id="detail-attendance-hint"
+                  role="note"
+                >
+                  “Marcar atendido” y “No asistió” se habilitan después de la
+                  hora del turno.
+                </p>
+              )}
               {canConfirmDeposit && (
                 <button
                   class="primary-button detail-action-primary"
@@ -1168,10 +1185,10 @@ export default component$(() => {
                     class="secondary-button"
                     type="button"
                     disabled={detailBusy || !selectedAppointmentHasStarted}
-                    title={
+                    aria-describedby={
                       selectedAppointmentHasStarted
                         ? undefined
-                        : "Disponible después de la hora del turno"
+                        : "detail-attendance-hint"
                     }
                     onClick$={() =>
                       changeStatus(selectedAppointment, "completed")
@@ -1185,10 +1202,10 @@ export default component$(() => {
                     class="secondary-button"
                     type="button"
                     disabled={detailBusy || !selectedAppointmentHasStarted}
-                    title={
+                    aria-describedby={
                       selectedAppointmentHasStarted
                         ? undefined
-                        : "Disponible después de la hora del turno"
+                        : "detail-attendance-hint"
                     }
                     onClick$={() =>
                       changeStatus(selectedAppointment, "no_show")

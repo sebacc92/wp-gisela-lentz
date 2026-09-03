@@ -1664,6 +1664,15 @@ Deno.serve(async (request) => {
           "proof_acknowledgement",
           review.appointment_id,
         );
+        // El acuse se marca recién DESPUÉS de que la entrega quedó registrada.
+        // Si `send` falla, el reintento vuelve a ver `acknowledge = true` y
+        // reevalúa todos los gates antes de intentar de nuevo; la clave de
+        // idempotencia del envío impide un mensaje duplicado.
+        const acknowledged = await client.rpc(
+          "mark_deposit_proof_acknowledged",
+          { p_message_id: inbound.id },
+        );
+        if (acknowledged.error) throw acknowledged.error;
         await saveSession("human_handoff", {
           appointmentId: review.appointment_id,
         });

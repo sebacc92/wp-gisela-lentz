@@ -8655,3 +8655,15 @@ textarea::placeholder {
     grid-template-columns: 1fr;
   }
 }
+
+/* La explicación de una acción deshabilitada tiene que verse también en un
+   teléfono: un `title` sólo aparece al pasar el puntero. */
+.detail-disabled-hint {
+  margin: 0;
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: var(--surface-soft);
+  color: var(--ink-600);
+  font-size: 12.5px;
+  line-height: 1.45;
+}

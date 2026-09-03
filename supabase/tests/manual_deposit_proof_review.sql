@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(15);
+select plan(17);
 
 select ok(
   has_function_privilege('authenticated', 'public.admin_confirm_appointment_deposit(uuid)', 'EXECUTE')
@@ -98,6 +98,27 @@ select ok(
   'el primer comprobante se asocia al turno y habilita un acuse de recibo'
 );
 
+-- Mientras el acuse no se haya entregado, un reintento debe volver a
+-- intentarlo: darlo por enviado dejaría al paciente sin ninguna respuesta.
+select ok(
+  (
+    select claim.recognized and claim.acknowledge
+    from public.claim_deposit_proof_review(
+      '96000000-0000-4000-8000-000000000004',
+      '96000000-0000-4000-8000-000000000007',
+      clock_timestamp()
+    ) claim
+  ),
+  'un acuse todavía sin entregar se puede reintentar'
+);
+
+select ok(
+  public.mark_deposit_proof_acknowledged(
+    '96000000-0000-4000-8000-000000000007'
+  ),
+  'el acuse se marca recién después de entregarlo'
+);
+
 select ok(
   (
     select claim.recognized and not claim.acknowledge
@@ -107,7 +128,7 @@ select ok(
       clock_timestamp()
     ) claim
   ),
-  'reprocesar el mismo archivo no vuelve a acusar recibo'
+  'entregado el acuse, reprocesar el mismo archivo no vuelve a saludar'
 );
 
 select is(

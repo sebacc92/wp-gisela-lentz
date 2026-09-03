@@ -56,11 +56,54 @@ async function sendOperatorMessage(
   }
 }
 
+export type DepositConfirmationError =
+  | "ADMIN_REQUIRED"
+  | "APPOINTMENT_NOT_SCHEDULED"
+  | "APPOINTMENT_ALREADY_STARTED"
+  | "SLOT_NO_LONGER_AVAILABLE"
+  | "UNKNOWN";
+
 export interface ManualDepositConfirmation {
   confirmed: boolean;
   alreadyConfirmed: boolean;
   notified: boolean;
-  error: string | null;
+  error: DepositConfirmationError | null;
+}
+
+/** Los códigos del RPC son estables; cualquier otra cosa se reporta genérica. */
+export function depositConfirmationError(
+  message: unknown,
+): DepositConfirmationError {
+  const text = typeof message === "string" ? message : "";
+  if (text.includes("ADMIN_REQUIRED")) return "ADMIN_REQUIRED";
+  if (text.includes("SLOT_NO_LONGER_AVAILABLE")) {
+    return "SLOT_NO_LONGER_AVAILABLE";
+  }
+  if (text.includes("APPOINTMENT_ALREADY_STARTED")) {
+    return "APPOINTMENT_ALREADY_STARTED";
+  }
+  if (text.includes("APPOINTMENT_NOT_SCHEDULED")) {
+    return "APPOINTMENT_NOT_SCHEDULED";
+  }
+  return "UNKNOWN";
+}
+
+/** Explica qué acción corresponde, en vez de un "no pudimos" sin salida. */
+export function describeDepositConfirmationError(
+  error: DepositConfirmationError,
+): string {
+  switch (error) {
+    case "SLOT_NO_LONGER_AVAILABLE":
+      return "La reserva venció y ese horario ya está ocupado. Reprogramá el turno antes de confirmar la seña.";
+    case "APPOINTMENT_ALREADY_STARTED":
+      return "La reserva venció y el horario ya pasó. Reprogramá el turno para poder confirmarlo.";
+    case "APPOINTMENT_NOT_SCHEDULED":
+      return "Este turno ya no está pendiente de seña. Actualizá la agenda para ver su estado.";
+    case "ADMIN_REQUIRED":
+      return "Confirmar una seña lo hace la persona administradora.";
+    default:
+      return "No pudimos confirmar la seña. No se hicieron cambios; intentá de nuevo.";
+  }
 }
 
 /**
@@ -86,7 +129,7 @@ export async function confirmDepositManually(
       confirmed: false,
       alreadyConfirmed: false,
       notified: false,
-      error: error.message ?? "UNKNOWN",
+      error: depositConfirmationError(error.message),
     };
   }
   const row = (Array.isArray(data) ? data[0] : data) as {
