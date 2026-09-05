@@ -242,7 +242,100 @@ Deno.test("un código de error de sincronización llega sanitizado", async () =>
   );
   const body = (await response.json()) as Record<string, unknown>;
   assert.equal(body.lastSyncError, null);
+  // Aunque un detalle inesperado no se exponga, tampoco se anuncia un estado
+  // saludable mientras la base informa una falla de sincronización.
+  assert.equal(body.status, "error");
 });
+
+Deno.test(
+  "el panel no anuncia sincronización completa antes de aprobar la primera importación",
+  async () => {
+    const client = {
+      rpc: () =>
+        Promise.resolve({
+          data: [
+            {
+              connected: true,
+              status: "connected",
+              last_checked_at: null,
+              last_sync_completed_at: null,
+              last_sync_error: null,
+              inbound_sync_state: "awaiting_first_import",
+              inbound_first_import_approved: false,
+              pending_count: 0,
+              failed_count: 0,
+              active_block_count: 0,
+              unsupported_event_count: 0,
+              pending_conflict_count: 0,
+            },
+          ],
+          error: null,
+        }),
+    } as unknown as SupabaseClient;
+
+    const response = await handleGoogleCalendarStatusRequest(
+      new Request("http://127.0.0.1/functions/v1/google-calendar-status"),
+      {
+        createClient: () => client,
+        authorize: authorization("ADMIN"),
+        environment: (name) => CALENDAR_ENVIRONMENT[name],
+      },
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 200);
+    assert.equal(body.status, "first_import_required");
+    assert.equal(body.firstImportApproved, false);
+    assert.equal(body.lastCheckedAt, null);
+    assert.equal(
+      body.message,
+      "Falta revisar y habilitar la importación inicial.",
+    );
+  },
+);
+
+Deno.test(
+  "el panel distingue importación aprobada de primera sincronización completada",
+  async () => {
+    const client = {
+      rpc: () =>
+        Promise.resolve({
+          data: [
+            {
+              connected: true,
+              status: "connected",
+              last_checked_at: null,
+              last_sync_completed_at: null,
+              last_sync_error: null,
+              inbound_sync_state: "full_resync_required",
+              inbound_first_import_approved: true,
+              pending_count: 0,
+              failed_count: 0,
+              active_block_count: 0,
+              unsupported_event_count: 0,
+              pending_conflict_count: 0,
+            },
+          ],
+          error: null,
+        }),
+    } as unknown as SupabaseClient;
+
+    const response = await handleGoogleCalendarStatusRequest(
+      new Request("http://127.0.0.1/functions/v1/google-calendar-status"),
+      {
+        createClient: () => client,
+        authorize: authorization("ADMIN"),
+        environment: (name) => CALENDAR_ENVIRONMENT[name],
+      },
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 200);
+    assert.equal(body.status, "initial_sync_required");
+    assert.equal(body.firstImportApproved, true);
+    assert.equal(body.message, "La primera sincronización todavía no terminó.");
+  },
+);
 
 Deno.test(
   "un OPERADOR no recibe identidad de cuenta ni calendario",

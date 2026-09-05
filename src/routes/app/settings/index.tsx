@@ -18,6 +18,11 @@ import {
   parseCalendarSyncOutcome,
   parseCalendarSyncSummary,
 } from "~/lib/calendar-sync-summary";
+import {
+  canRunManualGoogleCalendarSync,
+  googleCalendarSyncStatus,
+  type GoogleCalendarSyncStatus,
+} from "~/lib/google-calendar-ui-state";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
   loadCalendarConflicts,
@@ -267,23 +272,6 @@ function parseSelectableGoogleCalendars(
     });
   }
   return calendars;
-}
-
-type GoogleCalendarSyncStatus =
-  | "synced"
-  | "pending"
-  | "attention"
-  | "reconnect";
-
-function calendarSyncStatus(value: unknown): GoogleCalendarSyncStatus {
-  if (["pending", "syncing", "queued"].includes(String(value))) {
-    return "pending";
-  }
-  if (["reconnect", "reconnect_required", "expired"].includes(String(value))) {
-    return "reconnect";
-  }
-  if (["attention", "error"].includes(String(value))) return "attention";
-  return "synced";
 }
 
 function formatLastCalendarSync(value: string): string {
@@ -628,14 +616,22 @@ export default component$(() => {
       googleCalendar.email = typeof data.email === "string" ? data.email : "";
       googleCalendar.calendarName =
         typeof data.calendarName === "string" ? data.calendarName : "";
-      googleCalendar.syncStatus = calendarSyncStatus(data.status);
-      googleCalendar.lastCheckedAt =
+      const lastCheckedAt =
         typeof data.lastCheckedAt === "string" ? data.lastCheckedAt : "";
+      const inboundSyncState =
+        typeof data.inboundSyncState === "string" ? data.inboundSyncState : "";
+      const firstImportApproved = data.firstImportApproved === true;
+      googleCalendar.lastCheckedAt = lastCheckedAt;
       googleCalendar.lastSyncError =
         typeof data.lastSyncError === "string" ? data.lastSyncError : "";
-      googleCalendar.inboundSyncState =
-        typeof data.inboundSyncState === "string" ? data.inboundSyncState : "";
-      googleCalendar.firstImportApproved = data.firstImportApproved === true;
+      googleCalendar.inboundSyncState = inboundSyncState;
+      googleCalendar.firstImportApproved = firstImportApproved;
+      googleCalendar.syncStatus = googleCalendarSyncStatus({
+        status: data.status,
+        firstImportApproved,
+        inboundSyncState,
+        lastCheckedAt,
+      });
       googleCalendar.blockCount = Number(data.blockCount ?? 0);
       googleCalendar.unsupportedCount = Number(data.unsupportedCount ?? 0);
       googleCalendar.conflictCount = Number(data.conflictCount ?? 0);
@@ -2222,7 +2218,10 @@ export default component$(() => {
                         <span
                           class={{
                             "google-calendar-state": true,
-                            pending: googleCalendar.syncStatus === "pending",
+                            pending:
+                              googleCalendar.syncStatus === "pending" ||
+                              googleCalendar.syncStatus === "first_import" ||
+                              googleCalendar.syncStatus === "not_checked",
                             reconnect:
                               googleCalendar.syncStatus === "reconnect" ||
                               googleCalendar.syncStatus === "attention",
@@ -2232,11 +2231,15 @@ export default component$(() => {
                           <i />
                           {googleCalendar.syncStatus === "pending"
                             ? "Sincronizando"
-                            : googleCalendar.syncStatus === "attention"
-                              ? "Revisar sincronización"
-                              : googleCalendar.syncStatus === "reconnect"
-                                ? "Volver a conectar"
-                                : "Todo al día"}
+                            : googleCalendar.syncStatus === "first_import"
+                              ? "Importación pendiente"
+                              : googleCalendar.syncStatus === "not_checked"
+                                ? "Sin revisión"
+                                : googleCalendar.syncStatus === "attention"
+                                  ? "Revisar sincronización"
+                                  : googleCalendar.syncStatus === "reconnect"
+                                    ? "Volver a conectar"
+                                    : "Todo al día"}
                         </span>
                       </div>
 
@@ -2360,7 +2363,11 @@ export default component$(() => {
                           )}
                           <div class="calendar-first-import-actions">
                             <button
-                              class="secondary-button"
+                              class={
+                                googleCalendar.preview
+                                  ? "secondary-button"
+                                  : "primary-button"
+                              }
                               type="button"
                               disabled={
                                 Boolean(googleCalendar.action) ||
@@ -2405,7 +2412,7 @@ export default component$(() => {
                             >
                               {googleCalendar.action === "preview"
                                 ? "Revisando…"
-                                : "Ver qué hay en Google"}
+                                : "1. Ver qué hay en Google"}
                             </button>
                             <button
                               class="primary-button"
@@ -2462,7 +2469,9 @@ export default component$(() => {
                             >
                               {googleCalendar.action === "approve"
                                 ? "Habilitando…"
-                                : "Habilitar importación"}
+                                : googleCalendar.preview
+                                  ? "2. Habilitar importación"
+                                  : "2. Primero revisá el calendario"}
                             </button>
                           </div>
                         </div>
@@ -2725,10 +2734,23 @@ export default component$(() => {
                             }
                             type="button"
                             disabled={
+                              !canRunManualGoogleCalendarSync(
+                                googleCalendar.firstImportApproved,
+                              ) ||
                               Boolean(googleCalendar.action) ||
                               Boolean(googleCalendar.resolving)
                             }
                             onClick$={async () => {
+                              if (
+                                !canRunManualGoogleCalendarSync(
+                                  googleCalendar.firstImportApproved,
+                                )
+                              ) {
+                                googleCalendar.error = false;
+                                googleCalendar.message =
+                                  "Primero revisá qué hay en Google y habilitá la importación.";
+                                return;
+                              }
                               if (
                                 Boolean(googleCalendar.action) ||
                                 Boolean(googleCalendar.resolving)
@@ -2797,9 +2819,11 @@ export default component$(() => {
                               }
                             }}
                           >
-                            {googleCalendar.action === "sync"
-                              ? "Sincronizando…"
-                              : "Sincronizar ahora"}
+                            {!googleCalendar.firstImportApproved
+                              ? "Habilitá la importación primero"
+                              : googleCalendar.action === "sync"
+                                ? "Sincronizando…"
+                                : "Sincronizar ahora"}
                           </button>
                           <button
                             class="secondary-button danger-button"

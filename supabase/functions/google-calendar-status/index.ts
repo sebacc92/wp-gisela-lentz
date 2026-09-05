@@ -166,11 +166,20 @@ export async function handleGoogleCalendarStatusRequest(
     const state =
       connectionState === "connected" && failedCount > 0
         ? "error"
-        : connectionState === "connected" && conflictCount > 0
-          ? "attention"
-          : connectionState === "connected" && pendingCount > 0
-            ? "pending"
-            : connectionState;
+        : connectionState === "connected" && status?.last_sync_error
+          ? "error"
+          : connectionState === "connected" && conflictCount > 0
+            ? "attention"
+            : connectionState === "connected" && pendingCount > 0
+              ? "pending"
+              : connectionState === "connected" &&
+                  status?.inbound_first_import_approved !== true
+                ? "first_import_required"
+                : connectionState === "connected" &&
+                    (status?.inbound_sync_state !== "incremental" ||
+                      !status?.last_sync_completed_at)
+                  ? "initial_sync_required"
+                  : connectionState;
 
     return jsonResponse(request, {
       configured,
@@ -206,9 +215,15 @@ export async function handleGoogleCalendarStatusRequest(
           ? "Google ya autorizó la cuenta. Falta elegir el calendario."
           : connectionState === "reconnect_required"
             ? "Google pidió volver a conectar la cuenta."
-            : connected
-              ? "Los turnos se sincronizan automáticamente."
-              : "Google Calendar todavía no está conectado.",
+            : connected && status?.inbound_first_import_approved !== true
+              ? "Falta revisar y habilitar la importación inicial."
+              : connected &&
+                  (status?.inbound_sync_state !== "incremental" ||
+                    !status?.last_sync_completed_at)
+                ? "La primera sincronización todavía no terminó."
+                : connected
+                  ? "Los turnos se sincronizan automáticamente."
+                  : "Google Calendar todavía no está conectado.",
     });
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {

@@ -95,6 +95,35 @@ test("la primera importación exige un preview completo y compatible", () => {
   assert.match(page, /googleCalendar\.preview\.truncated \|\|/);
   assert.match(page, /googleCalendar\.preview\.unsupportedEvents > 0/);
   assert.match(page, /No habilites la importación/);
+  assert.match(page, /1\. Ver qué hay en Google/);
+  assert.match(page, /2\. Primero revisá el calendario/);
+  assert.match(page, /2\. Habilitar importación/);
+});
+
+test("el panel no confunde una conexión nueva con una sincronización completa", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+
+  assert.match(page, /googleCalendarSyncStatus\(\{/);
+  assert.match(page, /googleCalendar\.syncStatus === "first_import"/);
+  assert.match(page, /"Importación pendiente"/);
+  assert.match(page, /googleCalendar\.syncStatus === "not_checked"/);
+  assert.match(page, /"Sin revisión"/);
+});
+
+test("Sincronizar ahora queda bloqueado hasta aprobar la primera importación", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+  const syncStart = page.indexOf('googleCalendar.action = "sync"');
+  const buttonStart = page.lastIndexOf("<button", syncStart);
+  const buttonEnd = page.indexOf("</button>", syncStart);
+  const syncButton = page.slice(buttonStart, buttonEnd);
+
+  assert.ok(
+    buttonStart >= 0 && syncStart > buttonStart && buttonEnd > syncStart,
+  );
+  assert.match(syncButton, /canRunManualGoogleCalendarSync/);
+  assert.match(syncButton, /googleCalendar\.firstImportApproved/);
+  assert.match(syncButton, /Habilitá la importación primero/);
+  assert.match(syncButton, /Primero revisá qué hay en Google/);
 });
 
 test("reconnect_required conserva la acción de desconexión para cambiar de cuenta", () => {
