@@ -257,9 +257,7 @@ export default component$(() => {
           loadProfessionals(client),
           loadServices(client),
           loadBookingDurationSettings(client),
-          loadCalendarBlocks(client, fromIso, toIso).catch(
-            (): CalendarBlock[] => [],
-          ),
+          loadCalendarBlocks(client, fromIso, toIso),
         ]);
       state.appointments = appointments;
       state.professionals = professionals;

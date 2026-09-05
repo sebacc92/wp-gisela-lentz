@@ -8,14 +8,16 @@ export const GOOGLE_USERINFO_ENDPOINT =
 export const GOOGLE_CALENDAR_API_ROOT =
   "https://www.googleapis.com/calendar/v3";
 
-export const GOOGLE_CALENDAR_SCOPE =
-  "https://www.googleapis.com/auth/calendar.app.created";
+export const GOOGLE_CALENDAR_LIST_SCOPE =
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+export const GOOGLE_CALENDAR_EVENTS_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events.owned";
 export const GOOGLE_CALENDAR_SCOPES = [
   "openid",
   "email",
-  GOOGLE_CALENDAR_SCOPE,
+  GOOGLE_CALENDAR_LIST_SCOPE,
+  GOOGLE_CALENDAR_EVENTS_SCOPE,
 ] as const;
-export const GOOGLE_CALENDAR_NAME = "Gisela Lentz · Turnos";
 
 export interface GoogleOAuthConfiguration {
   clientId: string;
@@ -36,6 +38,13 @@ export interface GoogleUserInfo {
   sub: string;
   email?: string;
   email_verified?: boolean;
+}
+
+export interface OwnedGoogleCalendar {
+  id: string;
+  name: string;
+  timeZone: string;
+  primary: boolean;
 }
 
 export interface CalendarSyncAppointment {
@@ -198,7 +207,9 @@ export function buildGoogleAuthorizationUrl(input: {
   url.searchParams.set("scope", GOOGLE_CALENDAR_SCOPES.join(" "));
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
-  url.searchParams.set("include_granted_scopes", "true");
+  // No combinar silenciosamente scopes de una autorización anterior. En
+  // particular, el grant legado `calendar.app.created` debe dejar de pedirse.
+  url.searchParams.set("include_granted_scopes", "false");
   url.searchParams.set("state", input.state);
   url.searchParams.set("code_challenge", input.codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
@@ -208,7 +219,7 @@ export function buildGoogleAuthorizationUrl(input: {
 
 export function appSettingsRedirect(
   appBaseUrl: string,
-  result: "connected" | "denied" | "error",
+  result: "connected" | "selection_required" | "denied" | "error",
 ): string {
   const url = new URL("/app/settings", `${appBaseUrl}/`);
   url.searchParams.set("section", "calendar");
@@ -427,89 +438,186 @@ export async function fetchGoogleUserInfo(
   return user;
 }
 
-export async function createManagedGoogleCalendar(input: {
+interface GoogleCalendarListEntry {
+  id?: unknown;
+  summary?: unknown;
+  summaryOverride?: unknown;
+  timeZone?: unknown;
+  primary?: unknown;
+  accessRole?: unknown;
+  deleted?: unknown;
+}
+
+interface GoogleCalendarListPage {
+  items?: unknown;
+  nextPageToken?: unknown;
+}
+
+function boundedGoogleString(value: unknown, maximum: number): string | null {
+  if (typeof value !== "string") return null;
+  const clean = value.trim();
+  return clean && clean.length <= maximum && !/[\r\n]/.test(clean)
+    ? clean
+    : null;
+}
+
+function ownedGoogleCalendar(
+  value: GoogleCalendarListEntry,
+): OwnedGoogleCalendar | null {
+  if (value.accessRole !== "owner" || value.deleted === true) return null;
+  const id = boundedGoogleString(value.id, 1024);
+  const name =
+    boundedGoogleString(value.summaryOverride, 255) ??
+    boundedGoogleString(value.summary, 255);
+  const timeZone = boundedGoogleString(value.timeZone, 255);
+  if (!id || !name || !timeZone) return null;
+  return { id, name, timeZone, primary: value.primary === true };
+}
+
+/**
+ * Devuelve únicamente calendarios que la cuenta conectada posee. Google sólo
+ * documenta `minAccessRole=owner` para Workspace, por lo que cada item se
+ * vuelve a filtrar localmente antes de exponerlo al administrador.
+ */
+export async function listOwnedGoogleCalendars(input: {
   accessToken: string;
-  timezone: string;
   fetcher?: typeof fetch;
-}): Promise<{ id: string; summary?: string }> {
+}): Promise<OwnedGoogleCalendar[]> {
   const fetcher = input.fetcher ?? fetch;
-  const response = await googleFetch(
-    fetcher,
-    `${GOOGLE_CALENDAR_API_ROOT}/calendars`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        summary: GOOGLE_CALENDAR_NAME,
-        description: "Turnos sincronizados desde la agenda de Gisela Lentz.",
-        timeZone: input.timezone,
-      }),
-    },
-  );
-  await assertGoogleResponse(response, "GOOGLE_CALENDAR_CREATE_FAILED");
-  const calendar = await parseJson<{ id?: string; summary?: string }>(
-    response,
-    "GOOGLE_CALENDAR_RESPONSE_INVALID",
-  );
-  if (!calendar.id) {
-    throw new GoogleIntegrationError("GOOGLE_CALENDAR_ID_MISSING", {
+  const calendars = new Map<string, OwnedGoogleCalendar>();
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 100; page += 1) {
+    const url = new URL(`${GOOGLE_CALENDAR_API_ROOT}/users/me/calendarList`);
+    url.searchParams.set("minAccessRole", "owner");
+    url.searchParams.set("maxResults", "250");
+    url.searchParams.set("showDeleted", "false");
+    url.searchParams.set("showHidden", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+    const response = await googleFetch(fetcher, url, {
+      headers: { Authorization: `Bearer ${input.accessToken}` },
+    });
+    await assertGoogleResponse(response, "GOOGLE_CALENDAR_LIST_FAILED");
+    const result = await parseJson<GoogleCalendarListPage>(
+      response,
+      "GOOGLE_CALENDAR_LIST_RESPONSE_INVALID",
+    );
+    const items = Array.isArray(result.items) ? result.items : [];
+    for (const value of items) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const calendar = ownedGoogleCalendar(value as GoogleCalendarListEntry);
+      if (calendar && !calendars.has(calendar.id)) {
+        calendars.set(calendar.id, calendar);
+      }
+    }
+
+    const nextPageToken = boundedGoogleString(result.nextPageToken, 2048);
+    if (!nextPageToken) {
+      pageToken = undefined;
+      break;
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new GoogleIntegrationError(
+        "GOOGLE_CALENDAR_LIST_RESPONSE_INVALID",
+        {
+          status: 502,
+        },
+      );
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  if (pageToken) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_LIST_TOO_LARGE", {
       status: 502,
     });
   }
-  return { id: calendar.id, summary: calendar.summary };
+
+  return [...calendars.values()].sort(
+    (left, right) =>
+      Number(right.primary) - Number(left.primary) ||
+      left.name.localeCompare(right.name) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
-export async function reuseOrCreateManagedGoogleCalendar(input: {
+/** Vuelve a consultar el item al confirmar; nunca confía sólo en el ID del UI. */
+export async function getOwnedGoogleCalendar(input: {
   accessToken: string;
-  existingCalendarId?: string | null;
-  timezone: string;
+  calendarId: string;
   fetcher?: typeof fetch;
-}): Promise<{ id: string; summary?: string; reused: boolean }> {
-  const fetcher = input.fetcher ?? fetch;
-  const existingCalendarId = input.existingCalendarId?.trim();
-  if (existingCalendarId) {
-    const response = await googleFetch(
-      fetcher,
-      `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(existingCalendarId)}`,
-      { headers: { Authorization: `Bearer ${input.accessToken}` } },
-    );
-    if (response.ok) {
-      const calendar = await parseJson<{ id?: string; summary?: string }>(
-        response,
-        "GOOGLE_CALENDAR_RESPONSE_INVALID",
-      );
-      if (!calendar.id) {
-        throw new GoogleIntegrationError("GOOGLE_CALENDAR_ID_MISSING", {
-          status: 502,
-        });
-      }
-      return { id: calendar.id, summary: calendar.summary, reused: true };
-    }
-    if (response.status === 403) {
-      const reason = await googleErrorCode(response);
-      if (
-        ["rateLimitExceeded", "userRateLimitExceeded"].includes(reason ?? "")
-      ) {
-        await assertGoogleResponse(response, "GOOGLE_CALENDAR_LOOKUP_FAILED");
-      }
-    } else if (response.status !== 404) {
-      await assertGoogleResponse(response, "GOOGLE_CALENDAR_LOOKUP_FAILED");
-    }
+}): Promise<OwnedGoogleCalendar> {
+  const calendarId = boundedGoogleString(input.calendarId, 1024);
+  if (!calendarId) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_ID_INVALID", {
+      status: 400,
+    });
   }
-
-  const calendar = await createManagedGoogleCalendar({
-    accessToken: input.accessToken,
-    timezone: input.timezone,
+  const fetcher = input.fetcher ?? fetch;
+  const response = await googleFetch(
     fetcher,
+    `${GOOGLE_CALENDAR_API_ROOT}/users/me/calendarList/${encodeURIComponent(
+      calendarId,
+    )}`,
+    { headers: { Authorization: `Bearer ${input.accessToken}` } },
+  );
+  await assertGoogleResponse(response, "GOOGLE_CALENDAR_LOOKUP_FAILED");
+  const value = await parseJson<GoogleCalendarListEntry>(
+    response,
+    "GOOGLE_CALENDAR_RESPONSE_INVALID",
+  );
+  const calendar = ownedGoogleCalendar(value);
+  if (!calendar || calendar.id !== calendarId) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_OWNER_REQUIRED", {
+      status: 409,
+    });
+  }
+  return calendar;
+}
+
+/**
+ * Prueba el permiso de eventos con una lectura mínima antes de activar la
+ * conexión. CalendarList puede funcionar aunque el consentimiento granular
+ * haya omitido `calendar.events.owned`.
+ */
+export async function assertOwnedGoogleCalendarEventsAccess(input: {
+  accessToken: string;
+  calendarId: string;
+  fetcher?: typeof fetch;
+}): Promise<void> {
+  const calendarId = boundedGoogleString(input.calendarId, 1024);
+  if (!calendarId) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_ID_INVALID", {
+      status: 400,
+    });
+  }
+  const url = new URL(
+    `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events`,
+  );
+  url.searchParams.set("maxResults", "1");
+  url.searchParams.set("showDeleted", "false");
+  const response = await googleFetch(input.fetcher ?? fetch, url, {
+    headers: { Authorization: `Bearer ${input.accessToken}` },
   });
-  return { ...calendar, reused: false };
+  await assertGoogleResponse(
+    response,
+    "GOOGLE_CALENDAR_EVENTS_ACCESS_REQUIRED",
+  );
+  await parseJson<Record<string, unknown>>(
+    response,
+    "GOOGLE_CALENDAR_RESPONSE_INVALID",
+  );
 }
 
 function googleEventUrl(calendarId: string, eventId?: string): string {
-  const root = `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(calendarId)}/events`;
+  const root = `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(
+    calendarId,
+  )}/events`;
   const url = eventId ? `${root}/${encodeURIComponent(eventId)}` : root;
   return `${url}?sendUpdates=none`;
 }
@@ -675,13 +783,14 @@ export function googleErrorRetryable(error: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Lectura incremental del calendario dedicado (Google -> App)
+// Lectura incremental del calendario seleccionado (Google -> App)
 // ---------------------------------------------------------------------------
 //
-// El scope `calendar.app.created` habilita `events.list` sobre los calendarios
-// secundarios creados por la aplicación, así que no hace falta ampliar
-// permisos para leer. Se usa el sync token oficial: la primera corrida pagina
-// hasta obtener `nextSyncToken` y las siguientes envían `syncToken`.
+// `calendar.events.owned` habilita lectura/escritura de eventos únicamente en
+// calendarios propios. `calendar.calendarlist.readonly` permite seleccionar uno
+// preexistente; `openid email` siguen siendo los únicos scopes de identidad. Se
+// usa el sync token oficial: la primera corrida pagina hasta obtener
+// `nextSyncToken` y las siguientes envían `syncToken`.
 
 export const GOOGLE_MANAGED_BY = "gisela_lentz_agenda";
 
@@ -710,17 +819,104 @@ export interface GoogleCalendarEventsPage {
   nextSyncToken: string | null;
 }
 
+export type GoogleCalendarEventLookupResult =
+  | { kind: "found"; event: GoogleCalendarEvent }
+  | { kind: "missing" }
+  | { kind: "tombstone" };
+
+/**
+ * Consulta puntual usada para cerrar los huecos de un full resync acotado a
+ * futuro. Un 404 y un tombstone 410 son estados esperables y distinguibles;
+ * cualquier otro fallo conserva únicamente un código local saneado.
+ */
+export async function getGoogleCalendarEvent(input: {
+  accessToken: string;
+  calendarId: string;
+  eventId: string;
+  fetcher?: typeof fetch;
+}): Promise<GoogleCalendarEventLookupResult> {
+  const calendarId = boundedGoogleString(input.calendarId, 1024);
+  const eventId = boundedGoogleString(input.eventId, 1024);
+  if (!calendarId) {
+    throw new GoogleIntegrationError("GOOGLE_CALENDAR_ID_INVALID", {
+      status: 400,
+    });
+  }
+  if (!eventId) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_ID_INVALID", {
+      status: 400,
+    });
+  }
+
+  const response = await googleFetch(
+    input.fetcher ?? fetch,
+    `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events/${encodeURIComponent(eventId)}`,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${input.accessToken}` },
+    },
+  );
+  if (response.status === 404) return { kind: "missing" };
+  if (response.status === 410) return { kind: "tombstone" };
+  if (response.status !== 200) {
+    await assertGoogleResponse(response, "GOOGLE_EVENT_GET_FAILED");
+    throw new GoogleIntegrationError("GOOGLE_EVENT_GET_RESPONSE_INVALID", {
+      status: 502,
+    });
+  }
+
+  const value = await parseJson<unknown>(
+    response,
+    "GOOGLE_EVENT_GET_RESPONSE_INVALID",
+  );
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_GET_RESPONSE_INVALID", {
+      status: 502,
+    });
+  }
+  const event = value as GoogleCalendarEvent;
+  if (boundedGoogleString(event.id, 1024) !== eventId) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_GET_RESPONSE_INVALID", {
+      status: 502,
+    });
+  }
+  return { kind: "found", event };
+}
+
 export async function listGoogleCalendarEvents(input: {
   accessToken: string;
   calendarId: string;
   syncToken?: string | null;
+  timeMin?: string | null;
   pageToken?: string | null;
   maxResults?: number;
   fetcher?: typeof fetch;
 }): Promise<GoogleCalendarEventsPage> {
   const fetcher = input.fetcher ?? fetch;
+  const timeMin = input.timeMin?.trim() || null;
+  if (timeMin && input.syncToken) {
+    throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_PARAMETERS_INVALID", {
+      status: 400,
+    });
+  }
+  if (
+    input.timeMin != null &&
+    (!timeMin ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+        timeMin,
+      ) ||
+      Number.isNaN(Date.parse(timeMin)))
+  ) {
+    throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_PARAMETERS_INVALID", {
+      status: 400,
+    });
+  }
   const url = new URL(
-    `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(input.calendarId)}/events`,
+    `${GOOGLE_CALENDAR_API_ROOT}/calendars/${encodeURIComponent(
+      input.calendarId,
+    )}/events`,
   );
   url.searchParams.set(
     "maxResults",
@@ -732,6 +928,7 @@ export async function listGoogleCalendarEvents(input: {
   if (input.syncToken) {
     url.searchParams.set("syncToken", input.syncToken);
   }
+  if (timeMin) url.searchParams.set("timeMin", timeMin);
   if (input.pageToken) url.searchParams.set("pageToken", input.pageToken);
 
   const response = await googleFetch(fetcher, url.toString(), {
@@ -807,7 +1004,12 @@ export type ClassifiedGoogleEvent =
       etag: string | null;
       updatedAt: string | null;
     }
-  | { kind: "external_removed"; eventId: string; updatedAt: string | null }
+  | {
+      kind: "external_removed";
+      eventId: string;
+      updatedAt: string | null;
+      etag: string | null;
+    }
   | { kind: "ignored"; eventId: string | null; reason: string };
 
 const APPOINTMENT_UUID_PATTERN =
@@ -850,6 +1052,7 @@ export function classifyGoogleCalendarEvent(
   const appointmentId = declaredAppointmentId ?? derivedAppointmentId;
   const cancelled = event.status === "cancelled";
   const updatedAt = isoOrNull(event.updated);
+  const etag = boundedGoogleString(event.etag, 255);
 
   if (appointmentId) {
     return {
@@ -860,17 +1063,18 @@ export function classifyGoogleCalendarEvent(
       startsAt: isoOrNull(event.start?.dateTime),
       endsAt: isoOrNull(event.end?.dateTime),
       updatedAt,
-      etag: typeof event.etag === "string" ? event.etag.slice(0, 255) : null,
+      etag,
     };
   }
 
-  if (cancelled) return { kind: "external_removed", eventId, updatedAt };
+  if (cancelled) {
+    return { kind: "external_removed", eventId, updatedAt, etag };
+  }
 
   const summary =
     typeof event.summary === "string" && event.summary.trim()
       ? event.summary.trim().slice(0, 120)
       : null;
-  const etag = typeof event.etag === "string" ? event.etag.slice(0, 255) : null;
   const unsupported = (reason: UnsupportedGoogleEventReason) =>
     ({
       kind: "external_unsupported",
@@ -892,8 +1096,9 @@ export function classifyGoogleCalendarEvent(
   const startsAt = isoOrNull(event.start?.dateTime);
   const endsAt = isoOrNull(event.end?.dateTime);
   if (!startsAt || !endsAt) return unsupported("MISSING_RANGE");
-  if (new Date(endsAt) <= new Date(startsAt))
+  if (new Date(endsAt) <= new Date(startsAt)) {
     return unsupported("INVALID_RANGE");
+  }
 
   return {
     kind: "external_block",

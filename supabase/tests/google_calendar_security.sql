@@ -83,11 +83,36 @@ set status = 'cancelled'
 where id <> '94000000-0000-4000-8000-000000000004'
   and status in ('scheduled', 'confirmed');
 
-select public.complete_google_calendar_connection(
-  '94000000-0000-4000-8000-000000000001',
-  'google-user-test', 'calendar@example.test', 'calendar-id-test',
-  'Gisela Lentz · Turnos', 'fake-refresh-token-for-database-test'
-);
+do $calendar_connect$
+declare
+  oauth_attempt record;
+  candidate_id uuid;
+begin
+  perform public.create_google_calendar_oauth_state(
+    '94000000-0000-4000-8000-000000000001', repeat('b', 64),
+    repeat('v', 64), clock_timestamp() + interval '10 minutes'
+  );
+  select * into oauth_attempt
+  from public.consume_google_calendar_oauth_state(repeat('b', 64));
+  select candidate.candidate_id into candidate_id
+  from public.stage_google_calendar_connection_candidate(
+    '94000000-0000-4000-8000-000000000001',
+    'google-user-test', 'calendar@example.test',
+    'fake-refresh-token-for-database-test',
+    oauth_attempt.connection_generation,
+    oauth_attempt.oauth_attempt_generation
+  ) candidate;
+  perform 1 from public.get_google_calendar_connection_candidate_secret(
+    '94000000-0000-4000-8000-000000000001'
+  );
+  perform public.finalize_google_calendar_connection_selection(
+    '94000000-0000-4000-8000-000000000001',
+    candidate_id,
+    'calendar-id-test', 'Gisela Lentz · Turnos',
+    'America/Argentina/Buenos_Aires'
+  );
+end;
+$calendar_connect$;
 
 do $$
 declare

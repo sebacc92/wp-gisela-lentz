@@ -51,6 +51,10 @@ test("CORS habilita únicamente orígenes configurados de forma exacta", () => {
       allowed.get("Access-Control-Allow-Origin"),
       "https://gisela.example",
     );
+    assert.equal(
+      allowed.get("Access-Control-Allow-Methods"),
+      "GET, POST, DELETE, OPTIONS",
+    );
 
     const subdomain = new Headers(
       corsHeaders(

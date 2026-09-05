@@ -5,6 +5,7 @@ export type BlockConversionError =
   | "CALENDAR_NOT_CONNECTED"
   | "CALENDAR_BLOCK_NOT_FOUND"
   | "CALENDAR_BLOCK_NOT_ACTIVE"
+  | "CALENDAR_BLOCK_STALE"
   | "SLOT_UNAVAILABLE"
   | "COVERAGE_REQUIRED"
   | "SERVICE_NOT_AVAILABLE"
@@ -26,6 +27,7 @@ export function blockConversionError(message: unknown): BlockConversionError {
   if (text.includes("CALENDAR_BLOCK_NOT_ACTIVE")) {
     return "CALENDAR_BLOCK_NOT_ACTIVE";
   }
+  if (text.includes("CALENDAR_BLOCK_STALE")) return "CALENDAR_BLOCK_STALE";
   if (text.includes("SLOT_UNAVAILABLE")) return "SLOT_UNAVAILABLE";
   if (text.includes("COVERAGE_REQUIRED")) return "COVERAGE_REQUIRED";
   if (text.includes("SERVICE_NOT_AVAILABLE")) return "SERVICE_NOT_AVAILABLE";
@@ -43,6 +45,8 @@ export function describeBlockConversionError(
     case "CALENDAR_BLOCK_NOT_FOUND":
     case "CALENDAR_BLOCK_NOT_ACTIVE":
       return "Ese bloqueo ya no está disponible. Actualizá la agenda para ver su estado.";
+    case "CALENDAR_BLOCK_STALE":
+      return "Ese bloqueo cambió de horario. Actualizá la agenda antes de convertirlo.";
     case "SLOT_UNAVAILABLE":
       return "Ese horario ya no está libre. El bloqueo se mantiene sin cambios.";
     case "COVERAGE_REQUIRED":
@@ -92,9 +96,23 @@ export async function convertCalendarBlock(
     appointment_id?: string;
     created?: boolean;
   } | null;
+  const appointmentId =
+    typeof row?.appointment_id === "string" ? row.appointment_id.trim() : "";
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      appointmentId,
+    ) ||
+    typeof row?.created !== "boolean"
+  ) {
+    return {
+      appointmentId: null,
+      created: false,
+      error: "UNKNOWN",
+    };
+  }
   return {
-    appointmentId: row?.appointment_id ?? null,
-    created: row?.created === true,
+    appointmentId,
+    created: row.created,
     error: null,
   };
 }

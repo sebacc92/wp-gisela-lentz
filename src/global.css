@@ -6377,6 +6377,123 @@ body {
   line-height: 1.55;
 }
 
+.google-calendar-selection-intro {
+  max-width: 680px;
+  margin: 0;
+  color: var(--ink-600);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.google-calendar-selection-retry {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.google-calendar-selection-retry > button,
+.google-calendar-load-button {
+  min-height: 44px;
+}
+
+.google-calendar-choice-fieldset {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.google-calendar-choice-fieldset legend {
+  margin-bottom: 8px;
+  color: var(--ink-800);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.google-calendar-choice-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.google-calendar-choice-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  min-height: 60px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  padding: 11px 13px;
+  background: #fff;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    background 150ms ease;
+}
+
+.google-calendar-choice-list label:hover {
+  border-color: #bca8b3;
+}
+
+.google-calendar-choice-list label.selected {
+  border-color: #91b8b6;
+  background: #f5fbfa;
+  box-shadow: 0 0 0 3px rgb(36 123 129 / 8%);
+}
+
+.google-calendar-choice-list label.incompatible {
+  background: var(--surface-soft);
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.google-calendar-choice-list input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--brand-700);
+}
+
+.google-calendar-choice-list label > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.google-calendar-choice-list label > span > small {
+  color: var(--ink-500);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.google-calendar-choice-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.google-calendar-choice-name strong {
+  color: var(--ink-900);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.google-calendar-choice-name > small {
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--brand-100);
+  color: var(--brand-800);
+  font-size: 11px;
+  font-weight: 750;
+}
+
 @media (max-width: 760px) {
   .google-calendar-card-heading {
     grid-template-columns: auto minmax(0, 1fr);
@@ -6462,7 +6579,9 @@ body {
   }
 
   .google-calendar-actions button,
-  .google-calendar-empty > button {
+  .google-calendar-empty > button,
+  .google-calendar-selection-retry > button,
+  .google-calendar-load-button {
     width: 100%;
   }
 }

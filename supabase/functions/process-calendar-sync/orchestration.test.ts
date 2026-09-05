@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 import {
-  handleCalendarSyncRequest,
   type CalendarSyncDependencies,
+  handleCalendarSyncRequest,
 } from "./index.ts";
 
 type Authorize = NonNullable<CalendarSyncDependencies["authorize"]>;
@@ -128,6 +128,10 @@ function baseHandlers(
   overrides: Record<string, RpcHandler> = {},
 ): Record<string, RpcHandler> {
   return {
+    purge_expired_google_calendar_connection_candidate: () => ({
+      data: 0,
+      error: null,
+    }),
     reconcile_google_calendar_sync: () => ({
       data: [{ queued: 1, already_queued: 0 }],
       error: null,
@@ -157,7 +161,15 @@ function baseHandlers(
     }),
     claim_google_calendar_sync_jobs: () => ({ data: [], error: null }),
     claim_google_calendar_external_cleanup: () => ({ data: [], error: null }),
+    release_google_calendar_inbound_lease: () => ({ data: true, error: null }),
+    invalidate_google_calendar_sync_token: () => ({ data: true, error: null }),
+    list_google_calendar_full_resync_managed_candidates: () => ({
+      data: [],
+      error: null,
+    }),
+    fail_google_calendar_inbound_sync: () => ({ data: true, error: null }),
     complete_google_calendar_inbound_sync: () => ({ data: true, error: null }),
+    record_google_calendar_sync_attempt: () => ({ data: true, error: null }),
     ...overrides,
   };
 }
@@ -324,7 +336,11 @@ Deno.test(
         ? eventsListResponse([
             // Sin extendedProperties y con un id que no es el determinista:
             // sólo el mapeo guardado permite identificarlo.
-            { id: "evento-opaco-borrado", status: "cancelled" },
+            {
+              id: "evento-opaco-borrado",
+              status: "cancelled",
+              etag: '  "etag-tombstone"  ',
+            },
           ])
         : null,
     );
@@ -346,6 +362,7 @@ Deno.test(
     );
     assert.equal(observe?.args.p_appointment_id, APPOINTMENT_ID);
     assert.equal(observe?.args.p_cancelled, true);
+    assert.equal(observe?.args.p_google_etag, '"etag-tombstone"');
     // Nunca se importa como bloqueo externo un evento que era un turno.
     assert.equal(
       rpcCalls.some(
@@ -559,6 +576,11 @@ Deno.test(
       ),
       false,
     );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+      "un lease ocupado también bloquea todo push",
+    );
   },
 );
 
@@ -612,47 +634,75 @@ Deno.test(
         (call) => call.name === "release_google_calendar_inbound_lease",
       ),
     );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+      "sin aprobar el primer pull no se reclama la cola saliente",
+    );
   },
 );
 
-Deno.test("el preview no toca la cola, el lease ni la bitácora", async () => {
-  const { client, rpcCalls } = fakeSupabase(baseHandlers());
-  const { fetcher, calls } = fakeGoogle((call) =>
-    call.method === "GET" && call.url.includes("/events?")
-      ? eventsListResponse([
-          {
-            id: "evento-manual",
-            summary: "Evento sintético",
-            start: { dateTime: "2099-01-01T10:00:00.000Z" },
-            end: { dateTime: "2099-01-01T11:00:00.000Z" },
-          },
-        ])
-      : null,
-  );
+Deno.test(
+  "el preview pagina con un cutoff fijo sin tocar la agenda",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(baseHandlers());
+    let page = 0;
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method !== "GET" || !call.url.includes("/events?")) return null;
+      page += 1;
+      return page === 1
+        ? jsonResponseOf({
+            items: [
+              {
+                id: "evento-manual",
+                summary: "Evento sintético",
+                start: { dateTime: "2099-01-01T10:00:00.000Z" },
+                end: { dateTime: "2099-01-01T11:00:00.000Z" },
+              },
+            ],
+            nextPageToken: "preview-page-2",
+          })
+        : eventsListResponse([]);
+    });
 
-  const response = await handleCalendarSyncRequest(syncRequest("preview"), {
-    createClient: () => client,
-    authorize: adminAuthorization(),
-    environment: (name) => ENVIRONMENT[name],
-    fetcher,
-  });
-  const body = (await response.json()) as Record<string, unknown>;
+    const response = await handleCalendarSyncRequest(syncRequest("preview"), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
 
-  assert.equal(body.mutated, false);
-  assert.deepEqual(
-    rpcCalls.map((call) => call.name),
-    ["get_google_calendar_connection_secret"],
-    "el preview sólo lee la conexión",
-  );
-  assert.equal(
-    calls.some((call) => call.method !== "GET" && call.url.includes("/events")),
-    false,
-  );
-  assert.equal(
-    (body.preview as { wouldBecomeBlocks: number }).wouldBecomeBlocks,
-    1,
-  );
-});
+    assert.equal(body.mutated, false);
+    assert.deepEqual(
+      rpcCalls.map((call) => call.name),
+      ["get_google_calendar_connection_secret"],
+      "el preview sólo lee la conexión",
+    );
+    assert.equal(
+      calls.some(
+        (call) => call.method !== "GET" && call.url.includes("/events"),
+      ),
+      false,
+    );
+    assert.equal(
+      (body.preview as { wouldBecomeBlocks: number }).wouldBecomeBlocks,
+      1,
+    );
+    const eventReads = calls
+      .filter((call) => call.method === "GET" && call.url.includes("/events?"))
+      .map((call) => new URL(call.url));
+    assert.equal(eventReads.length, 2);
+    const cutoff = eventReads[0].searchParams.get("timeMin");
+    assert.ok(cutoff);
+    assert.equal(eventReads[1].searchParams.get("timeMin"), cutoff);
+    assert.equal(eventReads[1].searchParams.get("pageToken"), "preview-page-2");
+    for (const url of eventReads) {
+      assert.equal(url.searchParams.get("maxResults"), "2500");
+      assert.equal(url.searchParams.get("syncToken"), null);
+    }
+  },
+);
 
 Deno.test(
   "un usuario sin rol ADMIN no puede disparar la sincronización",
@@ -756,6 +806,12 @@ Deno.test(
         (call) => call.name === "fail_google_calendar_inbound_sync",
       ),
     );
+    assert.equal(response.status, 503);
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+      "un pull fallido bloquea el push de esa ejecución",
+    );
     // Nada se escribió sobre eventos existentes.
     assert.equal(
       calls.some(
@@ -791,7 +847,7 @@ Deno.test(
       }),
     );
     // Cada página devuelve otro nextPageToken: el recorrido nunca termina.
-    const { fetcher } = fakeGoogle((call) =>
+    const { fetcher, calls } = fakeGoogle((call) =>
       call.method === "GET" && call.url.includes("/events?")
         ? jsonResponseOf({
             items: [
@@ -817,10 +873,21 @@ Deno.test(
 
     assert.equal((body.inbound as { truncated: boolean }).truncated, true);
     assert.equal(body.outcome, "partial");
-    const completion = rpcCalls.find(
-      (call) => call.name === "complete_google_calendar_inbound_sync",
+    assert.equal(response.status, 503);
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
     );
-    assert.equal(completion?.args.p_next_sync_token, null);
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(failure?.args.p_error_code, "GOOGLE_EVENTS_LIST_TRUNCATED");
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
     // Sin recorrido completo no se puede saber qué desapareció.
     assert.equal(
       rpcCalls.some(
@@ -828,6 +895,81 @@ Deno.test(
       ),
       false,
     );
+    const eventReads = calls
+      .filter((call) => call.method === "GET" && call.url.includes("/events?"))
+      .map((call) => new URL(call.url));
+    assert.equal(eventReads.length, 12);
+    const cutoffs = new Set(
+      eventReads.map((url) => url.searchParams.get("timeMin")),
+    );
+    assert.equal(cutoffs.size, 1, "el cutoff debe ser fijo entre páginas");
+    assert.ok([...cutoffs][0], "un full sync debe acotar la historia");
+    for (const url of eventReads) {
+      assert.equal(url.searchParams.get("maxResults"), "2500");
+      assert.equal(url.searchParams.get("syncToken"), null);
+    }
+  },
+);
+
+Deno.test(
+  "un full import que termina en la página 12 persiste el token final",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+      }),
+    );
+    let page = 0;
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method !== "GET" || !call.url.includes("/events?")) return null;
+      page += 1;
+      return page < 12
+        ? jsonResponseOf({ items: [], nextPageToken: `page-${page + 1}` })
+        : jsonResponseOf({ items: [], nextSyncToken: "token-pagina-12" });
+    });
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as {
+      inbound: { truncated: boolean; pagesFetched: number };
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.inbound.truncated, false);
+    assert.equal(body.inbound.pagesFetched, 12);
+    const completion = rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_inbound_sync",
+    );
+    assert.equal(completion?.args.p_next_sync_token, "token-pagina-12");
+    assert.ok(
+      rpcCalls.some(
+        (call) => call.name === "reconcile_google_calendar_external_events",
+      ),
+    );
+    const eventReads = calls
+      .filter((call) => call.method === "GET" && call.url.includes("/events?"))
+      .map((call) => new URL(call.url));
+    assert.equal(eventReads.length, 12);
+    const cutoff = eventReads[0].searchParams.get("timeMin");
+    assert.ok(cutoff);
+    for (const url of eventReads) {
+      assert.equal(url.searchParams.get("timeMin"), cutoff);
+      assert.equal(url.searchParams.get("maxResults"), "2500");
+    }
   },
 );
 
@@ -890,34 +1032,16 @@ Deno.test(
 );
 
 Deno.test(
-  "un job legado sin ETag se envía sin If-Match sólo tras observarlo",
+  "un evento managed sin ETag queda en revisión y nunca se parchea a ciegas",
   async () => {
     const { client, rpcCalls } = fakeSupabase(
       baseHandlers({
         observe_google_calendar_managed_event: () => ({
-          data: "in_sync",
+          data: "conflict_recorded",
           error: null,
         }),
-        claim_google_calendar_sync_jobs: () => ({
-          data: [
-            {
-              job_id: "55555555-5555-4555-8555-555555555555",
-              appointment_id: APPOINTMENT_ID,
-              operation: "upsert",
-              desired_version: 4,
-              attempts: 1,
-              starts_at: APP_START,
-              ends_at: APP_END,
-              patient_name: "Paciente Sintético",
-              timezone: "America/Argentina/Buenos_Aires",
-              connection_generation: 1,
-              // Job creado antes de la migración: sin ETag ni proyección.
-              google_etag: null,
-            },
-          ],
-          error: null,
-        }),
-        complete_google_calendar_sync_job: () => ({ data: true, error: null }),
+        // El claim SQL excluye cualquier appointment con conflicto pendiente.
+        claim_google_calendar_sync_jobs: () => ({ data: [], error: null }),
       }),
     );
     const { fetcher, calls } = fakeGoogle((call) => {
@@ -937,37 +1061,36 @@ Deno.test(
           },
         ]);
       }
-      if (call.method === "POST" && call.url.includes("/events?")) {
-        return jsonResponseOf({ error: { message: "duplicate" } }, 409);
-      }
-      if (call.method === "PATCH") {
-        return jsonResponseOf({ id: MANAGED_EVENT_ID }, 200, '"etag-fresco"');
-      }
       return null;
     });
 
-    await handleCalendarSyncRequest(syncRequest(), {
+    const response = await handleCalendarSyncRequest(syncRequest(), {
       createClient: () => client,
       authorize: adminAuthorization(),
       environment: (name) => ENVIRONMENT[name],
       fetcher,
     });
 
-    const listIndex = calls.findIndex(
-      (call) => call.method === "GET" && call.url.includes("/events?"),
+    assert.equal(response.status, 200);
+    const observation = rpcCalls.find(
+      (call) => call.name === "observe_google_calendar_managed_event",
     );
-    const patchIndex = calls.findIndex((call) => call.method === "PATCH");
-    assert.ok(
-      listIndex >= 0 && patchIndex > listIndex,
-      "la observación remota precede a cualquier modificación",
+    assert.equal(observation?.args.p_google_etag, null);
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+      "la falta de ETag requiere revisión humana antes de cualquier escritura",
     );
-    const patch = calls[patchIndex];
-    assert.equal(patch.headers["if-match"], undefined);
-    // A partir de acá el job queda con ETag para la próxima escritura.
-    const completion = rpcCalls.find(
-      (call) => call.name === "complete_google_calendar_sync_job",
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_sync_job",
+      ),
+      false,
     );
-    assert.equal(completion?.args.p_google_etag, '"etag-fresco"');
   },
 );
 
@@ -1015,5 +1138,1097 @@ Deno.test(
     assert.equal(completion?.args.p_succeeded, false);
     assert.deepEqual(body.cleanup, { done: 0, failed: 1 });
     assert.equal(body.outcome, "partial");
+  },
+);
+
+Deno.test(
+  "purga candidatos OAuth vencidos en una sincronización normal",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        get_google_calendar_connection_secret: () => ({
+          data: [{ status: "disconnected", connection_generation: 2 }],
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle(() => null);
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+      rpcCalls.map((call) => call.name),
+      [
+        "purge_expired_google_calendar_connection_candidate",
+        "reconcile_google_calendar_sync",
+        "get_google_calendar_connection_secret",
+      ],
+    );
+    assert.deepEqual(calls, []);
+  },
+);
+
+Deno.test("un error al purgar el candidato OAuth no se oculta", async () => {
+  const { client, rpcCalls } = fakeSupabase(
+    baseHandlers({
+      purge_expired_google_calendar_connection_candidate: () => ({
+        data: null,
+        error: { code: "XX000" },
+      }),
+    }),
+  );
+  const { fetcher, calls } = fakeGoogle(() => null);
+
+  const response = await handleCalendarSyncRequest(syncRequest(), {
+    createClient: () => client,
+    authorize: adminAuthorization(),
+    environment: (name) => ENVIRONMENT[name],
+    fetcher,
+  });
+  const body = (await response.json()) as { error: string; outcome: string };
+
+  assert.equal(response.status, 503);
+  assert.equal(body.error, "CALENDAR_CANDIDATE_PURGE_FAILED");
+  assert.equal(body.outcome, "error");
+  assert.deepEqual(
+    rpcCalls.map((call) => call.name),
+    ["purge_expired_google_calendar_connection_candidate"],
+  );
+  assert.deepEqual(calls, []);
+});
+
+Deno.test(
+  "un error aplicando un evento no avanza el token ni habilita el push",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        apply_google_calendar_external_event: () => ({
+          data: null,
+          error: { code: "40001" },
+        }),
+      }),
+    );
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: "manual-apply-failure",
+              summary: "Evento sintético",
+              start: { dateTime: "2099-01-01T10:00:00.000Z" },
+              end: { dateTime: "2099-01-01T11:00:00.000Z" },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 503);
+    assert.equal(body.outcome, "error");
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(failure?.args.p_error_code, "CALENDAR_INBOUND_APPLY_FAILED");
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un error reconciliando ausencias no avanza el token ni habilita el push",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        reconcile_google_calendar_external_events: () => ({
+          data: null,
+          error: { code: "40001" },
+        }),
+      }),
+    );
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(
+      failure?.args.p_error_code,
+      "CALENDAR_INBOUND_RECONCILE_FAILED",
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un cierre inbound no confirmado se reporta como error y conserva retry",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        complete_google_calendar_inbound_sync: () => ({
+          data: false,
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as { error: string; outcome: string };
+
+    assert.equal(response.status, 503);
+    assert.equal(body.error, "CALENDAR_INBOUND_COMPLETE_FAILED");
+    assert.equal(body.outcome, "error");
+    const completion = rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_inbound_sync",
+    );
+    assert.equal(completion?.args.p_next_sync_token, "token-nuevo");
+    assert.ok(
+      rpcCalls.some(
+        (call) => call.name === "fail_google_calendar_inbound_sync",
+      ),
+    );
+  },
+);
+
+Deno.test("un error de bitácora no convierte un skip en éxito", async () => {
+  const { client, rpcCalls } = fakeSupabase(
+    baseHandlers({
+      begin_google_calendar_inbound_sync: () => ({ data: [], error: null }),
+      record_google_calendar_sync_attempt: () => ({
+        data: null,
+        error: { code: "40001" },
+      }),
+    }),
+  );
+  const { fetcher } = fakeGoogle(() => null);
+
+  const response = await handleCalendarSyncRequest(syncRequest(), {
+    createClient: () => client,
+    authorize: adminAuthorization(),
+    environment: (name) => ENVIRONMENT[name],
+    fetcher,
+  });
+  const body = (await response.json()) as { error: string; outcome: string };
+
+  assert.equal(response.status, 503);
+  assert.equal(body.error, "CALENDAR_SYNC_ATTEMPT_RECORD_FAILED");
+  assert.equal(body.outcome, "error");
+  assert.equal(
+    rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+    false,
+  );
+});
+
+Deno.test(
+  "events.list 404 marca reconexión y no habilita el push",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(baseHandlers());
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? jsonResponseOf({ error: { message: "not found" } }, 404)
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    const reconnect = rpcCalls.find(
+      (call) => call.name === "mark_google_calendar_reconnect_required",
+    );
+    assert.equal(
+      reconnect?.args.p_error_code,
+      "GOOGLE_CALENDAR_RECONNECT_REQUIRED",
+    );
+    assert.equal(reconnect?.args.p_expected_generation, 1);
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un 410 persistente tras el full resync marca reconexión",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(baseHandlers());
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? jsonResponseOf({ error: { message: "gone" } }, 410)
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    assert.equal(
+      calls.filter((call) => call.method === "GET").length,
+      2,
+      "primero invalida el syncToken y prueba una lectura completa",
+    );
+    assert.ok(
+      rpcCalls.some(
+        (call) => call.name === "invalidate_google_calendar_sync_token",
+      ),
+    );
+    const reconnect = rpcCalls.find(
+      (call) => call.name === "mark_google_calendar_reconnect_required",
+    );
+    assert.equal(reconnect?.args.p_error_code, "GOOGLE_SYNC_TOKEN_EXPIRED");
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un bloqueo futuro movido al pasado se retira de forma idempotente",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        apply_google_calendar_external_event: () => ({
+          data: "removed",
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: "manual-movido-al-pasado",
+              summary: "Evento sintético pasado",
+              etag: '"etag-pasado"',
+              updated: "2026-09-04T10:00:00.000Z",
+              start: { dateTime: "2020-01-01T10:00:00.000Z" },
+              end: { dateTime: "2020-01-01T11:00:00.000Z" },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as {
+      summary: { blocksRemoved: number };
+    };
+
+    assert.equal(response.status, 200);
+    const application = rpcCalls.find(
+      (call) => call.name === "apply_google_calendar_external_event",
+    );
+    assert.equal(
+      application?.args.p_google_event_id,
+      "manual-movido-al-pasado",
+    );
+    assert.equal(application?.args.p_removed, true);
+    assert.equal(application?.args.p_starts_at, null);
+    assert.equal(application?.args.p_ends_at, null);
+    assert.equal(application?.args.p_google_etag, '"etag-pasado"');
+    assert.equal(body.summary.blocksRemoved, 1);
+  },
+);
+
+Deno.test(
+  "un lease de otro calendario se rechaza antes de leer o escribir Google",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-otro-scope",
+              sync_token: "token-previo",
+              first_import_approved: true,
+              google_calendar_id: "calendario-ajeno",
+            },
+          ],
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle(() => null);
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    assert.equal(
+      calls.some((call) => call.url.includes("/events?")),
+      false,
+    );
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(failure?.args.p_error_code, "CALENDAR_INBOUND_SCOPE_MISMATCH");
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "revalida el lease al terminar el pull antes de reclamar la cola",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        assert_google_calendar_inbound_lease: () => ({
+          data: null,
+          error: { code: "42501" },
+        }),
+      }),
+    );
+    const { fetcher } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(failure?.args.p_error_code, "CALENDAR_INBOUND_LEASE_LOST");
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+  },
+);
+
+Deno.test("events.list 403 permanente exige consentimiento nuevo", async () => {
+  const { client, rpcCalls } = fakeSupabase(baseHandlers());
+  const { fetcher } = fakeGoogle((call) =>
+    call.method === "GET" && call.url.includes("/events?")
+      ? jsonResponseOf(
+          {
+            error: {
+              errors: [{ reason: "insufficientPermissions" }],
+              status: "PERMISSION_DENIED",
+            },
+          },
+          403,
+        )
+      : null,
+  );
+
+  const response = await handleCalendarSyncRequest(syncRequest(), {
+    createClient: () => client,
+    authorize: adminAuthorization(),
+    environment: (name) => ENVIRONMENT[name],
+    fetcher,
+  });
+
+  assert.equal(response.status, 503);
+  const reconnect = rpcCalls.find(
+    (call) => call.name === "mark_google_calendar_reconnect_required",
+  );
+  assert.equal(reconnect?.args.p_error_code, "GOOGLE_EVENTS_LIST_FAILED");
+  assert.equal(
+    rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+    false,
+  );
+});
+
+Deno.test(
+  "un outcome managed nulo o desconocido falla cerrado antes de complete/claim/push",
+  async () => {
+    for (const invalidOutcome of [null, "outcome_nuevo", true]) {
+      const { client, rpcCalls } = fakeSupabase(
+        baseHandlers({
+          observe_google_calendar_managed_event: () => ({
+            data: invalidOutcome,
+            error: null,
+          }),
+        }),
+      );
+      const { fetcher, calls } = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? eventsListResponse([
+              {
+                id: MANAGED_EVENT_ID,
+                status: "confirmed",
+                extendedProperties: {
+                  private: {
+                    managed_by: "gisela_lentz_agenda",
+                    appointment_id: APPOINTMENT_ID,
+                  },
+                },
+                start: { dateTime: APP_START },
+                end: { dateTime: APP_END },
+              },
+            ])
+          : null,
+      );
+
+      const response = await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+
+      assert.equal(response.status, 503);
+      const failure = rpcCalls.find(
+        (call) => call.name === "fail_google_calendar_inbound_sync",
+      );
+      assert.equal(
+        failure?.args.p_error_code,
+        "CALENDAR_INBOUND_OBSERVE_INVALID_OUTCOME",
+      );
+      assert.equal(
+        rpcCalls.some(
+          (call) => call.name === "complete_google_calendar_inbound_sync",
+        ),
+        false,
+      );
+      assert.equal(
+        rpcCalls.some(
+          (call) => call.name === "claim_google_calendar_sync_jobs",
+        ),
+        false,
+      );
+      assert.equal(
+        calls.some(
+          (call) =>
+            ["POST", "PATCH", "DELETE"].includes(call.method) &&
+            call.url.includes("/events"),
+        ),
+        false,
+      );
+    }
+  },
+);
+
+Deno.test(
+  "un outcome external nulo o desconocido falla cerrado antes de complete/claim/push",
+  async () => {
+    for (const invalidOutcome of [null, "outcome_nuevo", 1]) {
+      const { client, rpcCalls } = fakeSupabase(
+        baseHandlers({
+          apply_google_calendar_external_event: () => ({
+            data: invalidOutcome,
+            error: null,
+          }),
+        }),
+      );
+      const { fetcher, calls } = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? eventsListResponse([
+              {
+                id: "evento-manual-sintetico",
+                summary: "PRUEBA · outcome inválido",
+                start: { dateTime: "2099-01-01T10:00:00.000Z" },
+                end: { dateTime: "2099-01-01T11:00:00.000Z" },
+              },
+            ])
+          : null,
+      );
+
+      const response = await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+
+      assert.equal(response.status, 503);
+      const failure = rpcCalls.find(
+        (call) => call.name === "fail_google_calendar_inbound_sync",
+      );
+      assert.equal(
+        failure?.args.p_error_code,
+        "CALENDAR_INBOUND_APPLY_INVALID_OUTCOME",
+      );
+      assert.equal(
+        rpcCalls.some(
+          (call) => call.name === "complete_google_calendar_inbound_sync",
+        ),
+        false,
+      );
+      assert.equal(
+        rpcCalls.some(
+          (call) => call.name === "claim_google_calendar_sync_jobs",
+        ),
+        false,
+      );
+      assert.equal(
+        calls.some(
+          (call) =>
+            ["POST", "PATCH", "DELETE"].includes(call.method) &&
+            call.url.includes("/events"),
+        ),
+        false,
+      );
+    }
+  },
+);
+
+Deno.test(
+  "invalidar un syncToken exige RPC sin error y boolean true exacto",
+  async () => {
+    for (const invalidResult of [
+      { data: false, error: null },
+      { data: 1, error: null },
+      { data: true, error: { code: "40001" } },
+    ]) {
+      const { client, rpcCalls } = fakeSupabase(
+        baseHandlers({
+          invalidate_google_calendar_sync_token: () => invalidResult,
+        }),
+      );
+      const { fetcher, calls } = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? jsonResponseOf({ error: { message: "gone" } }, 410)
+          : null,
+      );
+
+      const response = await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+
+      assert.equal(response.status, 503);
+      assert.equal(
+        calls.filter(
+          (call) => call.method === "GET" && call.url.includes("/events?"),
+        ).length,
+        1,
+        "no debe intentar el full resync si no confirmó la invalidación",
+      );
+      const failure = rpcCalls.find(
+        (call) => call.name === "fail_google_calendar_inbound_sync",
+      );
+      assert.equal(
+        failure?.args.p_error_code,
+        "CALENDAR_SYNC_TOKEN_INVALIDATION_FAILED",
+      );
+      assert.equal(
+        rpcCalls.some(
+          (call) => call.name === "complete_google_calendar_inbound_sync",
+        ),
+        false,
+      );
+      assert.equal(
+        rpcCalls.some(
+          (call) => call.name === "claim_google_calendar_sync_jobs",
+        ),
+        false,
+      );
+    }
+  },
+);
+
+Deno.test(
+  "un full resync audita por GET un turno administrado no visto en la ventana futura",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        list_google_calendar_full_resync_managed_candidates: () => ({
+          data: [
+            {
+              appointment_id: APPOINTMENT_ID,
+              google_event_id: MANAGED_EVENT_ID,
+              remote_known: true,
+            },
+          ],
+          error: null,
+        }),
+        observe_google_calendar_managed_event: () => ({
+          data: "conflict_recorded",
+          error: null,
+        }),
+      }),
+    );
+    const pastStart = "2020-01-01T10:00:00.000Z";
+    const pastEnd = "2020-01-01T11:00:00.000Z";
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        return eventsListResponse([]);
+      }
+      if (
+        call.method === "GET" &&
+        new URL(call.url).pathname.endsWith(`/events/${MANAGED_EVENT_ID}`)
+      ) {
+        return jsonResponseOf({
+          id: MANAGED_EVENT_ID,
+          status: "confirmed",
+          etag: '"etag-past"',
+          extendedProperties: {
+            private: {
+              managed_by: "gisela_lentz_agenda",
+              appointment_id: APPOINTMENT_ID,
+            },
+          },
+          start: { dateTime: pastStart },
+          end: { dateTime: pastEnd },
+        });
+      }
+      return null;
+    });
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 200);
+    const candidateCall = rpcCalls.find(
+      (call) =>
+        call.name === "list_google_calendar_full_resync_managed_candidates",
+    );
+    assert.equal(candidateCall?.args.p_after_appointment_id, null);
+    assert.equal(candidateCall?.args.p_limit, 100);
+    const observe = rpcCalls.find(
+      (call) => call.name === "observe_google_calendar_managed_event",
+    );
+    assert.equal(observe?.args.p_appointment_id, APPOINTMENT_ID);
+    assert.equal(observe?.args.p_starts_at, pastStart);
+    assert.equal(observe?.args.p_ends_at, pastEnd);
+    assert.ok(
+      indexOfCall(
+        rpcCalls,
+        "list_google_calendar_full_resync_managed_candidates",
+      ) < indexOfCall(rpcCalls, "observe_google_calendar_managed_event"),
+    );
+    assert.ok(
+      indexOfCall(rpcCalls, "observe_google_calendar_managed_event") <
+        indexOfCall(rpcCalls, "reconcile_google_calendar_external_events"),
+    );
+    assert.equal(
+      calls.filter(
+        (call) =>
+          call.method === "GET" &&
+          !call.url.includes("oauth2.googleapis.com") &&
+          call.url.includes(`/events/${MANAGED_EVENT_ID}`),
+      ).length,
+      1,
+    );
+    assert.ok(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+    );
+  },
+);
+
+Deno.test(
+  "un managed ya visto en events.list no se vuelve a pedir ni observar",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        list_google_calendar_full_resync_managed_candidates: () => ({
+          data: [
+            {
+              appointment_id: APPOINTMENT_ID,
+              google_event_id: MANAGED_EVENT_ID,
+              remote_known: true,
+            },
+          ],
+          error: null,
+        }),
+        observe_google_calendar_managed_event: () => ({
+          data: "in_sync",
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: MANAGED_EVENT_ID,
+              status: "confirmed",
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: APPOINTMENT_ID,
+                },
+              },
+              start: { dateTime: APP_START },
+              end: { dateTime: APP_END },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      rpcCalls.filter(
+        (call) => call.name === "observe_google_calendar_managed_event",
+      ).length,
+      1,
+    );
+    assert.equal(
+      calls.filter(
+        (call) =>
+          call.method === "GET" &&
+          new URL(call.url).pathname.endsWith(`/events/${MANAGED_EVENT_ID}`),
+      ).length,
+      0,
+    );
+  },
+);
+
+Deno.test(
+  "un managed remoto conocido ausente genera cancelación; uno nunca proyectado no",
+  async () => {
+    for (const remoteKnown of [true, false]) {
+      const { client, rpcCalls } = fakeSupabase(
+        baseHandlers({
+          begin_google_calendar_inbound_sync: () => ({
+            data: [
+              {
+                lease_token: "lease-1",
+                sync_token: null,
+                first_import_approved: true,
+                google_calendar_id: "cal-1",
+              },
+            ],
+            error: null,
+          }),
+          list_google_calendar_full_resync_managed_candidates: () => ({
+            data: [
+              {
+                appointment_id: APPOINTMENT_ID,
+                google_event_id: remoteKnown ? MANAGED_EVENT_ID : null,
+                remote_known: remoteKnown,
+              },
+            ],
+            error: null,
+          }),
+          observe_google_calendar_managed_event: () => ({
+            data: "conflict_recorded",
+            error: null,
+          }),
+        }),
+      );
+      const { fetcher } = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? eventsListResponse([])
+          : call.method === "GET" && call.url.includes("/events/")
+            ? new Response(null, { status: 404 })
+            : null,
+      );
+
+      const response = await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+
+      assert.equal(response.status, 200);
+      const observations = rpcCalls.filter(
+        (call) => call.name === "observe_google_calendar_managed_event",
+      );
+      assert.equal(observations.length, remoteKnown ? 1 : 0);
+      if (remoteKnown) {
+        assert.equal(observations[0].args.p_appointment_id, APPOINTMENT_ID);
+        assert.equal(observations[0].args.p_cancelled, true);
+        assert.equal(observations[0].args.p_starts_at, null);
+        assert.equal(observations[0].args.p_ends_at, null);
+      }
+      assert.ok(
+        rpcCalls.some(
+          (call) => call.name === "complete_google_calendar_inbound_sync",
+        ),
+      );
+    }
+  },
+);
+
+Deno.test(
+  "un GET managed con appointment ajeno falla cerrado y no avanza ni empuja",
+  async () => {
+    const otherAppointmentId = "9d5c878a-a4c9-4ce9-89dc-b6b68b50caf2";
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        list_google_calendar_full_resync_managed_candidates: () => ({
+          data: [
+            {
+              appointment_id: APPOINTMENT_ID,
+              google_event_id: MANAGED_EVENT_ID,
+              remote_known: true,
+            },
+          ],
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        return eventsListResponse([]);
+      }
+      if (call.method === "GET" && call.url.includes("/events/")) {
+        return jsonResponseOf({
+          id: MANAGED_EVENT_ID,
+          status: "confirmed",
+          extendedProperties: {
+            private: {
+              managed_by: "gisela_lentz_agenda",
+              appointment_id: otherAppointmentId,
+            },
+          },
+          start: { dateTime: APP_START },
+          end: { dateTime: APP_END },
+        });
+      }
+      return null;
+    });
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(
+      failure?.args.p_error_code,
+      "CALENDAR_FULL_RESYNC_MANAGED_EVENT_MISMATCH",
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "reconcile_google_calendar_external_events",
+      ),
+      false,
+    );
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un fallo en la segunda página del audit managed bloquea token y push",
+  async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => {
+      const suffix = (index + 1).toString(16).padStart(12, "0");
+      return {
+        appointment_id: `00000000-0000-4000-8000-${suffix}`,
+        google_event_id: null,
+        remote_known: false,
+      };
+    });
+    let candidatePages = 0;
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-1",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        list_google_calendar_full_resync_managed_candidates: () => {
+          candidatePages += 1;
+          return candidatePages === 1
+            ? { data: firstPage, error: null }
+            : { data: null, error: { code: "40001" } };
+        },
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([])
+        : call.method === "GET" && call.url.includes("/events/")
+          ? new Response(null, { status: 404 })
+          : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    assert.equal(response.status, 503);
+    const candidateCalls = rpcCalls.filter(
+      (call) =>
+        call.name === "list_google_calendar_full_resync_managed_candidates",
+    );
+    assert.equal(candidateCalls.length, 2);
+    assert.equal(
+      candidateCalls[1].args.p_after_appointment_id,
+      "00000000-0000-4000-8000-000000000064",
+    );
+    assert.equal(
+      calls.filter(
+        (call) => call.method === "GET" && call.url.includes("/events/"),
+      ).length,
+      100,
+    );
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(
+      failure?.args.p_error_code,
+      "CALENDAR_FULL_RESYNC_MANAGED_CANDIDATES_FAILED",
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
   },
 );

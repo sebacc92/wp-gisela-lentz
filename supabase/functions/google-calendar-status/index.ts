@@ -16,6 +16,7 @@ interface CalendarStatus {
   last_error?: string | null;
   inbound_sync_state?: string | null;
   inbound_first_import_approved?: boolean | null;
+  selection_pending?: boolean | null;
   pending_count?: number | string | null;
   failed_count?: number | string | null;
   active_block_count?: number | string | null;
@@ -105,9 +106,6 @@ export async function handleGoogleCalendarStatusRequest(
   const manualProjection = await asksForManualProjection(request);
   const client = (dependencies.createClient ?? createServiceClient)();
   try {
-    // The regular Settings view may show the connected Calendar name and email
-    // to an authenticated user. The Manual asks for a separate, ADMIN-only
-    // projection with only operational booleans/counts.
     const authorization = await (dependencies.authorize ?? authorizeUser)(
       request,
       client,
@@ -160,6 +158,8 @@ export async function handleGoogleCalendarStatusRequest(
     const conflictCount = Number(status?.pending_conflict_count ?? 0);
     const pendingCount = Number(status?.pending_count ?? 0);
     const failedCount = Number(status?.failed_count ?? 0);
+    const selectionPending = status?.selection_pending === true;
+    const canSeeConnectionIdentity = authorization.profile.role === "ADMIN";
     const connectionState = !configured
       ? "incomplete"
       : (status?.status ?? (connected ? "connected" : "disconnected"));
@@ -176,8 +176,12 @@ export async function handleGoogleCalendarStatusRequest(
       configured,
       connected,
       status: state,
-      email: status?.google_account_email ?? null,
-      calendarName: status?.google_calendar_name ?? null,
+      email: canSeeConnectionIdentity
+        ? (status?.google_account_email ?? null)
+        : null,
+      calendarName: canSeeConnectionIdentity
+        ? (status?.google_calendar_name ?? null)
+        : null,
       lastSyncedAt: status?.last_synced_at ?? null,
       // «Última revisión» es lo que el panel muestra: avanza en cada corrida
       // correcta aunque no haya habido un solo cambio para procesar.
@@ -190,6 +194,7 @@ export async function handleGoogleCalendarStatusRequest(
           ? status.inbound_sync_state
           : null,
       firstImportApproved: status?.inbound_first_import_approved === true,
+      selectionPending,
       pendingCount,
       failedCount,
       blockCount: Number(status?.active_block_count ?? 0),
@@ -197,11 +202,13 @@ export async function handleGoogleCalendarStatusRequest(
       conflictCount,
       message: !configured
         ? "Falta configurar Google Calendar en el servidor."
-        : connectionState === "reconnect_required"
-          ? "Google pidió volver a conectar la cuenta."
-          : connected
-            ? "Los turnos se sincronizan automáticamente."
-            : "Google Calendar todavía no está conectado.",
+        : selectionPending
+          ? "Google ya autorizó la cuenta. Falta elegir el calendario."
+          : connectionState === "reconnect_required"
+            ? "Google pidió volver a conectar la cuenta."
+            : connected
+              ? "Los turnos se sincronizan automáticamente."
+              : "Google Calendar todavía no está conectado.",
     });
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {

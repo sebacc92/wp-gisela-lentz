@@ -81,6 +81,58 @@ export interface InboundSyncSummary {
   fullResync: boolean;
 }
 
+export type ExternalEventRpcOutcome =
+  | "created"
+  | "updated"
+  | "removed"
+  | "unchanged"
+  | "already_removed"
+  | "skipped_converted";
+
+export type ManagedEventRpcOutcome =
+  | "conflict_recorded"
+  | "conflict_pending"
+  | "in_sync"
+  | "pending_push"
+  | "ignored_unknown_appointment"
+  | "ignored_final_appointment"
+  | "ignored_invalid_range";
+
+/** Contrato exhaustivo de los RPC inbound. Un valor nuevo falla cerrado hasta
+ * que worker, resumen y tests definan explícitamente su semántica. */
+export function parseExternalEventRpcOutcome(
+  value: unknown,
+): ExternalEventRpcOutcome | null {
+  switch (value) {
+    case "created":
+    case "updated":
+    case "removed":
+    case "unchanged":
+    case "already_removed":
+    case "skipped_converted":
+      return value;
+    default:
+      return null;
+  }
+}
+
+export function parseManagedEventRpcOutcome(
+  value: unknown,
+): ManagedEventRpcOutcome | null {
+  switch (value) {
+    case "conflict_recorded":
+    case "conflict_pending":
+    case "in_sync":
+    case "pending_push":
+    case "ignored_unknown_appointment":
+    case "ignored_final_appointment":
+    case "ignored_invalid_range":
+      return value;
+    default:
+      return null;
+  }
+}
+
 export function emptyInboundSyncSummary(): InboundSyncSummary {
   return {
     blocksImported: 0,
@@ -107,7 +159,7 @@ export function inboundChangeCount(summary: InboundSyncSummary): number {
 
 export function applyExternalEventOutcome(
   summary: InboundSyncSummary,
-  outcome: string,
+  outcome: ExternalEventRpcOutcome,
 ): InboundSyncSummary {
   switch (outcome) {
     case "created":
@@ -125,7 +177,7 @@ export function applyExternalEventOutcome(
 
 export function applyManagedEventOutcome(
   summary: InboundSyncSummary,
-  outcome: string,
+  outcome: ManagedEventRpcOutcome,
 ): InboundSyncSummary {
   switch (outcome) {
     case "conflict_recorded":

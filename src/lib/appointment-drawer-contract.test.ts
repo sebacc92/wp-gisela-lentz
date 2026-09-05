@@ -97,3 +97,14 @@ test("la conversión de un bloqueo está conectada a su RPC transaccional", () =
   // El RPC viejo, que exigía un turno ya creado, no puede volver.
   assert.doesNotMatch(converter, /"convert_google_calendar_block"/);
 });
+
+test("un fallo al cargar bloqueos no se presenta como agenda libre", () => {
+  const page = drawer();
+
+  assert.match(page, /loadCalendarBlocks\(client, fromIso, toIso\)/);
+  assert.doesNotMatch(
+    page,
+    /loadCalendarBlocks\(client, fromIso, toIso\)\.catch/,
+  );
+  assert.match(page, /No pudimos cargar la agenda\./);
+});

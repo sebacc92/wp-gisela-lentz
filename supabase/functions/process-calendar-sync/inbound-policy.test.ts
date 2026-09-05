@@ -9,6 +9,8 @@ import {
   emptyInboundSyncSummary,
   inboundChangeCount,
   parseCalendarSyncMode,
+  parseExternalEventRpcOutcome,
+  parseManagedEventRpcOutcome,
   shouldImportExternalBlock,
 } from "./inbound-policy.ts";
 
@@ -109,7 +111,7 @@ test("el resumen sólo cuenta como cambio lo que realmente se aplicó", () => {
   summary = applyExternalEventOutcome(summary, "skipped_converted");
   summary = applyManagedEventOutcome(summary, "in_sync");
   summary = applyManagedEventOutcome(summary, "conflict_recorded");
-  summary = applyManagedEventOutcome(summary, "ignored_pending_push");
+  summary = applyManagedEventOutcome(summary, "pending_push");
 
   assert.equal(summary.blocksImported, 1);
   assert.equal(summary.blocksUpdated, 1);
@@ -121,6 +123,46 @@ test("el resumen sólo cuenta como cambio lo que realmente se aplicó", () => {
   // Un evento sin cambios y un evento administrado en sincronía no cuentan
   // como trabajo: importados + actualizados + retirados + conflictos.
   assert.equal(inboundChangeCount(summary), 4);
+});
+
+test("los outcomes RPC sólo aceptan el contrato actual exacto", () => {
+  const external = [
+    "created",
+    "updated",
+    "removed",
+    "unchanged",
+    "already_removed",
+    "skipped_converted",
+  ];
+  const managed = [
+    "conflict_recorded",
+    "conflict_pending",
+    "in_sync",
+    "pending_push",
+    "ignored_unknown_appointment",
+    "ignored_final_appointment",
+    "ignored_invalid_range",
+  ];
+  for (const value of external) {
+    assert.equal(parseExternalEventRpcOutcome(value), value);
+  }
+  for (const value of managed) {
+    assert.equal(parseManagedEventRpcOutcome(value), value);
+  }
+  for (const value of [
+    null,
+    undefined,
+    "",
+    "created ",
+    "ignored_pending_push",
+    "unknown",
+    true,
+    1,
+    {},
+  ]) {
+    assert.equal(parseExternalEventRpcOutcome(value), null);
+    assert.equal(parseManagedEventRpcOutcome(value), null);
+  }
 });
 
 test("una corrida sin novedades no reporta ningún cambio", () => {
