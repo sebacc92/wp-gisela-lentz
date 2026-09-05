@@ -8,6 +8,7 @@ function source(path: string): string {
 }
 
 const drawer = () => source("src/routes/app/appointments/index.tsx");
+const data = () => source("src/lib/supabase/data.ts");
 const styles = () => source("src/global.css");
 
 test("el detalle del turno es un diálogo modal navegable con teclado", () => {
@@ -107,4 +108,22 @@ test("un fallo al cargar bloqueos no se presenta como agenda libre", () => {
     /loadCalendarBlocks\(client, fromIso, toIso\)\.catch/,
   );
   assert.match(page, /No pudimos cargar la agenda\./);
+});
+
+test("los bloqueos respetan rangos semiabiertos y muestran los de todo el día", () => {
+  const page = drawer();
+  const queries = data();
+
+  // Un evento que termina exactamente al comenzar el día no se superpone.
+  assert.match(queries, /\.gt\("ends_at", fromIso\)/);
+  assert.doesNotMatch(queries, /\.gte\("ends_at", fromIso\)/);
+  assert.match(
+    queries,
+    /\.select\("google_event_id,summary,starts_at,ends_at,all_day"\)/,
+  );
+  assert.match(queries, /allDay: row\.all_day/);
+
+  // La fecha final de Google es exclusiva: el indicador evita mostrar
+  // engañosamente un bloqueo de todo el día como 00:00 – 00:00.
+  assert.match(page, /block\.allDay\s*\?\s*\(\s*"Todo el día"/);
 });

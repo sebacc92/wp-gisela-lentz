@@ -31,6 +31,9 @@ const APP_START = "2026-09-10T14:00:00.000Z";
 const APP_END = "2026-09-10T15:00:00.000Z";
 const MOVED_START = "2026-09-10T17:00:00.000Z";
 const MOVED_END = "2026-09-10T18:00:00.000Z";
+const TEST_NOW = Date.parse("2026-09-05T15:00:00.000Z");
+const COVERAGE_START = "2026-09-05T03:00:00.000Z";
+const COVERAGE_END = "2026-09-26T03:00:00.000Z";
 
 interface RpcCall {
   name: string;
@@ -156,6 +159,32 @@ function fakeGoogle(route: (call: HttpCall) => Response | null): {
       );
     }
     const routed = route(call);
+    if (
+      routed &&
+      method === "GET" &&
+      url.includes("/calendar/v3/calendars/") &&
+      url.includes("/events?")
+    ) {
+      return routed
+        .clone()
+        .json()
+        .then((body: unknown) => {
+          if (!body || typeof body !== "object" || Array.isArray(body)) {
+            return routed;
+          }
+          const page = body as Record<string, unknown>;
+          return jsonResponseOf(
+            {
+              kind: page.kind ?? "calendar#events",
+              timeZone: page.timeZone ?? "America/Argentina/Buenos_Aires",
+              accessRole: page.accessRole ?? "owner",
+              ...page,
+            },
+            routed.status,
+            routed.headers.get("etag") ?? undefined,
+          );
+        });
+    }
     if (routed) return Promise.resolve(routed);
     return Promise.resolve(jsonResponseOf({ error: "unexpected" }, 500));
   }) as typeof fetch;
@@ -186,11 +215,12 @@ function baseHandlers(
       data: [{ queued: 1, already_queued: 0 }],
       error: null,
     }),
-    get_google_calendar_connection_secret: () => ({
+    get_google_calendar_windowed_connection_secret: () => ({
       data: [
         {
           status: "connected",
           google_calendar_id: "cal-1",
+          google_calendar_timezone: "America/Argentina/Buenos_Aires",
           refresh_token: "refresh-token",
           connection_generation: 1,
         },
@@ -205,6 +235,7 @@ function baseHandlers(
           sync_state: "incremental",
           first_import_approved: true,
           google_calendar_id: "cal-1",
+          google_calendar_timezone: "America/Argentina/Buenos_Aires",
         },
       ],
       error: null,
@@ -432,6 +463,88 @@ Deno.test(
 );
 
 Deno.test(
+  "un evento externo libre mapeado no cancela ni resuelve el turno asociado",
+  async () => {
+    const externalEventId = "evento-externo-libre-mapeado";
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        google_calendar_managed_appointment_for_event: () => ({
+          data: APPOINTMENT_ID,
+          error: null,
+        }),
+        observe_google_calendar_managed_event: () => ({
+          data: "conflict_recorded",
+          error: null,
+        }),
+        apply_google_calendar_external_event: () => ({
+          data: "removed",
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: externalEventId,
+              status: "confirmed",
+              transparency: "transparent",
+              start: { dateTime: "2026-09-10T13:00:00.000Z" },
+              end: { dateTime: "2026-09-10T14:00:00.000Z" },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+      now: () => TEST_NOW,
+    });
+    const body = (await response.json()) as {
+      outcome: string;
+      summary: { blocksRemoved: number; conflictsOpened: number };
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.outcome, "completed");
+    assert.equal(body.summary.blocksRemoved, 1);
+    assert.equal(body.summary.conflictsOpened, 0);
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "google_calendar_managed_appointment_for_event",
+      ),
+      false,
+      "sólo una cancelación remota consulta el mapeo de turnos",
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "observe_google_calendar_managed_event",
+      ),
+      false,
+      "un evento libre externo no puede cancelar ni resolver un turno",
+    );
+    const externalRemoval = rpcCalls.find(
+      (call) => call.name === "apply_google_calendar_external_event",
+    );
+    assert.equal(externalRemoval?.args.p_google_event_id, externalEventId);
+    assert.equal(externalRemoval?.args.p_removed, true);
+    assert.equal(externalRemoval?.args.p_starts_at, null);
+    assert.equal(externalRemoval?.args.p_ends_at, null);
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
   "C bis: el id determinista alcanza aunque Google no mande nada más",
   async () => {
     const { client, rpcCalls } = fakeSupabase(
@@ -480,6 +593,7 @@ Deno.test(
                 sync_token: leases === 1 ? null : "token-primera-corrida",
                 first_import_approved: true,
                 google_calendar_id: "cal-1",
+                google_calendar_timezone: "America/Argentina/Buenos_Aires",
               },
             ],
             error: null,
@@ -1025,6 +1139,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: false,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -1083,6 +1198,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -1199,7 +1315,7 @@ Deno.test(
 );
 
 Deno.test(
-  "el preview pagina con un cutoff fijo sin tocar la agenda",
+  "el preview pagina con una ventana fija sin tocar la agenda",
   async () => {
     const { client, rpcCalls } = fakeSupabase(baseHandlers());
     let page = 0;
@@ -1212,8 +1328,8 @@ Deno.test(
               {
                 id: "evento-manual",
                 summary: "Evento sintético",
-                start: { dateTime: "2099-01-01T10:00:00.000Z" },
-                end: { dateTime: "2099-01-01T11:00:00.000Z" },
+                start: { dateTime: "2026-09-08T13:00:00.000Z" },
+                end: { dateTime: "2026-09-08T14:00:00.000Z" },
               },
             ],
             nextPageToken: "preview-page-2",
@@ -1226,13 +1342,23 @@ Deno.test(
       authorize: adminAuthorization(),
       environment: (name) => ENVIRONMENT[name],
       fetcher,
+      now: () => TEST_NOW,
     });
-    const body = (await response.json()) as Record<string, unknown>;
+    const body = (await response.json()) as {
+      mutated: boolean;
+      coverage: {
+        startDate: string;
+        endDateExclusive: string;
+        days: number;
+        timeZone: string;
+      };
+      preview: { wouldBecomeBlocks: number; legacyManagedEvents: number };
+    };
 
     assert.equal(body.mutated, false);
     assert.deepEqual(
       rpcCalls.map((call) => call.name),
-      ["get_google_calendar_connection_secret"],
+      ["get_google_calendar_windowed_connection_secret"],
       "el preview sólo lee la conexión",
     );
     assert.equal(
@@ -1241,25 +1367,385 @@ Deno.test(
       ),
       false,
     );
-    assert.equal(
-      (body.preview as { wouldBecomeBlocks: number }).wouldBecomeBlocks,
-      1,
-    );
-    assert.equal(
-      (body.preview as { legacyManagedEvents: number }).legacyManagedEvents,
-      0,
-    );
+    assert.equal(body.preview.wouldBecomeBlocks, 1);
+    assert.equal(body.preview.legacyManagedEvents, 0);
+    assert.deepEqual(body.coverage, {
+      startDate: "2026-09-05",
+      endDateExclusive: "2026-09-26",
+      days: 21,
+      timeZone: "America/Argentina/Buenos_Aires",
+    });
     const eventReads = calls
       .filter((call) => call.method === "GET" && call.url.includes("/events?"))
       .map((call) => new URL(call.url));
     assert.equal(eventReads.length, 2);
-    const cutoff = eventReads[0].searchParams.get("timeMin");
-    assert.ok(cutoff);
-    assert.equal(eventReads[1].searchParams.get("timeMin"), cutoff);
+    assert.equal(eventReads[0].searchParams.get("timeMin"), COVERAGE_START);
+    assert.equal(eventReads[0].searchParams.get("timeMax"), COVERAGE_END);
+    assert.equal(eventReads[1].searchParams.get("timeMin"), COVERAGE_START);
+    assert.equal(eventReads[1].searchParams.get("timeMax"), COVERAGE_END);
     assert.equal(eventReads[1].searchParams.get("pageToken"), "preview-page-2");
     for (const url of eventReads) {
       assert.equal(url.searchParams.get("maxResults"), "2500");
+      assert.equal(url.searchParams.get("singleEvents"), "true");
+      assert.equal(url.searchParams.get("showDeleted"), "true");
+      assert.equal(
+        url.searchParams.get("timeZone"),
+        "America/Argentina/Buenos_Aires",
+      );
       assert.equal(url.searchParams.get("syncToken"), null);
+    }
+  },
+);
+
+Deno.test(
+  "un preview truncado falla cerrado y nunca se presenta como completo",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(baseHandlers());
+    let page = 0;
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method !== "GET" || !call.url.includes("/events?")) return null;
+      page += 1;
+      return jsonResponseOf({
+        items: [
+          {
+            id: `evento-preview-pagina-${page}`,
+            status: "confirmed",
+            transparency: "opaque",
+            start: { dateTime: "2026-09-10T13:00:00.000Z" },
+            end: { dateTime: "2026-09-10T14:00:00.000Z" },
+          },
+        ],
+        nextPageToken: `preview-pagina-${page + 1}`,
+      });
+    });
+
+    const response = await handleCalendarSyncRequest(syncRequest("preview"), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+      now: () => TEST_NOW,
+    });
+    const body = (await response.json()) as {
+      processed: boolean;
+      mode: string;
+      outcome: string;
+      mutated: boolean;
+      pagesFetched: number;
+      truncated: boolean;
+    };
+
+    assert.equal(response.status, 503);
+    assert.equal(body.processed, true);
+    assert.equal(body.mode, "preview");
+    assert.equal(body.outcome, "partial");
+    assert.equal(body.mutated, false);
+    assert.equal(body.pagesFetched, 12);
+    assert.equal(body.truncated, true);
+    assert.equal(
+      calls.filter(
+        (call) => call.method === "GET" && call.url.includes("/events?"),
+      ).length,
+      12,
+    );
+    assert.deepEqual(
+      rpcCalls.map((call) => call.name),
+      ["get_google_calendar_windowed_connection_secret"],
+      "un preview parcial no adquiere lease ni guarda estado",
+    );
+  },
+);
+
+Deno.test(
+  "preview e initial_import coinciden para recurrencias, excepciones, todo el día y libre sin escribir Google",
+  async () => {
+    const recurringOccurrence = {
+      id: "ocurrencia-semanal-1",
+      status: "confirmed",
+      transparency: "opaque",
+      recurringEventId: "serie-semanal",
+      originalStartTime: {
+        dateTime: "2026-09-07T13:00:00.000Z",
+        timeZone: "America/Argentina/Buenos_Aires",
+      },
+      start: { dateTime: "2026-09-07T13:00:00.000Z" },
+      end: { dateTime: "2026-09-07T14:00:00.000Z" },
+    };
+    const movedException = {
+      id: "ocurrencia-semanal-movida",
+      status: "confirmed",
+      transparency: "opaque",
+      recurringEventId: "serie-semanal",
+      originalStartTime: {
+        dateTime: "2026-09-14T13:00:00.000Z",
+        timeZone: "America/Argentina/Buenos_Aires",
+      },
+      start: { dateTime: "2026-09-15T15:00:00.000Z" },
+      end: { dateTime: "2026-09-15T16:00:00.000Z" },
+    };
+    const cancelledOccurrence = {
+      id: "ocurrencia-semanal-cancelada",
+      status: "cancelled",
+      recurringEventId: "serie-semanal",
+      originalStartTime: {
+        dateTime: "2026-09-21T13:00:00.000Z",
+        timeZone: "America/Argentina/Buenos_Aires",
+      },
+    };
+    const allDayBusy = {
+      id: "evento-todo-el-dia-ocupado",
+      status: "confirmed",
+      transparency: "opaque",
+      start: { date: "2026-09-09" },
+      end: { date: "2026-09-10" },
+    };
+    const transparentFree = {
+      id: "evento-libre",
+      status: "confirmed",
+      transparency: "transparent",
+      start: { dateTime: "2026-09-12T13:00:00.000Z" },
+      end: { dateTime: "2026-09-12T14:00:00.000Z" },
+    };
+    const calendarPage = (call: HttpCall): Response | null => {
+      if (call.method !== "GET" || !call.url.includes("/events?")) return null;
+      const url = new URL(call.url);
+      return url.searchParams.get("pageToken") === "mixed-page-2"
+        ? jsonResponseOf({
+            items: [movedException, cancelledOccurrence],
+            nextSyncToken: "token-mixed",
+          })
+        : jsonResponseOf({
+            items: [recurringOccurrence, allDayBusy, transparentFree],
+            nextPageToken: "mixed-page-2",
+          });
+    };
+
+    const previewSupabase = fakeSupabase(baseHandlers());
+    const previewGoogle = fakeGoogle(calendarPage);
+    const previewResponse = await handleCalendarSyncRequest(
+      syncRequest("preview"),
+      {
+        createClient: () => previewSupabase.client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher: previewGoogle.fetcher,
+        now: () => TEST_NOW,
+      },
+    );
+    const previewBody = (await previewResponse.json()) as {
+      mutated: boolean;
+      pagesFetched: number;
+      truncated: boolean;
+      coverage: {
+        startDate: string;
+        endDateExclusive: string;
+        days: number;
+        timeZone: string;
+      };
+      preview: {
+        managedEvents: number;
+        legacyManagedEvents: number;
+        externalEvents: number;
+        recurringSeries: number;
+        recurringOccurrences: number;
+        cancelledRecurringOccurrences: number;
+        allDayEvents: number;
+        freeEventsIgnored: number;
+        wouldBecomeBlocks: number;
+        pastEventsIgnored: number;
+        unsupportedEvents: number;
+        cancelledEvents: number;
+        ignoredEvents: number;
+      };
+    };
+
+    assert.equal(previewResponse.status, 200);
+    assert.equal(previewBody.mutated, false);
+    assert.equal(previewBody.pagesFetched, 2);
+    assert.equal(previewBody.truncated, false);
+    assert.deepEqual(previewBody.coverage, {
+      startDate: "2026-09-05",
+      endDateExclusive: "2026-09-26",
+      days: 21,
+      timeZone: "America/Argentina/Buenos_Aires",
+    });
+    assert.deepEqual(previewBody.preview, {
+      managedEvents: 0,
+      legacyManagedEvents: 0,
+      externalEvents: 4,
+      recurringSeries: 1,
+      recurringOccurrences: 2,
+      cancelledRecurringOccurrences: 1,
+      allDayEvents: 1,
+      freeEventsIgnored: 1,
+      wouldBecomeBlocks: 3,
+      pastEventsIgnored: 0,
+      unsupportedEvents: 0,
+      cancelledEvents: 2,
+      ignoredEvents: 0,
+    });
+    assert.deepEqual(
+      previewSupabase.rpcCalls.map((call) => call.name),
+      ["get_google_calendar_windowed_connection_secret"],
+      "el preview no adquiere lease ni muta la base",
+    );
+
+    const appliedEvents: RpcCall[] = [];
+    const initialSupabase = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-mixed",
+              sync_token: null,
+              sync_state: "full",
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
+            },
+          ],
+          error: null,
+        }),
+        apply_google_calendar_external_event: (args) => {
+          appliedEvents.push({
+            name: "apply_google_calendar_external_event",
+            args,
+          });
+          return {
+            data: args.p_removed === true ? "already_removed" : "created",
+            error: null,
+          };
+        },
+        reconcile_google_calendar_external_events: () => ({
+          data: 0,
+          error: null,
+        }),
+      }),
+    );
+    const initialGoogle = fakeGoogle(calendarPage);
+    const initialResponse = await handleCalendarSyncRequest(
+      syncRequest("initial_import"),
+      {
+        createClient: () => initialSupabase.client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher: initialGoogle.fetcher,
+        now: () => TEST_NOW,
+      },
+    );
+    const initialBody = (await initialResponse.json()) as {
+      mode: string;
+      claimed: number;
+      cleanup: { done: number; failed: number };
+      coverage: {
+        startDate: string;
+        endDateExclusive: string;
+        days: number;
+        timeZone: string;
+      };
+      summary: {
+        blocksImported: number;
+        skipped: number;
+        pagesFetched: number;
+        fullResync: boolean;
+      };
+    };
+
+    assert.equal(initialResponse.status, 200);
+    assert.equal(initialBody.mode, "initial_import");
+    assert.equal(initialBody.claimed, 0);
+    assert.deepEqual(initialBody.cleanup, { done: 0, failed: 0 });
+    assert.deepEqual(initialBody.coverage, previewBody.coverage);
+    assert.equal(initialBody.summary.blocksImported, 3);
+    assert.equal(
+      initialBody.summary.blocksImported,
+      previewBody.preview.wouldBecomeBlocks,
+      "preview e importación coinciden en bloqueos ocupados",
+    );
+    assert.equal(initialBody.summary.skipped, 2);
+    assert.equal(initialBody.summary.pagesFetched, 2);
+    assert.equal(initialBody.summary.fullResync, true);
+
+    assert.equal(appliedEvents.length, 5);
+    const appliedById = new Map(
+      appliedEvents.map((call) => [call.args.p_google_event_id, call.args]),
+    );
+    assert.equal(appliedById.get("ocurrencia-semanal-1")?.p_recurring, true);
+    assert.equal(
+      appliedById.get("ocurrencia-semanal-movida")?.p_starts_at,
+      "2026-09-15T15:00:00.000Z",
+      "la excepción conserva su horario movido y su id de ocurrencia",
+    );
+    assert.equal(
+      appliedById.get("ocurrencia-semanal-cancelada")?.p_removed,
+      true,
+    );
+    assert.equal(
+      appliedById.get("evento-todo-el-dia-ocupado")?.p_starts_at,
+      "2026-09-09T03:00:00.000Z",
+    );
+    assert.equal(
+      appliedById.get("evento-todo-el-dia-ocupado")?.p_ends_at,
+      "2026-09-10T03:00:00.000Z",
+      "el fin de fecha de Google permanece exclusivo",
+    );
+    assert.equal(
+      appliedById.get("evento-todo-el-dia-ocupado")?.p_all_day,
+      true,
+    );
+    assert.equal(appliedById.get("evento-libre")?.p_removed, true);
+
+    const begin = initialSupabase.rpcCalls.find(
+      (call) => call.name === "begin_google_calendar_inbound_sync",
+    );
+    assert.deepEqual(begin?.args, {
+      p_expected_generation: 1,
+      p_lease_seconds: 240,
+      p_sync_contract_version: 2,
+      p_coverage_starts_at: COVERAGE_START,
+      p_coverage_ends_at: COVERAGE_END,
+    });
+    const complete = initialSupabase.rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_inbound_sync",
+    );
+    assert.equal(complete?.args.p_sync_contract_version, 2);
+    assert.equal(complete?.args.p_coverage_starts_at, COVERAGE_START);
+    assert.equal(complete?.args.p_coverage_ends_at, COVERAGE_END);
+
+    for (const { calls } of [previewGoogle, initialGoogle]) {
+      const calendarCalls = calls.filter((call) =>
+        call.url.includes("www.googleapis.com/calendar/v3"),
+      );
+      assert.equal(calendarCalls.length, 2);
+      assert.equal(
+        calendarCalls.every((call) => call.method === "GET"),
+        true,
+        "preview e initial_import son sólo lectura en Google",
+      );
+      for (const call of calendarCalls) {
+        const url = new URL(call.url);
+        assert.equal(url.searchParams.get("singleEvents"), "true");
+        assert.equal(url.searchParams.get("showDeleted"), "true");
+        assert.equal(
+          url.searchParams.get("timeZone"),
+          "America/Argentina/Buenos_Aires",
+        );
+        assert.equal(url.searchParams.get("timeMin"), COVERAGE_START);
+        assert.equal(url.searchParams.get("timeMax"), COVERAGE_END);
+        assert.equal(url.searchParams.get("syncToken"), null);
+      }
+    }
+    for (const forbiddenRpc of [
+      "reconcile_google_calendar_sync",
+      "claim_google_calendar_sync_jobs",
+      "claim_google_calendar_external_cleanup",
+      "complete_google_calendar_external_cleanup",
+    ]) {
+      assert.equal(
+        initialSupabase.rpcCalls.some((call) => call.name === forbiddenRpc),
+        false,
+        `${forbiddenRpc} no se procesa durante initial_import`,
+      );
     }
   },
 );
@@ -1330,7 +1816,12 @@ Deno.test(
     assert.deepEqual(body.preview, {
       managedEvents: 1,
       legacyManagedEvents: 1,
-      externalEvents: 1,
+      externalEvents: 2,
+      recurringSeries: 0,
+      recurringOccurrences: 0,
+      cancelledRecurringOccurrences: 0,
+      allDayEvents: 0,
+      freeEventsIgnored: 0,
       wouldBecomeBlocks: 2,
       pastEventsIgnored: 0,
       unsupportedEvents: 0,
@@ -1339,7 +1830,7 @@ Deno.test(
     });
     assert.deepEqual(
       rpcCalls.map((call) => call.name),
-      ["get_google_calendar_connection_secret"],
+      ["get_google_calendar_windowed_connection_secret"],
     );
     assert.equal(tableReads.length, 1);
     assert.equal(tableReads[0].table, "appointments");
@@ -1409,7 +1900,7 @@ Deno.test(
     assert.equal(body.outcome, "error");
     assert.deepEqual(
       rpcCalls.map((call) => call.name),
-      ["get_google_calendar_connection_secret"],
+      ["get_google_calendar_windowed_connection_secret"],
     );
     assert.equal(
       calls.some(
@@ -1554,6 +2045,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -1641,6 +2133,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -1864,7 +2357,7 @@ Deno.test(
   async () => {
     const { client, rpcCalls } = fakeSupabase(
       baseHandlers({
-        get_google_calendar_connection_secret: () => ({
+        get_google_calendar_windowed_connection_secret: () => ({
           data: [{ status: "disconnected", connection_generation: 2 }],
           error: null,
         }),
@@ -1885,7 +2378,7 @@ Deno.test(
       [
         "purge_expired_google_calendar_connection_candidate",
         "reconcile_google_calendar_sync",
-        "get_google_calendar_connection_secret",
+        "get_google_calendar_windowed_connection_secret",
       ],
     );
     assert.deepEqual(calls, []);
@@ -1984,6 +2477,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -2233,6 +2727,7 @@ Deno.test(
               sync_token: "token-previo",
               first_import_approved: true,
               google_calendar_id: "calendario-ajeno",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -2537,6 +3032,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -2643,6 +3139,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -2720,6 +3217,7 @@ Deno.test(
                 sync_token: null,
                 first_import_approved: true,
                 google_calendar_id: "cal-1",
+                google_calendar_timezone: "America/Argentina/Buenos_Aires",
               },
             ],
             error: null,
@@ -2788,6 +3286,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,
@@ -2888,6 +3387,7 @@ Deno.test(
               sync_token: null,
               first_import_approved: true,
               google_calendar_id: "cal-1",
+              google_calendar_timezone: "America/Argentina/Buenos_Aires",
             },
           ],
           error: null,

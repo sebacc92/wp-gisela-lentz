@@ -37,8 +37,8 @@ insert into public.appointments (
   '97000000-0000-4000-8000-000000000004',
   '97000000-0000-4000-8000-000000000003',
   '97000000-0000-4000-8000-000000000002',
-  clock_timestamp() + interval '40 days',
-  clock_timestamp() + interval '40 days 60 minutes',
+  clock_timestamp() + interval '60 days',
+  clock_timestamp() + interval '60 days 60 minutes',
   'confirmed', 'manual', 'particular', 60, 'confirmed'
 );
 
@@ -96,22 +96,40 @@ create temporary table safety_generation as
 select connection_generation as generation
 from public.google_calendar_connections where id = true;
 
+create temporary table safety_sync_window as
+select bounds.starts_at,
+       bounds.starts_at + interval '21 days' as ends_at
+from (
+  select (
+    ((current_date + 55)::text || ' 00:00')::timestamp
+      at time zone (select timezone from public.app_settings where id = true)
+  ) as starts_at
+) bounds;
+
 do $complete_initial_import$
 declare
   generation bigint;
   lease uuid;
+  coverage_starts_at timestamptz;
+  coverage_ends_at timestamptz;
 begin
   select safety_generation.generation into generation from safety_generation;
+  select starts_at, ends_at
+  into coverage_starts_at, coverage_ends_at
+  from safety_sync_window;
   if not public.approve_google_calendar_first_import(
     '97000000-0000-4000-8000-000000000001'
   ) then
     raise exception 'expected first import approval';
   end if;
   select lease_token into lease
-  from public.begin_google_calendar_inbound_sync(generation, 600);
+  from public.begin_google_calendar_inbound_sync(
+    generation, 600, 2, coverage_starts_at, coverage_ends_at
+  );
   if lease is null then raise exception 'expected initial import lease'; end if;
   if not public.complete_google_calendar_inbound_sync(
-    generation, lease, 'sync-token-safety', '{}'::jsonb, 0
+    generation, lease, 'sync-token-safety', '{}'::jsonb, 0,
+    2, coverage_starts_at, coverage_ends_at
   ) then
     raise exception 'expected initial import completion';
   end if;
@@ -121,7 +139,9 @@ $complete_initial_import$;
 create temporary table safety_lease as
 select lease.lease_token
 from safety_generation, lateral public.begin_google_calendar_inbound_sync(
-  safety_generation.generation, 600
+  safety_generation.generation, 600, 2,
+  (select starts_at from safety_sync_window),
+  (select ends_at from safety_sync_window)
 ) lease;
 
 -- ---------------------------------------------------------------------------

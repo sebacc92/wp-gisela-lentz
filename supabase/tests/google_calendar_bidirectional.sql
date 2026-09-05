@@ -130,6 +130,16 @@ create temporary table calendar_generation as
 select connection_generation as generation
 from public.google_calendar_connections where id = true;
 
+create temporary table calendar_sync_window as
+select bounds.starts_at,
+       bounds.starts_at + interval '21 days' as ends_at
+from (
+  select (
+    ((current_date + 55)::text || ' 00:00')::timestamp
+      at time zone (select timezone from public.app_settings where id = true)
+  ) as starts_at
+) bounds;
+
 -- ---------------------------------------------------------------------------
 -- Lease: una sola ejecución efectiva
 -- ---------------------------------------------------------------------------
@@ -137,7 +147,9 @@ from public.google_calendar_connections where id = true;
 create temporary table calendar_lease as
 select lease.lease_token, lease.sync_token, lease.first_import_approved
 from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
-  calendar_generation.generation, 240
+  calendar_generation.generation, 240, 2,
+  (select starts_at from calendar_sync_window),
+  (select ends_at from calendar_sync_window)
 ) lease;
 
 select is(
@@ -150,7 +162,9 @@ select is(
   (
     select count(*)::integer
     from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
-      calendar_generation.generation, 240
+      calendar_generation.generation, 240, 2,
+      (select starts_at from calendar_sync_window),
+      (select ends_at from calendar_sync_window)
     ) lease
   ),
   0,
@@ -174,13 +188,18 @@ select public.complete_google_calendar_inbound_sync(
   calendar_lease.lease_token,
   'sync-token-bidi-inicial',
   '{}'::jsonb,
-  0
-) from calendar_generation, calendar_lease;
+  0,
+  2,
+  calendar_sync_window.starts_at,
+  calendar_sync_window.ends_at
+) from calendar_generation, calendar_lease, calendar_sync_window;
 delete from calendar_lease;
 insert into calendar_lease (lease_token, sync_token, first_import_approved)
 select lease.lease_token, lease.sync_token, lease.first_import_approved
 from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
-  calendar_generation.generation, 240
+  calendar_generation.generation, 240, 2,
+  (select starts_at from calendar_sync_window),
+  (select ends_at from calendar_sync_window)
 ) lease;
 
 -- ---------------------------------------------------------------------------
@@ -388,9 +407,12 @@ select (
     calendar_generation.generation, calendar_lease.lease_token,
     'sync-token-de-prueba',
     jsonb_build_object('blocksImported', 1, 'patientName', 'no debe guardarse'),
-    0
+    0,
+    2,
+    calendar_sync_window.starts_at,
+    calendar_sync_window.ends_at
   )
-  from calendar_generation, calendar_lease
+  from calendar_generation, calendar_lease, calendar_sync_window
 ) as completed;
 
 select ok(
@@ -419,7 +441,11 @@ begin
   from public.google_calendar_external_events;
 
   select lease_token into lease
-  from public.begin_google_calendar_inbound_sync(generation, 240);
+  from public.begin_google_calendar_inbound_sync(
+    generation, 240, 2,
+    (select starts_at from calendar_sync_window),
+    (select ends_at from calendar_sync_window)
+  );
   if lease is null then raise exception 'expected a released lease'; end if;
 
   perform public.invalidate_google_calendar_sync_token(generation, lease);
@@ -545,6 +571,16 @@ select
       at time zone (select timezone from public.app_settings where id = true)
   ) as blocked_start;
 
+create temporary table calendar_apply_sync_window as
+select bounds.starts_at,
+       bounds.starts_at + interval '21 days' as ends_at
+from (
+  select (
+    ((current_date + 75)::text || ' 00:00')::timestamp
+      at time zone (select timezone from public.app_settings where id = true)
+  ) as starts_at
+) bounds;
+
 insert into public.appointments (
   id, contact_id, professional_id, starts_at, ends_at, status, source,
   coverage, duration_minutes, deposit_status
@@ -565,7 +601,9 @@ where appointment_id = '95000000-0000-4000-8000-000000000022';
 create temporary table calendar_apply_lease as
 select lease.lease_token
 from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
-  calendar_generation.generation, 600
+  calendar_generation.generation, 600, 2,
+  (select starts_at from calendar_apply_sync_window),
+  (select ends_at from calendar_apply_sync_window)
 ) lease;
 
 -- El fixture anterior ya verifico el cierre fail-closed de unsupported. Se lo
@@ -595,9 +633,12 @@ select is(
 select public.complete_google_calendar_inbound_sync(
   calendar_generation.generation,
   calendar_apply_lease.lease_token,
-  'sync-token-apply-outside-hours', '{}'::jsonb, 1
+  'sync-token-apply-outside-hours', '{}'::jsonb, 1,
+  2,
+  calendar_apply_sync_window.starts_at,
+  calendar_apply_sync_window.ends_at
 )
-from calendar_generation, calendar_apply_lease;
+from calendar_generation, calendar_apply_lease, calendar_apply_sync_window;
 
 select is(
   (
@@ -732,7 +773,9 @@ delete from calendar_apply_lease;
 insert into calendar_apply_lease (lease_token)
 select lease.lease_token
 from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
-  calendar_generation.generation, 600
+  calendar_generation.generation, 600, 2,
+  (select starts_at from calendar_apply_sync_window),
+  (select ends_at from calendar_apply_sync_window)
 ) lease;
 
 select is(
@@ -772,9 +815,12 @@ select is(
 select public.complete_google_calendar_inbound_sync(
   calendar_generation.generation,
   calendar_apply_lease.lease_token,
-  'sync-token-apply-blocked', '{}'::jsonb, 2
+  'sync-token-apply-blocked', '{}'::jsonb, 2,
+  2,
+  calendar_apply_sync_window.starts_at,
+  calendar_apply_sync_window.ends_at
 )
-from calendar_generation, calendar_apply_lease;
+from calendar_generation, calendar_apply_lease, calendar_apply_sync_window;
 
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"95000000-0000-4000-8000-000000000001"}', true);
 select set_config('request.jwt.claim.role', 'authenticated', true);

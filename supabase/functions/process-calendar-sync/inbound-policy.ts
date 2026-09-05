@@ -1,4 +1,88 @@
-import type { ClassifiedGoogleEvent } from "../_shared/google-calendar.ts";
+import {
+  type ClassifiedGoogleEvent,
+  googleCalendarDateStart,
+} from "../_shared/google-calendar.ts";
+
+export const GOOGLE_CALENDAR_SYNC_CONTRACT_VERSION = 2;
+export const GOOGLE_CALENDAR_COVERAGE_DAYS = 21;
+
+export interface GoogleCalendarCoverageWindow {
+  startsAt: string;
+  endsAt: string;
+  startDate: string;
+  endDateExclusive: string;
+  days: number;
+  timeZone: string;
+}
+
+function calendarDateAt(instant: Date, timeZone: string): string | null {
+  if (Number.isNaN(instant.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(instant);
+    const value = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? "";
+    const year = value("year");
+    const month = value("month");
+    const day = value("day");
+    const date = `${year}-${month}-${day}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+  } catch {
+    return null;
+  }
+}
+
+function addCalendarDays(date: string, days: number): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const [year, month, day] = date.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+/**
+ * Ventana estable durante cada día del calendario. Incluye hoy y los veinte
+ * días siguientes, exactamente el máximo que recorre la reserva automática.
+ */
+export function googleCalendarCoverageWindow(
+  now: Date,
+  timeZone: string,
+): GoogleCalendarCoverageWindow | null {
+  const cleanTimeZone = timeZone.trim();
+  const startDate = calendarDateAt(now, cleanTimeZone);
+  const endDateExclusive = startDate
+    ? addCalendarDays(startDate, GOOGLE_CALENDAR_COVERAGE_DAYS)
+    : null;
+  if (!startDate || !endDateExclusive) return null;
+  const startsAt = googleCalendarDateStart(startDate, cleanTimeZone);
+  const endsAt = googleCalendarDateStart(endDateExclusive, cleanTimeZone);
+  if (
+    !startsAt ||
+    !endsAt ||
+    new Date(endsAt).getTime() <= new Date(startsAt).getTime()
+  ) {
+    return null;
+  }
+  return {
+    startsAt,
+    endsAt,
+    startDate,
+    endDateExclusive,
+    days: GOOGLE_CALENDAR_COVERAGE_DAYS,
+    timeZone: cleanTimeZone,
+  };
+}
 
 export type CalendarSyncMode =
   | "manual"

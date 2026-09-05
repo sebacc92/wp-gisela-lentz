@@ -12,6 +12,7 @@ import {
   getOwnedGoogleCalendar,
   GOOGLE_CALENDAR_EVENTS_SCOPE,
   GOOGLE_CALENDAR_LIST_SCOPE,
+  googleCalendarDateStart,
   googleCalendarEventPayload,
   googleErrorRetryable,
   GoogleIntegrationError,
@@ -33,6 +34,17 @@ const appointment: CalendarSyncAppointment = {
   patient_name: "  Ana   Pérez ",
   timezone: "America/Argentina/Buenos_Aires",
 };
+
+function googleEventsPage(
+  page: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    kind: "calendar#events",
+    timeZone: appointment.timezone,
+    accessRole: "owner",
+    ...page,
+  };
+}
 
 test("OAuth usa PKCE y sólo identidad, calendar list y eventos propios", () => {
   const authorizationUrl = new URL(
@@ -572,43 +584,158 @@ test("un evento creado a mano se clasifica como bloqueo con título acotado", ()
   assert.equal(classified.endsAt, "2026-09-04T15:00:00.000Z");
 });
 
-test("todo el día, recurrente y rango inválido quedan como no soportados", () => {
-  const allDay = classifyGoogleCalendarEvent({
-    id: "a",
-    start: { date: "2026-09-05" },
-    end: { date: "2026-09-06" },
+test("un dateTime local usa su zona y una hora DST ambigua falla cerrada", () => {
+  const local = classifyGoogleCalendarEvent({
+    id: "evento-hora-local",
+    start: {
+      dateTime: "2026-09-08T10:30:00",
+      timeZone: "America/Argentina/Buenos_Aires",
+    },
+    end: {
+      dateTime: "2026-09-08T11:30:00",
+      timeZone: "America/Argentina/Buenos_Aires",
+    },
   });
-  const recurring = classifyGoogleCalendarEvent({
-    id: "b",
-    recurrence: ["RRULE:FREQ=WEEKLY"],
-    start: { dateTime: "2026-09-04T14:00:00.000Z" },
-    end: { dateTime: "2026-09-04T15:00:00.000Z" },
+  assert.equal(local.kind, "external_block");
+  assert.equal(
+    local.kind === "external_block" ? local.startsAt : "",
+    "2026-09-08T13:30:00.000Z",
+  );
+
+  const ambiguous = classifyGoogleCalendarEvent({
+    id: "evento-hora-local-ambigua",
+    start: {
+      dateTime: "2026-11-01T01:30:00",
+      timeZone: "America/New_York",
+    },
+    end: {
+      dateTime: "2026-11-01T02:30:00",
+      timeZone: "America/New_York",
+    },
   });
-  const instance = classifyGoogleCalendarEvent({
-    id: "c",
-    recurringEventId: "b",
-    start: { dateTime: "2026-09-04T14:00:00.000Z" },
-    end: { dateTime: "2026-09-04T15:00:00.000Z" },
-  });
+  assert.equal(
+    ambiguous.kind === "external_unsupported" ? ambiguous.reason : "",
+    "MISSING_RANGE",
+  );
+});
+
+test("todo el día usa medianoches de Calendar y conserva el fin exclusivo", () => {
+  assert.equal(
+    googleCalendarDateStart("2026-09-05", "America/Argentina/Buenos_Aires"),
+    "2026-09-05T03:00:00.000Z",
+  );
+  assert.equal(googleCalendarDateStart("2026-02-30", "UTC"), null);
+  assert.equal(googleCalendarDateStart("2026-09-05", "Zona/Inexistente"), null);
+
+  const allDay = classifyGoogleCalendarEvent(
+    {
+      id: "all-day-instance",
+      start: { date: "2026-09-05" },
+      end: { date: "2026-09-07" },
+    },
+    "America/Argentina/Buenos_Aires",
+  );
+  assert.equal(allDay.kind, "external_block");
+  if (allDay.kind !== "external_block") return;
+  assert.equal(allDay.startsAt, "2026-09-05T03:00:00.000Z");
+  assert.equal(allDay.endsAt, "2026-09-07T03:00:00.000Z");
+  assert.equal(allDay.allDay, true);
+  assert.equal(allDay.recurring, false);
+});
+
+test("una ocurrencia expandida conserva su ID aunque sea una excepción movida", () => {
+  const event = {
+    id: "instance-id-stable",
+    recurringEventId: "weekly-master-id",
+    originalStartTime: {
+      dateTime: "2026-09-08T10:30:00-03:00",
+      timeZone: "America/Argentina/Buenos_Aires",
+    },
+    start: { dateTime: "2026-09-09T11:15:00-03:00" },
+    end: { dateTime: "2026-09-09T12:15:00-03:00" },
+  };
+  const first = classifyGoogleCalendarEvent(
+    event,
+    "America/Argentina/Buenos_Aires",
+  );
+  const repeated = classifyGoogleCalendarEvent(
+    event,
+    "America/Argentina/Buenos_Aires",
+  );
+  assert.equal(first.kind, "external_block");
+  if (first.kind !== "external_block") return;
+  assert.equal(first.eventId, "instance-id-stable");
+  assert.equal(first.startsAt, "2026-09-09T14:15:00.000Z");
+  assert.equal(first.recurring, true);
+  assert.equal(first.recurringEventId, "weekly-master-id");
+  assert.equal(first.allDay, false);
+  assert.deepEqual(repeated, first);
+});
+
+test("master recurrente e instancia sin originalStartTime fallan cerrados", () => {
+  const recurringMaster = classifyGoogleCalendarEvent(
+    {
+      id: "master",
+      recurrence: ["RRULE:FREQ=WEEKLY"],
+      start: { dateTime: "2026-09-04T14:00:00.000Z" },
+      end: { dateTime: "2026-09-04T15:00:00.000Z" },
+    },
+    appointment.timezone,
+  );
+  const malformedInstance = classifyGoogleCalendarEvent(
+    {
+      id: "instance",
+      recurringEventId: "master",
+      start: { dateTime: "2026-09-04T14:00:00.000Z" },
+      end: { dateTime: "2026-09-04T15:00:00.000Z" },
+    },
+    appointment.timezone,
+  );
+  assert.equal(
+    recurringMaster.kind === "external_unsupported"
+      ? recurringMaster.reason
+      : "",
+    "RECURRING",
+  );
+  assert.equal(
+    malformedInstance.kind === "external_unsupported"
+      ? malformedInstance.reason
+      : "",
+    "RECURRING",
+  );
+});
+
+test("una ocurrencia cancelada conserva el tombstone y no crea bloqueo", () => {
+  const cancelled = classifyGoogleCalendarEvent(
+    {
+      id: "cancelled-instance-id",
+      status: "cancelled",
+      recurringEventId: "master-id",
+      originalStartTime: { dateTime: "2026-09-08T10:30:00-03:00" },
+    },
+    appointment.timezone,
+  );
+  assert.equal(cancelled.kind, "external_removed");
+  assert.equal(
+    cancelled.kind === "external_removed" ? cancelled.removalReason : "",
+    "cancelled",
+  );
+});
+
+test("rango inválido o ausente queda explícitamente no soportado", () => {
   const inverted = classifyGoogleCalendarEvent({
     id: "d",
     start: { dateTime: "2026-09-04T15:00:00.000Z" },
     end: { dateTime: "2026-09-04T14:00:00.000Z" },
   });
   const missing = classifyGoogleCalendarEvent({ id: "e" });
+  const unspecifiedEnd = classifyGoogleCalendarEvent({
+    id: "f",
+    endTimeUnspecified: true,
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T15:00:00.000Z" },
+  });
 
-  assert.equal(
-    allDay.kind === "external_unsupported" ? allDay.reason : "",
-    "ALL_DAY",
-  );
-  assert.equal(
-    recurring.kind === "external_unsupported" ? recurring.reason : "",
-    "RECURRING",
-  );
-  assert.equal(
-    instance.kind === "external_unsupported" ? instance.reason : "",
-    "RECURRING",
-  );
   assert.equal(
     inverted.kind === "external_unsupported" ? inverted.reason : "",
     "INVALID_RANGE",
@@ -617,16 +744,59 @@ test("todo el día, recurrente y rango inválido quedan como no soportados", () 
     missing.kind === "external_unsupported" ? missing.reason : "",
     "MISSING_RANGE",
   );
+  assert.equal(
+    unspecifiedEnd.kind === "external_unsupported" ? unspecifiedEnd.reason : "",
+    "INVALID_RANGE",
+  );
+});
+
+test("availability opaque bloquea, transparent libera y valores ambiguos se informan", () => {
+  const base = {
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T15:00:00.000Z" },
+  };
+  const opaque = classifyGoogleCalendarEvent({
+    ...base,
+    id: "opaque",
+    transparency: "opaque",
+  });
+  const transparent = classifyGoogleCalendarEvent({
+    ...base,
+    id: "transparent",
+    transparency: "transparent",
+  });
+  const ambiguous = classifyGoogleCalendarEvent({
+    ...base,
+    id: "ambiguous",
+    transparency: "future-google-value",
+  });
+
+  assert.equal(opaque.kind, "external_block");
+  assert.equal(transparent.kind, "external_removed");
+  assert.equal(
+    transparent.kind === "external_removed" ? transparent.removalReason : "",
+    "transparent",
+  );
+  assert.equal(
+    ambiguous.kind === "external_unsupported" ? ambiguous.reason : "",
+    "AMBIGUOUS_BUSY_STATE",
+  );
 });
 
 test("events.list pide showDeleted, pagina y devuelve el sync token", async () => {
   const requested: string[] = [];
-  const fetcher: typeof fetch = (input) => {
+  const methods: string[] = [];
+  const bodies: Array<BodyInit | null | undefined> = [];
+  const fetcher: typeof fetch = (input, init) => {
     const url = String(input);
     requested.push(url);
-    const body = url.includes("pageToken=page-2")
-      ? { items: [{ id: "b" }], nextSyncToken: "sync-token" }
-      : { items: [{ id: "a" }], nextPageToken: "page-2" };
+    methods.push(init?.method ?? "GET");
+    bodies.push(init?.body);
+    const body = googleEventsPage(
+      url.includes("pageToken=page-2")
+        ? { items: [{ id: "b" }], nextSyncToken: "sync-token" }
+        : { items: [{ id: "a" }], nextPageToken: "page-2" },
+    );
     return Promise.resolve(
       new Response(JSON.stringify(body), {
         status: 200,
@@ -638,6 +808,7 @@ test("events.list pide showDeleted, pagina y devuelve el sync token", async () =
   const first = await listGoogleCalendarEvents({
     accessToken: "token",
     calendarId: "calendar-id",
+    calendarTimeZone: appointment.timezone,
     fetcher,
   });
   assert.equal(first.nextPageToken, "page-2");
@@ -646,14 +817,21 @@ test("events.list pide showDeleted, pagina y devuelve el sync token", async () =
   const second = await listGoogleCalendarEvents({
     accessToken: "token",
     calendarId: "calendar-id",
+    calendarTimeZone: appointment.timezone,
     pageToken: first.nextPageToken,
     fetcher,
   });
   assert.equal(second.nextPageToken, null);
   assert.equal(second.nextSyncToken, "sync-token");
   assert.ok(requested[0].includes("showDeleted=true"));
-  assert.ok(!requested[0].includes("singleEvents"));
+  assert.ok(requested[0].includes("singleEvents=true"));
+  assert.equal(
+    new URL(requested[0]).searchParams.get("timeZone"),
+    appointment.timezone,
+  );
   assert.ok(requested[1].includes("pageToken=page-2"));
+  assert.deepEqual(methods, ["GET", "GET"]);
+  assert.deepEqual(bodies, [undefined, undefined]);
 });
 
 test("al paginar una corrida incremental el syncToken viaja en cada página", async () => {
@@ -661,16 +839,20 @@ test("al paginar una corrida incremental el syncToken viaja en cada página", as
   const fetcher: typeof fetch = (input) => {
     requestedUrl = String(input);
     return Promise.resolve(
-      new Response(JSON.stringify({ items: [], nextSyncToken: "next" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify(googleEventsPage({ items: [], nextSyncToken: "next" })),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
     );
   };
 
   await listGoogleCalendarEvents({
     accessToken: "token",
     calendarId: "calendar-id",
+    calendarTimeZone: appointment.timezone,
     syncToken: "sync-1",
     pageToken: "page-2",
     fetcher,
@@ -681,30 +863,38 @@ test("al paginar una corrida incremental el syncToken viaja en cada página", as
   assert.equal(new URL(requestedUrl).searchParams.get("timeMin"), null);
 });
 
-test("events.list conserva timeMin y el tamaño máximo durante un full sync", async () => {
+test("events.list conserva ventana, timezone y tamaño durante un full sync", async () => {
   const requested: URL[] = [];
   const cutoff = "2026-09-04T15:30:00.000Z";
+  const horizon = "2027-03-04T15:30:00.000Z";
   const fetcher: typeof fetch = (input) => {
     requested.push(new URL(String(input)));
     return Promise.resolve(
-      new Response(JSON.stringify({ items: [], nextSyncToken: "next" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify(googleEventsPage({ items: [], nextSyncToken: "next" })),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
     );
   };
 
   await listGoogleCalendarEvents({
     accessToken: "token",
     calendarId: "calendar-id",
+    calendarTimeZone: appointment.timezone,
     timeMin: cutoff,
+    timeMax: horizon,
     maxResults: 2500,
     fetcher,
   });
   await listGoogleCalendarEvents({
     accessToken: "token",
     calendarId: "calendar-id",
+    calendarTimeZone: appointment.timezone,
     timeMin: cutoff,
+    timeMax: horizon,
     pageToken: "page-2",
     maxResults: 2500,
     fetcher,
@@ -713,7 +903,11 @@ test("events.list conserva timeMin y el tamaño máximo durante un full sync", a
   assert.equal(requested.length, 2);
   for (const url of requested) {
     assert.equal(url.searchParams.get("timeMin"), cutoff);
+    assert.equal(url.searchParams.get("timeMax"), horizon);
     assert.equal(url.searchParams.get("maxResults"), "2500");
+    assert.equal(url.searchParams.get("singleEvents"), "true");
+    assert.equal(url.searchParams.get("showDeleted"), "true");
+    assert.equal(url.searchParams.get("timeZone"), appointment.timezone);
     assert.equal(url.searchParams.get("syncToken"), null);
   }
   assert.equal(requested[0].searchParams.get("pageToken"), null);
@@ -732,6 +926,7 @@ test("events.list rechaza timeMin junto a syncToken antes de usar la red", async
       listGoogleCalendarEvents({
         accessToken: "token",
         calendarId: "calendar-id",
+        calendarTimeZone: appointment.timezone,
         syncToken: "sync-1",
         timeMin: "2026-09-04T15:30:00.000Z",
         fetcher,
@@ -741,7 +936,151 @@ test("events.list rechaza timeMin junto a syncToken antes de usar la red", async
       error.code === "GOOGLE_EVENTS_LIST_PARAMETERS_INVALID" &&
       error.status === 400,
   );
+  await assert.rejects(
+    () =>
+      listGoogleCalendarEvents({
+        accessToken: "token",
+        calendarId: "calendar-id",
+        calendarTimeZone: appointment.timezone,
+        timeMax: "2026-02-30T15:30:00.000Z",
+        fetcher,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENTS_LIST_PARAMETERS_INVALID" &&
+      error.status === 400,
+  );
   assert.equal(fetches, 0);
+});
+
+test("events.list rechaza timeMax con syncToken y timezone inválida sin leer", async () => {
+  let fetches = 0;
+  const fetcher: typeof fetch = () => {
+    fetches += 1;
+    return Promise.resolve(new Response("{}"));
+  };
+
+  await assert.rejects(
+    () =>
+      listGoogleCalendarEvents({
+        accessToken: "token",
+        calendarId: "calendar-id",
+        calendarTimeZone: appointment.timezone,
+        syncToken: "sync-1",
+        timeMax: "2027-03-04T15:30:00.000Z",
+        fetcher,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENTS_LIST_PARAMETERS_INVALID" &&
+      error.status === 400,
+  );
+  await assert.rejects(
+    () =>
+      listGoogleCalendarEvents({
+        accessToken: "token",
+        calendarId: "calendar-id",
+        calendarTimeZone: "Zona/Inexistente",
+        fetcher,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENTS_LIST_PARAMETERS_INVALID" &&
+      error.status === 400,
+  );
+  assert.equal(fetches, 0);
+});
+
+test("events.list rechaza una ventana vacía antes de usar Google", async () => {
+  let fetches = 0;
+  await assert.rejects(
+    () =>
+      listGoogleCalendarEvents({
+        accessToken: "token",
+        calendarId: "calendar-id",
+        calendarTimeZone: appointment.timezone,
+        timeMin: "2026-09-05T15:30:00.000Z",
+        timeMax: "2026-09-05T15:30:00.000Z",
+        fetcher: (() => {
+          fetches += 1;
+          return Promise.resolve(new Response("{}"));
+        }) as typeof fetch,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENTS_LIST_PARAMETERS_INVALID",
+  );
+  assert.equal(fetches, 0);
+});
+
+test("events.list no interpreta una respuesta malformada como calendario vacío", async () => {
+  for (const body of [
+    [],
+    { items: { dato: "inválido" }, nextSyncToken: "token-inválido" },
+    { items: [null], nextSyncToken: "token-inválido" },
+    { items: ["evento-inválido"], nextSyncToken: "token-inválido" },
+    { items: [{ status: "confirmed" }], nextSyncToken: "token-inválido" },
+    { items: [], nextPageToken: { página: 2 } },
+    googleEventsPage({ items: [] }),
+    googleEventsPage({
+      items: [],
+      nextPageToken: "página-siguiente",
+      nextSyncToken: "sync-siguiente",
+    }),
+  ]) {
+    await assert.rejects(
+      () =>
+        listGoogleCalendarEvents({
+          accessToken: "token",
+          calendarId: "calendar-id",
+          calendarTimeZone: appointment.timezone,
+          fetcher: (() => Promise.resolve(Response.json(body))) as typeof fetch,
+        }),
+      (error: unknown) =>
+        error instanceof GoogleIntegrationError &&
+        error.code === "GOOGLE_EVENTS_LIST_INVALID" &&
+        error.retryable,
+    );
+  }
+});
+
+test("events.list falla cerrado si Google contradice calendario o permisos", async () => {
+  for (const body of [
+    {
+      kind: "calendar#events",
+      items: [],
+      accessRole: "owner",
+      nextSyncToken: "scope-incompleto",
+    },
+    {
+      kind: "calendar#events",
+      items: [],
+      timeZone: "America/Montevideo",
+      accessRole: "owner",
+      nextSyncToken: "scope-token",
+    },
+    {
+      kind: "calendar#events",
+      items: [],
+      timeZone: appointment.timezone,
+      accessRole: "reader",
+      nextSyncToken: "scope-token",
+    },
+  ]) {
+    await assert.rejects(
+      () =>
+        listGoogleCalendarEvents({
+          accessToken: "token",
+          calendarId: "calendar-id",
+          calendarTimeZone: appointment.timezone,
+          fetcher: (() => Promise.resolve(Response.json(body))) as typeof fetch,
+        }),
+      (error: unknown) =>
+        error instanceof GoogleIntegrationError &&
+        error.code === "GOOGLE_EVENTS_LIST_SCOPE_MISMATCH" &&
+        error.status === 409,
+    );
+  }
 });
 
 test("un syncToken vencido se reporta como 410 sin marcar reconexión", async () => {
@@ -758,6 +1097,7 @@ test("un syncToken vencido se reporta como 410 sin marcar reconexión", async ()
       listGoogleCalendarEvents({
         accessToken: "token",
         calendarId: "calendar-id",
+        calendarTimeZone: appointment.timezone,
         syncToken: "expired",
         fetcher,
       }),

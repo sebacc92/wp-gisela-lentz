@@ -449,12 +449,18 @@ export interface CalendarBlock {
   summary: string | null;
   startsAt: string;
   endsAt: string;
+  allDay: boolean;
 }
 
 export interface CalendarUnsupportedEvent {
   googleEventId: string;
   summary: string | null;
-  reason: "ALL_DAY" | "RECURRING" | "MISSING_RANGE" | "INVALID_RANGE";
+  reason:
+    | "ALL_DAY"
+    | "RECURRING"
+    | "MISSING_RANGE"
+    | "INVALID_RANGE"
+    | "AMBIGUOUS_BUSY_STATE";
 }
 
 /** Bloqueos importados desde Google que ocupan la agenda del día mostrado. */
@@ -465,12 +471,12 @@ export async function loadCalendarBlocks(
 ): Promise<CalendarBlock[]> {
   let query = client
     .from("google_calendar_external_events")
-    .select("google_event_id,summary,starts_at,ends_at")
+    .select("google_event_id,summary,starts_at,ends_at,all_day")
     .eq("kind", "block")
     .eq("status", "active");
   if (toIso) query = query.lt("starts_at", toIso);
   const { data, error } = await query
-    .gte("ends_at", fromIso)
+    .gt("ends_at", fromIso)
     .order("starts_at")
     .limit(200);
   if (error) throw error;
@@ -481,12 +487,14 @@ export async function loadCalendarBlocks(
       summary: string | null;
       starts_at: string;
       ends_at: string;
+      all_day: boolean;
     };
     return {
       googleEventId: row.google_event_id,
       summary: row.summary,
       startsAt: row.starts_at,
       endsAt: row.ends_at,
+      allDay: row.all_day,
     };
   });
 }

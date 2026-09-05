@@ -739,13 +739,19 @@ export default component$(() => {
               {state.blocks.map((block) => (
                 <li key={block.googleEventId}>
                   <strong>
-                    {formatBusinessDate(new Date(block.startsAt), {
-                      timeStyle: "short",
-                    })}
-                    {" – "}
-                    {formatBusinessDate(new Date(block.endsAt), {
-                      timeStyle: "short",
-                    })}
+                    {block.allDay ? (
+                      "Todo el día"
+                    ) : (
+                      <>
+                        {formatBusinessDate(new Date(block.startsAt), {
+                          timeStyle: "short",
+                        })}
+                        {" – "}
+                        {formatBusinessDate(new Date(block.endsAt), {
+                          timeStyle: "short",
+                        })}
+                      </>
+                    )}
                   </strong>
                   <span>{block.summary || "Evento sin título"}</span>
                   {state.isAdmin && (

@@ -806,8 +806,11 @@ export interface GoogleCalendarEvent {
   summary?: string;
   etag?: string;
   updated?: string;
+  transparency?: string;
   recurrence?: string[];
   recurringEventId?: string;
+  originalStartTime?: GoogleCalendarEventTime;
+  endTimeUnspecified?: boolean;
   start?: GoogleCalendarEventTime;
   end?: GoogleCalendarEventTime;
   extendedProperties?: { private?: Record<string, string> };
@@ -823,6 +826,197 @@ export type GoogleCalendarEventLookupResult =
   | { kind: "found"; event: GoogleCalendarEvent }
   | { kind: "missing" }
   | { kind: "tombstone" };
+
+const GOOGLE_RFC3339_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+const GOOGLE_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const GOOGLE_LOCAL_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?$/;
+
+function normalizedGoogleTimeZone(value: unknown): string | null {
+  const timeZone = boundedGoogleString(value, 255);
+  if (!timeZone) return null;
+  try {
+    // Construir el formatter valida nombres IANA y UTC sin depender de la
+    // zona horaria del runtime que ejecuta la Function.
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+function calendarDateParts(
+  instant: Date,
+  timeZone: string,
+): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+} | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US-u-ca-iso8601", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(instant);
+    const value = (type: Intl.DateTimeFormatPartTypes): number =>
+      Number(parts.find((part) => part.type === type)?.value);
+    const result = {
+      year: value("year"),
+      month: value("month"),
+      day: value("day"),
+      hour: value("hour"),
+      minute: value("minute"),
+      second: value("second"),
+    };
+    return Object.values(result).every(Number.isFinite) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Convierte una fecha `YYYY-MM-DD` de Calendar en la medianoche real de la
+ * zona seleccionada. Es deliberadamente independiente de `TZ` del servidor y
+ * devuelve null si esa fecha/medianoche no existe en la zona indicada.
+ */
+export function googleCalendarDateStart(
+  date: string,
+  timeZone: string,
+): string | null {
+  const match = GOOGLE_DATE_PATTERN.exec(date);
+  const validTimeZone = normalizedGoogleTimeZone(timeZone);
+  if (!match || !validTimeZone) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const expected = Date.UTC(year, month - 1, day);
+  const expectedDate = new Date(expected);
+  if (
+    expectedDate.getUTCFullYear() !== year ||
+    expectedDate.getUTCMonth() !== month - 1 ||
+    expectedDate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  // Resolver el offset en el instante objetivo requiere iterar: el primer
+  // estimado UTC puede caer a un lado distinto de una transición de DST.
+  let candidate = expected;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = calendarDateParts(new Date(candidate), validTimeZone);
+    if (!parts) return null;
+    const representedAsUtc = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+    );
+    const corrected = candidate + (expected - representedAsUtc);
+    if (corrected === candidate) break;
+    candidate = corrected;
+  }
+
+  const resolved = calendarDateParts(new Date(candidate), validTimeZone);
+  if (
+    !resolved ||
+    resolved.year !== year ||
+    resolved.month !== month ||
+    resolved.day !== day ||
+    resolved.hour !== 0 ||
+    resolved.minute !== 0 ||
+    resolved.second !== 0
+  ) {
+    return null;
+  }
+  return new Date(candidate).toISOString();
+}
+
+function googleCalendarLocalDateTime(
+  value: string,
+  timeZone: string,
+): string | null {
+  const match = GOOGLE_LOCAL_DATE_TIME_PATTERN.exec(value);
+  const validTimeZone = normalizedGoogleTimeZone(timeZone);
+  if (!match || !validTimeZone) return null;
+
+  const [year, month, day, hour, minute, second] = match
+    .slice(1, 7)
+    .map(Number);
+  const expected = Date.UTC(year, month - 1, day, hour, minute, second);
+  const expectedDate = new Date(expected);
+  if (
+    expectedDate.getUTCFullYear() !== year ||
+    expectedDate.getUTCMonth() !== month - 1 ||
+    expectedDate.getUTCDate() !== day ||
+    expectedDate.getUTCHours() !== hour ||
+    expectedDate.getUTCMinutes() !== minute ||
+    expectedDate.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+
+  // Un DateTime sin offset sólo es seguro si esa hora de pared corresponde a
+  // un único instante. Muestrear ambos lados de la fecha detecta también el
+  // pliegue y el hueco de los cambios DST sin elegir una ocurrencia a ciegas.
+  const offsets = new Set<number>();
+  for (const hours of [-36, -24, -12, 0, 12, 24, 36]) {
+    const sampled = expected + hours * 3_600_000;
+    const parts = calendarDateParts(new Date(sampled), validTimeZone);
+    if (!parts) return null;
+    const representedAsUtc = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+    );
+    offsets.add(representedAsUtc - sampled);
+  }
+
+  const candidates = new Set<number>();
+  for (const offset of offsets) {
+    const candidate = expected - offset;
+    const parts = calendarDateParts(new Date(candidate), validTimeZone);
+    if (
+      parts?.year === year &&
+      parts.month === month &&
+      parts.day === day &&
+      parts.hour === hour &&
+      parts.minute === minute &&
+      parts.second === second
+    ) {
+      candidates.add(candidate);
+    }
+  }
+  if (candidates.size !== 1) return null;
+
+  const fractionMilliseconds = Number(
+    (match[7] ?? "").slice(0, 3).padEnd(3, "0"),
+  );
+  return new Date([...candidates][0] + fractionMilliseconds).toISOString();
+}
+
+function isValidGoogleRfc3339(value: string): boolean {
+  return (
+    GOOGLE_RFC3339_PATTERN.test(value) &&
+    googleCalendarDateStart(value.slice(0, 10), "UTC") !== null &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
 
 /**
  * Consulta puntual usada para cerrar los huecos de un full resync acotado a
@@ -888,26 +1082,33 @@ export async function getGoogleCalendarEvent(input: {
 export async function listGoogleCalendarEvents(input: {
   accessToken: string;
   calendarId: string;
+  calendarTimeZone: string;
   syncToken?: string | null;
   timeMin?: string | null;
+  timeMax?: string | null;
   pageToken?: string | null;
   maxResults?: number;
   fetcher?: typeof fetch;
 }): Promise<GoogleCalendarEventsPage> {
   const fetcher = input.fetcher ?? fetch;
+  const calendarTimeZone = normalizedGoogleTimeZone(input.calendarTimeZone);
   const timeMin = input.timeMin?.trim() || null;
-  if (timeMin && input.syncToken) {
+  const timeMax = input.timeMax?.trim() || null;
+  if (
+    !calendarTimeZone ||
+    (input.syncToken != null &&
+      (input.timeMin != null || input.timeMax != null))
+  ) {
     throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_PARAMETERS_INVALID", {
       status: 400,
     });
   }
+  const validBound = (value: string | null): value is string =>
+    Boolean(value && isValidGoogleRfc3339(value));
   if (
-    input.timeMin != null &&
-    (!timeMin ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(
-        timeMin,
-      ) ||
-      Number.isNaN(Date.parse(timeMin)))
+    (input.timeMin != null && !validBound(timeMin)) ||
+    (input.timeMax != null && !validBound(timeMax)) ||
+    (timeMin && timeMax && Date.parse(timeMax) <= Date.parse(timeMin))
   ) {
     throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_PARAMETERS_INVALID", {
       status: 400,
@@ -922,13 +1123,17 @@ export async function listGoogleCalendarEvents(input: {
     "maxResults",
     String(Math.max(1, Math.min(input.maxResults ?? 250, 2500))),
   );
-  // Sin `singleEvents`: una serie recurrente se reporta como no soportada en
-  // vez de expandirse en instancias inventadas.
+  // Calendar expande cada serie dentro de la ventana. Así conserva IDs de
+  // ocurrencia, excepciones movidas y tombstones de instancias canceladas sin
+  // que la aplicación interprete RRULE por su cuenta.
+  url.searchParams.set("singleEvents", "true");
   url.searchParams.set("showDeleted", "true");
+  url.searchParams.set("timeZone", calendarTimeZone);
   if (input.syncToken) {
     url.searchParams.set("syncToken", input.syncToken);
   }
   if (timeMin) url.searchParams.set("timeMin", timeMin);
+  if (timeMax) url.searchParams.set("timeMax", timeMax);
   if (input.pageToken) url.searchParams.set("pageToken", input.pageToken);
 
   const response = await googleFetch(fetcher, url.toString(), {
@@ -949,30 +1154,78 @@ export async function listGoogleCalendarEvents(input: {
     });
   }
   await assertGoogleResponse(response, "GOOGLE_EVENTS_LIST_FAILED");
-  const page = await parseJson<{
+  const rawPage = await parseJson<unknown>(
+    response,
+    "GOOGLE_EVENTS_LIST_INVALID",
+  );
+  if (!rawPage || typeof rawPage !== "object" || Array.isArray(rawPage)) {
+    throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_INVALID", {
+      status: 502,
+      retryable: true,
+    });
+  }
+  const page = rawPage as {
+    kind?: unknown;
     items?: unknown;
     nextPageToken?: unknown;
     nextSyncToken?: unknown;
-  }>(response, "GOOGLE_EVENTS_LIST_INVALID");
+    timeZone?: unknown;
+    accessRole?: unknown;
+  };
+  const invalidItems =
+    Array.isArray(page.items) &&
+    page.items.some((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return true;
+      const id = (item as { id?: unknown }).id;
+      return (
+        typeof id !== "string" ||
+        !id ||
+        id !== id.trim() ||
+        id.length > 1024 ||
+        /[\u0000-\u001f\u007f]/.test(id)
+      );
+    });
+  const validOpaqueToken = (value: unknown): value is string =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 16_384 &&
+    !/[\u0000-\u001f\u007f]/.test(value);
+  const hasNextPage = page.nextPageToken !== undefined;
+  const hasNextSync = page.nextSyncToken !== undefined;
+
+  if (
+    (page.items !== undefined && !Array.isArray(page.items)) ||
+    invalidItems ||
+    (hasNextPage && !validOpaqueToken(page.nextPageToken)) ||
+    (hasNextSync && !validOpaqueToken(page.nextSyncToken)) ||
+    hasNextPage === hasNextSync
+  ) {
+    throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_INVALID", {
+      status: 502,
+      retryable: true,
+    });
+  }
+  if (
+    page.kind !== "calendar#events" ||
+    normalizedGoogleTimeZone(page.timeZone) !== calendarTimeZone ||
+    page.accessRole !== "owner"
+  ) {
+    throw new GoogleIntegrationError("GOOGLE_EVENTS_LIST_SCOPE_MISMATCH", {
+      status: 409,
+    });
+  }
 
   return {
-    items: Array.isArray(page.items)
-      ? (page.items as GoogleCalendarEvent[])
-      : [],
-    nextPageToken:
-      typeof page.nextPageToken === "string" && page.nextPageToken
-        ? page.nextPageToken
-        : null,
-    nextSyncToken:
-      typeof page.nextSyncToken === "string" && page.nextSyncToken
-        ? page.nextSyncToken
-        : null,
+    items: (page.items ?? []) as GoogleCalendarEvent[],
+    nextPageToken: hasNextPage ? (page.nextPageToken as string) : null,
+    nextSyncToken: hasNextSync ? (page.nextSyncToken as string) : null,
   };
 }
 
 export type UnsupportedGoogleEventReason =
   | "ALL_DAY"
   | "RECURRING"
+  | "AMBIGUOUS_BUSY_STATE"
   | "MISSING_RANGE"
   | "INVALID_RANGE";
 
@@ -998,6 +1251,9 @@ export type ClassifiedGoogleEvent =
       summary: string | null;
       startsAt: string;
       endsAt: string;
+      allDay: boolean;
+      recurring: boolean;
+      recurringEventId: string | null;
       etag: string | null;
       updatedAt: string | null;
     }
@@ -1012,6 +1268,7 @@ export type ClassifiedGoogleEvent =
   | {
       kind: "external_removed";
       eventId: string;
+      removalReason: "cancelled" | "transparent";
       updatedAt: string | null;
       etag: string | null;
     }
@@ -1025,10 +1282,18 @@ export type ClassifiedExternalGoogleEvent = Exclude<
 const APPOINTMENT_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function isoOrNull(value: string | undefined): string | null {
+function isoOrNull(
+  value: string | undefined,
+  timeZone?: string,
+): string | null {
   if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  const validTimeZone =
+    timeZone === undefined ? null : normalizedGoogleTimeZone(timeZone);
+  if (timeZone !== undefined && !validTimeZone) return null;
+  if (isValidGoogleRfc3339(value)) return new Date(value).toISOString();
+  return validTimeZone
+    ? googleCalendarLocalDateTime(value, validTimeZone)
+    : null;
 }
 
 /**
@@ -1038,6 +1303,7 @@ function isoOrNull(value: string | undefined): string | null {
  */
 export function classifyGoogleCalendarEvent(
   event: GoogleCalendarEvent,
+  calendarTimeZone?: string,
 ): ClassifiedGoogleEvent {
   const eventId = typeof event.id === "string" ? event.id.trim() : "";
   if (!eventId) return { kind: "ignored", eventId: null, reason: "NO_ID" };
@@ -1082,14 +1348,18 @@ export function classifyGoogleCalendarEvent(
       eventId,
       appointmentId,
       cancelled,
-      startsAt: isoOrNull(event.start?.dateTime),
-      endsAt: isoOrNull(event.end?.dateTime),
+      startsAt: isoOrNull(event.start?.dateTime, event.start?.timeZone),
+      endsAt:
+        event.endTimeUnspecified !== undefined &&
+        event.endTimeUnspecified !== false
+          ? null
+          : isoOrNull(event.end?.dateTime, event.end?.timeZone),
       updatedAt,
       etag,
     };
   }
 
-  return classifyGoogleCalendarEventAsExternal(event);
+  return classifyGoogleCalendarEventAsExternal(event, calendarTimeZone);
 }
 
 /**
@@ -1101,6 +1371,7 @@ export function classifyGoogleCalendarEvent(
  */
 export function classifyGoogleCalendarEventAsExternal(
   event: GoogleCalendarEvent,
+  calendarTimeZone?: string,
 ): ClassifiedExternalGoogleEvent {
   const eventId = typeof event.id === "string" ? event.id.trim() : "";
   if (!eventId) return { kind: "ignored", eventId: null, reason: "NO_ID" };
@@ -1110,7 +1381,13 @@ export function classifyGoogleCalendarEventAsExternal(
   const etag = boundedGoogleString(event.etag, 255);
 
   if (cancelled) {
-    return { kind: "external_removed", eventId, updatedAt, etag };
+    return {
+      kind: "external_removed",
+      eventId,
+      removalReason: "cancelled",
+      updatedAt,
+      etag,
+    };
   }
 
   const summary =
@@ -1127,19 +1404,94 @@ export function classifyGoogleCalendarEventAsExternal(
       updatedAt,
     }) as const;
 
-  if (
-    (Array.isArray(event.recurrence) && event.recurrence.length > 0) ||
-    typeof event.recurringEventId === "string"
-  ) {
+  // Con `singleEvents=true` Google entrega instancias concretas. Una master
+  // inesperada todavía requiere interpretación de RRULE y falla cerrada.
+  if (Array.isArray(event.recurrence) && event.recurrence.length > 0) {
     return unsupported("RECURRING");
   }
-  if (event.start?.date || event.end?.date) return unsupported("ALL_DAY");
 
-  const startsAt = isoOrNull(event.start?.dateTime);
-  const endsAt = isoOrNull(event.end?.dateTime);
+  let recurringEventId: string | null = null;
+  if (event.recurringEventId !== undefined) {
+    recurringEventId = boundedGoogleString(event.recurringEventId, 1024);
+    const original = event.originalStartTime;
+    const originalHasDateTime = typeof original?.dateTime === "string";
+    const originalHasDate = typeof original?.date === "string";
+    const validOriginalDateTime =
+      originalHasDateTime &&
+      !originalHasDate &&
+      isoOrNull(original.dateTime, original.timeZone) !== null;
+    const validOriginalDate =
+      originalHasDate &&
+      !originalHasDateTime &&
+      Boolean(
+        calendarTimeZone &&
+        googleCalendarDateStart(original.date ?? "", calendarTimeZone),
+      );
+    if (!recurringEventId || (!validOriginalDateTime && !validOriginalDate)) {
+      return unsupported("RECURRING");
+    }
+  } else if (event.originalStartTime !== undefined) {
+    // `originalStartTime` sólo identifica la posición original de una
+    // instancia; sin recurringEventId no es una identidad utilizable.
+    return unsupported("RECURRING");
+  }
+
+  if (event.transparency === "transparent") {
+    return {
+      kind: "external_removed",
+      eventId,
+      removalReason: "transparent",
+      updatedAt,
+      etag,
+    };
+  }
+  if (event.transparency !== undefined && event.transparency !== "opaque") {
+    return unsupported("AMBIGUOUS_BUSY_STATE");
+  }
+  if (
+    event.endTimeUnspecified !== undefined &&
+    event.endTimeUnspecified !== false
+  ) {
+    return unsupported("INVALID_RANGE");
+  }
+
+  const hasStartDate = typeof event.start?.date === "string";
+  const hasEndDate = typeof event.end?.date === "string";
+  const hasStartDateTime = typeof event.start?.dateTime === "string";
+  const hasEndDateTime = typeof event.end?.dateTime === "string";
+  const allDay = hasStartDate || hasEndDate;
+
+  let startsAt: string | null;
+  let endsAt: string | null;
+  if (allDay) {
+    if (
+      !hasStartDate ||
+      !hasEndDate ||
+      hasStartDateTime ||
+      hasEndDateTime ||
+      !calendarTimeZone
+    ) {
+      return unsupported("INVALID_RANGE");
+    }
+    startsAt = googleCalendarDateStart(
+      event.start?.date ?? "",
+      calendarTimeZone,
+    );
+    endsAt = googleCalendarDateStart(event.end?.date ?? "", calendarTimeZone);
+  } else {
+    startsAt = isoOrNull(event.start?.dateTime, event.start?.timeZone);
+    endsAt = isoOrNull(event.end?.dateTime, event.end?.timeZone);
+  }
+
   if (!startsAt || !endsAt) return unsupported("MISSING_RANGE");
   if (new Date(endsAt) <= new Date(startsAt)) {
     return unsupported("INVALID_RANGE");
+  }
+
+  if (recurringEventId) {
+    const original = event.originalStartTime;
+    const originalIsAllDay = typeof original?.date === "string";
+    if (originalIsAllDay !== allDay) return unsupported("RECURRING");
   }
 
   return {
@@ -1148,6 +1500,9 @@ export function classifyGoogleCalendarEventAsExternal(
     summary,
     startsAt,
     endsAt,
+    allDay,
+    recurring: recurringEventId !== null,
+    recurringEventId,
     etag,
     updatedAt,
   };

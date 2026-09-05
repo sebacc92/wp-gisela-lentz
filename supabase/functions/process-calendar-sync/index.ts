@@ -30,6 +30,8 @@ import {
   countClassifiedEvent,
   emptyInboundPreviewCounts,
   emptyInboundSyncSummary,
+  GOOGLE_CALENDAR_SYNC_CONTRACT_VERSION,
+  googleCalendarCoverageWindow,
   inboundChangeCount,
   type InboundSyncSummary,
   parseCalendarSyncMode,
@@ -41,6 +43,7 @@ import {
 interface CalendarConnectionSecret {
   status?: string;
   google_calendar_id?: string;
+  google_calendar_timezone?: string;
   refresh_token?: string;
   connection_generation?: number | string;
 }
@@ -70,6 +73,7 @@ interface InboundLease {
   sync_state?: string;
   first_import_approved?: boolean;
   google_calendar_id?: string;
+  google_calendar_timezone?: string;
 }
 
 interface FullResyncManagedCandidate {
@@ -83,6 +87,7 @@ export interface CalendarSyncDependencies {
   authorize?: typeof authorizeUser;
   environment?: (name: string) => string | undefined;
   fetcher?: typeof fetch;
+  now?: () => number;
 }
 
 const MAX_INBOUND_PAGES = 12;
@@ -91,6 +96,49 @@ const FULL_RESYNC_MANAGED_PAGE_SIZE = 100;
 const MAX_FULL_RESYNC_MANAGED_PAGES = 100;
 const APPOINTMENT_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function recurringOccurrenceKey(
+  event: Parameters<typeof classifyGoogleCalendarEvent>[0],
+): string | null {
+  const recurringEventId =
+    typeof event.recurringEventId === "string"
+      ? event.recurringEventId.trim()
+      : "";
+  if (!recurringEventId) return null;
+  const original = event.originalStartTime;
+  const originalValue = original?.dateTime?.trim() || original?.date?.trim();
+  return originalValue ? `${recurringEventId}\u0000${originalValue}` : null;
+}
+
+function assertUniqueEventObservation(
+  eventIds: Map<string, string>,
+  occurrenceIds: Map<string, string>,
+  event: Parameters<typeof classifyGoogleCalendarEvent>[0],
+  classified: ClassifiedGoogleEvent,
+): boolean {
+  if (classified.kind === "ignored" || !classified.eventId) return true;
+  const fingerprint = JSON.stringify(classified);
+  const previous = eventIds.get(classified.eventId);
+  if (previous !== undefined) {
+    if (previous !== fingerprint) {
+      throw calendarWorkerFailure("CALENDAR_INBOUND_DUPLICATE_EVENT_MISMATCH");
+    }
+    return false;
+  }
+  eventIds.set(classified.eventId, fingerprint);
+
+  const occurrenceKey = recurringOccurrenceKey(event);
+  if (occurrenceKey) {
+    const previousEventId = occurrenceIds.get(occurrenceKey);
+    if (previousEventId && previousEventId !== classified.eventId) {
+      throw calendarWorkerFailure(
+        "CALENDAR_INBOUND_OCCURRENCE_IDENTITY_MISMATCH",
+      );
+    }
+    occurrenceIds.set(occurrenceKey, classified.eventId);
+  }
+  return true;
+}
 
 function firstRow<T>(data: unknown): T | null {
   return (Array.isArray(data) ? data[0] : data) as T | null;
@@ -286,7 +334,7 @@ export async function handleCalendarSyncRequest(
     }
 
     const { data: connectionData, error: connectionError } = await client.rpc(
-      "get_google_calendar_connection_secret",
+      "get_google_calendar_windowed_connection_secret",
       {},
     );
     if (connectionError) throw new Error("CALENDAR_CONNECTION_UNAVAILABLE");
@@ -295,6 +343,7 @@ export async function handleCalendarSyncRequest(
       !connection ||
       connection.status !== "connected" ||
       !connection.google_calendar_id ||
+      !connection.google_calendar_timezone ||
       !connection.refresh_token ||
       !Number.isSafeInteger(Number(connection.connection_generation))
     ) {
@@ -310,6 +359,12 @@ export async function handleCalendarSyncRequest(
     }
     const generation = Number(connection.connection_generation);
     const calendarId = connection.google_calendar_id;
+    const calendarTimeZone = connection.google_calendar_timezone.trim();
+    const now = new Date((dependencies.now ?? Date.now)());
+    const coverage = googleCalendarCoverageWindow(now, calendarTimeZone);
+    if (!coverage) {
+      throw calendarWorkerFailure("CALENDAR_COVERAGE_WINDOW_INVALID");
+    }
 
     let accessToken: string;
     try {
@@ -339,19 +394,60 @@ export async function handleCalendarSyncRequest(
     // Preview: sólo cuenta. Cero escrituras en Google o en la base.
     // -----------------------------------------------------------------------
     if (preview) {
-      const now = new Date();
-      const timeMin = now.toISOString();
       let counts = emptyInboundPreviewCounts();
       let legacyManagedEvents = 0;
-      let manualExternalEvents = 0;
+      let externalEvents = 0;
+      let recurringOccurrences = 0;
+      let cancelledRecurringOccurrences = 0;
+      let allDayEvents = 0;
+      let freeEventsIgnored = 0;
+      const recurringSeriesIds = new Set<string>();
+      const previewEventIds = new Map<string, string>();
+      const previewOccurrenceIds = new Map<string, string>();
       const knownAppointments = new Map<string, boolean>();
       let pageToken: string | null = null;
       let pages = 0;
+
+      const countExternalShape = (
+        item: Parameters<typeof classifyGoogleCalendarEvent>[0],
+        classified: ClassifiedExternalGoogleEvent,
+      ) => {
+        if (classified.kind === "ignored") return;
+        const recurringEventId =
+          typeof item.recurringEventId === "string"
+            ? item.recurringEventId.trim()
+            : "";
+        const recurringMaster =
+          Array.isArray(item.recurrence) && item.recurrence.length > 0;
+        if (recurringEventId) recurringSeriesIds.add(recurringEventId);
+        else if (recurringMaster) recurringSeriesIds.add(classified.eventId);
+
+        const cancelled =
+          classified.kind === "external_removed" &&
+          classified.removalReason === "cancelled";
+        if (cancelled) {
+          if (recurringEventId) cancelledRecurringOccurrences += 1;
+          return;
+        }
+
+        externalEvents += 1;
+        if (recurringEventId) recurringOccurrences += 1;
+        if (item.start?.date && item.end?.date) allDayEvents += 1;
+        if (
+          classified.kind === "external_removed" &&
+          classified.removalReason === "transparent"
+        ) {
+          freeEventsIgnored += 1;
+        }
+      };
+
       do {
         const page = await listGoogleCalendarEvents({
           accessToken,
           calendarId,
-          timeMin,
+          timeMin: coverage.startsAt,
+          timeMax: coverage.endsAt,
+          calendarTimeZone: coverage.timeZone,
           pageToken,
           maxResults: 2500,
           fetcher,
@@ -360,10 +456,23 @@ export async function handleCalendarSyncRequest(
         const classifiedItems: {
           item: (typeof page.items)[number];
           classified: ClassifiedGoogleEvent;
-        }[] = page.items.map((item) => ({
-          item,
-          classified: classifyGoogleCalendarEvent(item),
-        }));
+        }[] = [];
+        for (const item of page.items) {
+          const classified = classifyGoogleCalendarEvent(
+            item,
+            calendarTimeZone,
+          );
+          if (
+            assertUniqueEventObservation(
+              previewEventIds,
+              previewOccurrenceIds,
+              item,
+              classified,
+            )
+          ) {
+            classifiedItems.push({ item, classified });
+          }
+        }
         if (
           classifiedItems.some(
             ({ classified }) => classified.kind === "managed_mismatch",
@@ -402,39 +511,59 @@ export async function handleCalendarSyncRequest(
               false
           ) {
             legacyManagedEvents += 1;
-            counts = countClassifiedEvent(
-              counts,
-              classifyGoogleCalendarEventAsExternal(item),
-              now,
+            const external = classifyGoogleCalendarEventAsExternal(
+              item,
+              calendarTimeZone,
             );
+            countExternalShape(item, external);
+            counts = countClassifiedEvent(counts, external, now);
             continue;
           }
-          if (classified.kind === "external_block") {
-            manualExternalEvents += 1;
+          if (
+            classified.kind !== "managed" &&
+            classified.kind !== "managed_mismatch"
+          ) {
+            countExternalShape(item, classified);
           }
           counts = countClassifiedEvent(counts, classified, now);
         }
         pageToken = page.nextPageToken;
       } while (pageToken && pages < MAX_INBOUND_PAGES);
 
-      return jsonResponse(request, {
-        processed: true,
-        mode: "preview",
-        outcome: "completed",
-        mutated: false,
-        pagesFetched: pages,
-        truncated: Boolean(pageToken),
-        preview: {
-          managedEvents: counts.managed,
-          legacyManagedEvents,
-          externalEvents: manualExternalEvents,
-          wouldBecomeBlocks: counts.externalBlocks,
-          pastEventsIgnored: counts.pastBlocks,
-          unsupportedEvents: counts.externalUnsupported,
-          cancelledEvents: counts.externalRemoved,
-          ignoredEvents: counts.ignored,
+      const truncated = Boolean(pageToken);
+      return jsonResponse(
+        request,
+        {
+          processed: true,
+          mode: "preview",
+          outcome: truncated ? "partial" : "completed",
+          mutated: false,
+          pagesFetched: pages,
+          truncated,
+          coverage: {
+            startDate: coverage.startDate,
+            endDateExclusive: coverage.endDateExclusive,
+            days: coverage.days,
+            timeZone: coverage.timeZone,
+          },
+          preview: {
+            managedEvents: counts.managed,
+            legacyManagedEvents,
+            externalEvents,
+            recurringSeries: recurringSeriesIds.size,
+            recurringOccurrences,
+            cancelledRecurringOccurrences,
+            allDayEvents,
+            freeEventsIgnored,
+            wouldBecomeBlocks: counts.externalBlocks,
+            pastEventsIgnored: counts.pastBlocks,
+            unsupportedEvents: counts.externalUnsupported,
+            cancelledEvents: counts.externalRemoved,
+            ignoredEvents: counts.ignored,
+          },
         },
-      });
+        truncated ? 503 : 200,
+      );
     }
 
     // -----------------------------------------------------------------------
@@ -453,7 +582,13 @@ export async function handleCalendarSyncRequest(
 
     const { data: leaseData, error: leaseError } = await client.rpc(
       "begin_google_calendar_inbound_sync",
-      { p_expected_generation: generation, p_lease_seconds: 240 },
+      {
+        p_expected_generation: generation,
+        p_lease_seconds: 240,
+        p_sync_contract_version: GOOGLE_CALENDAR_SYNC_CONTRACT_VERSION,
+        p_coverage_starts_at: coverage.startsAt,
+        p_coverage_ends_at: coverage.endsAt,
+      },
     );
     if (leaseError) throw new Error("CALENDAR_INBOUND_LEASE_FAILED");
     const lease = firstRow<InboundLease>(leaseData);
@@ -461,6 +596,10 @@ export async function handleCalendarSyncRequest(
     if (!lease?.lease_token) {
       inboundSkippedReason = "INBOUND_SYNC_IN_PROGRESS";
     } else if (lease.google_calendar_id !== calendarId) {
+      leaseToken = lease.lease_token;
+      inboundFailure = calendarWorkerFailure("CALENDAR_INBOUND_SCOPE_MISMATCH");
+      inboundError = "CALENDAR_INBOUND_SCOPE_MISMATCH";
+    } else if (lease.google_calendar_timezone !== calendarTimeZone) {
       leaseToken = lease.lease_token;
       inboundFailure = calendarWorkerFailure("CALENDAR_INBOUND_SCOPE_MISMATCH");
       inboundError = "CALENDAR_INBOUND_SCOPE_MISMATCH";
@@ -486,6 +625,10 @@ export async function handleCalendarSyncRequest(
           generation,
           leaseToken,
           syncToken: lease.sync_token ?? null,
+          calendarTimeZone,
+          coverageStartsAt: coverage.startsAt,
+          coverageEndsAt: coverage.endsAt,
+          now,
           fetcher,
         });
       } catch (error) {
@@ -806,6 +949,9 @@ export async function handleCalendarSyncRequest(
           p_next_sync_token: inbound.nextSyncToken,
           p_summary: summary,
           p_changes: changes,
+          p_sync_contract_version: GOOGLE_CALENDAR_SYNC_CONTRACT_VERSION,
+          p_coverage_starts_at: coverage.startsAt,
+          p_coverage_ends_at: coverage.endsAt,
         });
       if (inboundCompleteError || inboundCompleted !== true) {
         // Si la transacción de cierre no confirmó, el token incremental no se
@@ -855,6 +1001,12 @@ export async function handleCalendarSyncRequest(
           skippedReason: inboundSkippedReason,
           error: inboundError,
         },
+        coverage: {
+          startDate: coverage.startDate,
+          endDateExclusive: coverage.endDateExclusive,
+          days: coverage.days,
+          timeZone: coverage.timeZone,
+        },
         summary,
       },
       inboundError || inbound.truncated ? 503 : 200,
@@ -886,6 +1038,10 @@ async function runInboundSync(input: {
   generation: number;
   leaseToken: string;
   syncToken: string | null;
+  calendarTimeZone: string;
+  coverageStartsAt: string;
+  coverageEndsAt: string;
+  now: Date;
   fetcher: typeof fetch;
 }): Promise<InboundRunResult> {
   const { client, generation, leaseToken } = input;
@@ -929,16 +1085,23 @@ async function pullGoogleCalendar(input: {
   generation: number;
   leaseToken: string;
   syncToken: string | null;
+  calendarTimeZone: string;
+  coverageStartsAt: string;
+  coverageEndsAt: string;
+  now: Date;
   fetcher: typeof fetch;
 }): Promise<InboundRunResult> {
   const { client, generation, leaseToken } = input;
-  const now = new Date();
+  const now = input.now;
   const fullResync = input.syncToken === null;
-  const timeMin = fullResync ? now.toISOString() : null;
+  const timeMin = fullResync ? input.coverageStartsAt : null;
+  const timeMax = fullResync ? input.coverageEndsAt : null;
   let summary = emptyInboundSyncSummary();
   summary = { ...summary, fullResync };
 
   const seenEventIds = new Set<string>();
+  const seenEventFingerprints = new Map<string, string>();
+  const seenOccurrenceIds = new Map<string, string>();
   const observedManagedAppointments = new Map<string, string>();
   let pageToken: string | null = null;
   let nextSyncToken: string | null = null;
@@ -1028,11 +1191,15 @@ async function pullGoogleCalendar(input: {
             ? classified.endsAt
             : null,
         p_all_day:
-          classified.kind === "external_unsupported" &&
-          classified.reason === "ALL_DAY",
+          classified.kind === "external_block"
+            ? classified.allDay
+            : classified.kind === "external_unsupported" &&
+              classified.reason === "ALL_DAY",
         p_recurring:
-          classified.kind === "external_unsupported" &&
-          classified.reason === "RECURRING",
+          classified.kind === "external_block"
+            ? classified.recurring
+            : classified.kind === "external_unsupported" &&
+              classified.reason === "RECURRING",
         p_unsupported_reason:
           classified.kind === "external_unsupported" ? classified.reason : null,
         p_google_etag: classified.etag,
@@ -1069,6 +1236,7 @@ async function pullGoogleCalendar(input: {
         eventId: managed.eventId,
         updatedAt: managed.updatedAt,
         etag: managed.etag,
+        removalReason: "cancelled",
       },
       { suppressRemovalNoop: true },
     );
@@ -1082,6 +1250,8 @@ async function pullGoogleCalendar(input: {
       calendarId: input.calendarId,
       syncToken: input.syncToken,
       timeMin,
+      timeMax,
+      calendarTimeZone: input.calendarTimeZone,
       pageToken,
       maxResults: 2500,
       fetcher: input.fetcher,
@@ -1089,7 +1259,20 @@ async function pullGoogleCalendar(input: {
     pages += 1;
 
     for (const item of page.items) {
-      const classified = classifyGoogleCalendarEvent(item);
+      const classified = classifyGoogleCalendarEvent(
+        item,
+        input.calendarTimeZone,
+      );
+      if (
+        !assertUniqueEventObservation(
+          seenEventFingerprints,
+          seenOccurrenceIds,
+          item,
+          classified,
+        )
+      ) {
+        continue;
+      }
       if (classified.kind === "managed_mismatch") {
         throw calendarWorkerFailure("CALENDAR_INBOUND_MANAGED_EVENT_MISMATCH");
       }
@@ -1102,7 +1285,9 @@ async function pullGoogleCalendar(input: {
       if (classified.kind === "managed") {
         const outcome = await observeManaged(classified);
         if (outcome === "ignored_unknown_appointment") {
-          await applyExternal(classifyGoogleCalendarEventAsExternal(item));
+          await applyExternal(
+            classifyGoogleCalendarEventAsExternal(item, input.calendarTimeZone),
+          );
         } else {
           await retireExternalFallback(classified);
         }
@@ -1111,7 +1296,10 @@ async function pullGoogleCalendar(input: {
 
       // Un evento borrado llega con `id` y `status` solamente, sin
       // extendedProperties: el mapeo guardado en la cola lo identifica.
-      if (classified.kind === "external_removed") {
+      if (
+        classified.kind === "external_removed" &&
+        classified.removalReason === "cancelled"
+      ) {
         const { data: mappedAppointment, error: mappingError } =
           await client.rpc("google_calendar_managed_appointment_for_event", {
             p_google_event_id: classified.eventId,
@@ -1238,7 +1426,10 @@ async function pullGoogleCalendar(input: {
           fetcher: input.fetcher,
         });
         if (lookup.kind === "found") {
-          const classified = classifyGoogleCalendarEvent(lookup.event);
+          const classified = classifyGoogleCalendarEvent(
+            lookup.event,
+            input.calendarTimeZone,
+          );
           if (
             classified.kind !== "managed" ||
             classified.eventId !== eventId ||
@@ -1255,7 +1446,10 @@ async function pullGoogleCalendar(input: {
             // y se aplica por su forma externa bajo el mismo lease/generación.
             seenEventIds.add(eventId);
             await applyExternal(
-              classifyGoogleCalendarEventAsExternal(lookup.event),
+              classifyGoogleCalendarEventAsExternal(
+                lookup.event,
+                input.calendarTimeZone,
+              ),
             );
           } else {
             await retireExternalFallback(classified);
@@ -1276,6 +1470,7 @@ async function pullGoogleCalendar(input: {
               eventId,
               updatedAt: null,
               etag: null,
+              removalReason: "cancelled",
             });
           } else {
             await retireExternalFallback({

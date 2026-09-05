@@ -102,17 +102,34 @@ test("la primera importación exige un preview completo y compatible", () => {
   assert.match(page, /2\. Habilitar e importar/);
 });
 
-test("el preview separa eventos actuales, manuales y de una integración anterior", () => {
+test("el preview separa alcance, series, ocurrencias y bloqueos", () => {
   const page = source("src/routes/app/settings/index.tsx");
 
   assert.match(page, /googleCalendar\.preview\.managedEvents/);
   assert.match(page, /administrados por esta versión de la\s+agenda/);
   assert.match(page, /googleCalendar\.preview\.externalEvents/);
-  assert.match(page, /eventos creados a mano en Google/);
+  assert.match(
+    page,
+    /eventos u ocurrencias externos dentro del\s+horizonte revisado/,
+  );
   assert.match(page, /googleCalendar\.preview\s*\.legacyManagedEvents/);
   assert.match(page, /integración anterior sin un\s+turno asociado/);
   assert.match(page, /googleCalendar\.preview\.wouldBecomeBlocks/);
-  assert.match(page, /en total pasarían a ocupar horarios\s+como bloqueos/);
+  assert.match(page, /ocupaciones pasarían a ser bloqueos de\s+agenda/);
+  assert.match(page, /googleCalendar\.preview\.recurringSeries/);
+  assert.match(page, /googleCalendar\.preview\s*\.recurringOccurrences/);
+  assert.match(
+    page,
+    /googleCalendar\.preview\s*\.cancelledRecurringOccurrences/,
+  );
+  assert.match(page, /googleCalendar\.preview\.allDayEvents/);
+  assert.match(page, /googleCalendar\.preview\.freeEventsIgnored/);
+  assert.match(page, /googleCalendar\.preview\.coverageStartDate/);
+  assert.match(page, /googleCalendar\.preview\s*\.coverageEndDateExclusive/);
+  assert.match(
+    page,
+    /Las series se cuentan una vez y sus\s+ocurrencias por separado/,
+  );
 });
 
 test("habilitar revalida el alcance y ejecuta la importación inicial en orden", () => {
@@ -324,8 +341,10 @@ test("los eventos no soportados explican el cierre preventivo real", () => {
   const notice = page.slice(noticeStart, noticeEnd);
 
   assert.ok(noticeStart >= 0 && noticeEnd > noticeStart);
-  assert.match(notice, /la agenda no ofrece horarios/i);
-  assert.match(notice, /no crea ni\s+actualiza eventos de turnos en Google/i);
+  assert.match(notice, /la agenda\s+no ofrece horarios/i);
+  assert.match(notice, /ni envía cambios a Google/i);
+  assert.match(notice, /No hace falta modificar el\s+calendario/i);
+  assert.doesNotMatch(notice, /convert/i);
   assert.doesNotMatch(notice, /para no ocupar la agenda por error/i);
 });
 

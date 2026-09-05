@@ -7,6 +7,8 @@ import {
   countClassifiedEvent,
   emptyInboundPreviewCounts,
   emptyInboundSyncSummary,
+  GOOGLE_CALENDAR_COVERAGE_DAYS,
+  googleCalendarCoverageWindow,
   inboundChangeCount,
   parseCalendarSyncMode,
   parseExternalEventRpcOutcome,
@@ -88,19 +90,47 @@ test("el preview cuenta por categoría sin exponer ningún detalle", () => {
   for (const event of events) {
     counts = countClassifiedEvent(
       counts,
-      classifyGoogleCalendarEvent(event),
+      classifyGoogleCalendarEvent(event, "America/Argentina/Buenos_Aires"),
       now,
     );
   }
 
   assert.deepEqual(counts, {
     managed: 1,
-    externalBlocks: 1,
-    externalUnsupported: 1,
+    externalBlocks: 2,
+    externalUnsupported: 0,
     externalRemoved: 1,
     ignored: 1,
     pastBlocks: 1,
   });
+});
+
+test("la cobertura usa 21 fechas locales y conserva el fin exclusivo", () => {
+  const coverage = googleCalendarCoverageWindow(
+    new Date("2026-09-05T02:30:00.000Z"),
+    "America/Argentina/Buenos_Aires",
+  );
+
+  assert.deepEqual(coverage, {
+    startsAt: "2026-09-04T03:00:00.000Z",
+    endsAt: "2026-09-25T03:00:00.000Z",
+    startDate: "2026-09-04",
+    endDateExclusive: "2026-09-25",
+    days: GOOGLE_CALENDAR_COVERAGE_DAYS,
+    timeZone: "America/Argentina/Buenos_Aires",
+  });
+});
+
+test("la cobertura se calcula por calendario aun atravesando un cambio DST", () => {
+  const coverage = googleCalendarCoverageWindow(
+    new Date("2026-03-07T17:00:00.000Z"),
+    "America/New_York",
+  );
+
+  assert.equal(coverage?.startDate, "2026-03-07");
+  assert.equal(coverage?.endDateExclusive, "2026-03-28");
+  assert.equal(coverage?.startsAt, "2026-03-07T05:00:00.000Z");
+  assert.equal(coverage?.endsAt, "2026-03-28T04:00:00.000Z");
 });
 
 test("el resumen sólo cuenta como cambio lo que realmente se aplicó", () => {

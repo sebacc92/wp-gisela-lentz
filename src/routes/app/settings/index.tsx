@@ -2235,12 +2235,12 @@ export default component$(() => {
 
                       {googleCalendar.unsupportedCount > 0 && (
                         <p class="settings-note">
-                          Los eventos de todo el día y los que se repiten no se
-                          pueden ubicar con seguridad. Mientras quede alguno
-                          pendiente, la agenda no ofrece horarios y no crea ni
-                          actualiza eventos de turnos en Google, para evitar
-                          dobles reservas. Convertí esos eventos en eventos
-                          individuales con horario o retiralos del calendario.
+                          Hay eventos cuya ocupación todavía no se pudo
+                          verificar. Mientras quede alguno pendiente, la agenda
+                          no ofrece horarios ni envía cambios a Google, para
+                          evitar dobles reservas. No hace falta modificar el
+                          calendario: volvé a revisarlo para obtener el estado
+                          actualizado.
                         </p>
                       )}
 
@@ -2263,7 +2263,7 @@ export default component$(() => {
                             <p>
                               {googleCalendar.firstImportApproved
                                 ? "La importación ya está habilitada, pero todavía no terminó. Revisá nuevamente el calendario antes de reintentar."
-                                : "Todavía no importamos nada. Primero podés ver un resumen de lo que hay en el calendario y recién después habilitar e importar."}
+                                : "Todavía no importamos nada. La revisión y la importación inicial sólo leen Google: no crean, modifican ni eliminan eventos."}
                             </p>
                             {googleCalendar.preview && (
                               <>
@@ -2279,7 +2279,8 @@ export default component$(() => {
                                     <strong>
                                       {googleCalendar.preview.externalEvents}
                                     </strong>{" "}
-                                    eventos creados a mano en Google
+                                    eventos u ocurrencias externos dentro del
+                                    horizonte revisado
                                   </li>
                                   <li>
                                     <strong>
@@ -2293,19 +2294,68 @@ export default component$(() => {
                                   </li>
                                   <li>
                                     <strong>
+                                      {googleCalendar.preview.recurringSeries}
+                                    </strong>{" "}
+                                    series recurrentes, expandidas en{" "}
+                                    <strong>
+                                      {
+                                        googleCalendar.preview
+                                          .recurringOccurrences
+                                      }
+                                    </strong>{" "}
+                                    ocurrencias activas
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {
+                                        googleCalendar.preview
+                                          .cancelledRecurringOccurrences
+                                      }
+                                    </strong>{" "}
+                                    ocurrencias recurrentes canceladas que no
+                                    bloquearán horarios
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {googleCalendar.preview.allDayEvents}
+                                    </strong>{" "}
+                                    eventos u ocurrencias de todo el día
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {googleCalendar.preview.freeEventsIgnored}
+                                    </strong>{" "}
+                                    eventos marcados como libres en Google que
+                                    no bloquearán horarios
+                                  </li>
+                                  <li>
+                                    <strong>
                                       {googleCalendar.preview.wouldBecomeBlocks}
                                     </strong>{" "}
-                                    eventos en total pasarían a ocupar horarios
-                                    como bloqueos de agenda
+                                    ocupaciones pasarían a ser bloqueos de
+                                    agenda
                                   </li>
                                   <li>
                                     <strong>
                                       {googleCalendar.preview.unsupportedEvents}
                                     </strong>{" "}
-                                    no se pueden importar (todo el día o
-                                    repetidos)
+                                    no se pudieron interpretar con seguridad
                                   </li>
                                 </ul>
+                                <p class="settings-note">
+                                  Horizonte comprobado: desde{" "}
+                                  {formatSettingsDate(
+                                    googleCalendar.preview.coverageStartDate,
+                                  )}{" "}
+                                  hasta antes del{" "}
+                                  {formatSettingsDate(
+                                    googleCalendar.preview
+                                      .coverageEndDateExclusive,
+                                  )}
+                                  . Las series se cuentan una vez y sus
+                                  ocurrencias por separado; los grupos pueden
+                                  superponerse.
+                                </p>
                                 {(googleCalendar.preview.truncated ||
                                   googleCalendar.preview.unsupportedEvents >
                                     0) && (
@@ -2317,7 +2367,7 @@ export default component$(() => {
                                     <span>
                                       {googleCalendar.preview.truncated
                                         ? "El calendario tiene demasiados eventos para una revisión completa. No habilites la importación."
-                                        : "Antes de habilitar, convertí en Google los eventos de todo el día o repetidos en eventos individuales con horario y volvé a revisar."}
+                                        : "No pudimos verificar la ocupación de todos los eventos dentro del horizonte. No modificamos Google ni habilitamos la importación."}
                                     </span>
                                   </div>
                                 )}
@@ -2450,7 +2500,7 @@ export default component$(() => {
                                     if (!approvalSaved) {
                                       if (
                                         !window.confirm(
-                                          `¿Habilitar e importar los eventos que ya están en Google?\n\n${recheckedPreview.wouldBecomeBlocks} evento(s) pasarán a ocupar horarios en la agenda como bloqueos. Los turnos de pacientes no cambian.`,
+                                          `¿Habilitar e importar la ocupación ya existente en Google?\n\n${recheckedPreview.wouldBecomeBlocks} ocupación(es) pasarán a bloquear horarios en la agenda. Esta importación sólo lee Google: no crea, modifica ni elimina eventos.`,
                                         )
                                       ) {
                                         return;

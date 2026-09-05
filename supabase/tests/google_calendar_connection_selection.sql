@@ -102,6 +102,16 @@ select (
   at time zone 'America/Argentina/Buenos_Aires'
 ) as starts_at;
 
+create temporary table selection_sync_window as
+select bounds.starts_at,
+       bounds.starts_at + interval '21 days' as ends_at
+from (
+  select (
+    ((current_date + 65)::text || ' 00:00')::timestamp
+      at time zone 'America/Argentina/Buenos_Aires'
+  ) as starts_at
+) bounds;
+
 select public.disconnect_google_calendar(
   '9a000000-0000-4000-8000-000000000001'
 );
@@ -297,7 +307,9 @@ select ok(
 create temporary table completed_lease as
 select lease.lease_token
 from connection_a, lateral public.begin_google_calendar_inbound_sync(
-  connection_a.generation, 240
+  connection_a.generation, 240, 2,
+  (select starts_at from selection_sync_window),
+  (select ends_at from selection_sync_window)
 ) lease;
 select ok(
   (select public.complete_google_calendar_inbound_sync(
@@ -305,8 +317,11 @@ select ok(
     completed_lease.lease_token,
     'sync-token-account-a',
     '{"blocksImported":1}'::jsonb,
-    1
-  ) from connection_a, completed_lease),
+    1,
+    2,
+    selection_sync_window.starts_at,
+    selection_sync_window.ends_at
+  ) from connection_a, completed_lease, selection_sync_window),
   'token y resumen inbound se escriben sólo bajo lease del alcance A'
 );
 
@@ -558,7 +573,9 @@ select ok(
 create temporary table stale_lease as
 select lease.lease_token
 from connection_a, lateral public.begin_google_calendar_inbound_sync(
-  connection_a.generation, 240
+  connection_a.generation, 240, 2,
+  (select starts_at from selection_sync_window),
+  (select ends_at from selection_sync_window)
 ) lease;
 
 update public.google_calendar_sync_jobs
@@ -649,6 +666,11 @@ select ok(
       and connection.google_account_id = 'google-account-seba'
       and connection.google_calendar_id = 'calendar-seba'
       and connection.inbound_sync_token = 'sync-token-account-a'
+      and connection.inbound_sync_contract_version = 2
+      and connection.inbound_coverage_starts_at =
+        (select starts_at from selection_sync_window)
+      and connection.inbound_coverage_ends_at =
+        (select ends_at from selection_sync_window)
       and connection.inbound_first_import_approved_at is not null
       and connection.inbound_lease_token = (select lease_token from stale_lease)
   ),
@@ -824,6 +846,9 @@ select ok(
     where connection.id = true
       and connection.inbound_sync_token is null
       and connection.inbound_sync_token_generation is null
+      and connection.inbound_sync_contract_version is null
+      and connection.inbound_coverage_starts_at is null
+      and connection.inbound_coverage_ends_at is null
       and connection.inbound_sync_state = 'awaiting_first_import'
       and connection.inbound_first_import_approved_at is null
       and connection.inbound_first_import_approved_by is null
@@ -899,6 +924,13 @@ select ok(
    from public.google_calendar_external_events
    where google_calendar_id = 'calendar-gisela'
      and google_event_id = 'reconnect-block-account-b')
+  and exists (
+    select 1 from public.google_calendar_connections connection
+    where connection.id = true
+      and connection.inbound_sync_contract_version is null
+      and connection.inbound_coverage_starts_at is null
+      and connection.inbound_coverage_ends_at is null
+  )
   and not public.appointment_slot_is_available(
     '9a000000-0000-4000-8000-000000000002',
     (select starts_at from reconnect_block_fixture),
@@ -957,6 +989,9 @@ select ok(
       and connection.sync_scope_google_account_id is null
       and connection.sync_scope_google_calendar_id is null
       and connection.sync_scope_generation is null
+      and connection.inbound_sync_contract_version is null
+      and connection.inbound_coverage_starts_at is null
+      and connection.inbound_coverage_ends_at is null
   )
   and not exists (select 1 from public.google_calendar_connection_candidates),
   'disconnect limpia identidad, scope y candidato pendiente'
