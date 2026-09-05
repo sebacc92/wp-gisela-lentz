@@ -3,17 +3,12 @@ import {
   DocumentHeadTags,
   QwikRouterProvider,
   RouterOutlet,
-  useLocation,
 } from "@qwik.dev/router";
 import { BUSINESS_CONFIG } from "~/config/business";
-import { getCanonicalUrl } from "~/config/site";
 
 import "./global.css";
 
 const RouterDocument = component$(() => {
-  const { url } = useLocation();
-  const canonicalUrl = getCanonicalUrl(url.pathname);
-
   /**
    * This is the root of a QwikRouter site. It contains the document's `<head>` and `<body>`. You can adjust them as you see fit.
    */
@@ -40,8 +35,6 @@ const RouterDocument = component$(() => {
         <link rel="manifest" href="/manifest.json" />
 
         <DocumentHeadTags />
-
-        <link rel="canonical" href={canonicalUrl} />
       </head>
       <body>
         <RouterOutlet />
