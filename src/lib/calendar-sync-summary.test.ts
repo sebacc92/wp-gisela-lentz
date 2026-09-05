@@ -82,7 +82,15 @@ test("la primera importación pendiente se explica, no se reporta como error", (
     summary: { ...emptyCalendarSyncSummary(), pushed: 1 },
     skippedReason: "FIRST_IMPORT_APPROVAL_REQUIRED",
   });
-  assert.match(message, /falta aprobar la primera importación/);
+  assert.equal(
+    message,
+    "No enviamos turnos ni trajimos eventos esta vez. Para empezar de forma segura, falta aprobar la primera importación.",
+  );
+  assert.doesNotMatch(
+    message,
+    /turnos se enviaron/i,
+    "un outcome omitido no puede afirmar que los contadores se ejecutaron",
+  );
 });
 
 test("el contador de cambios ignora lo que ya estaba en sincronía", () => {

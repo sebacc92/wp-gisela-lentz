@@ -126,7 +126,7 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
         aria-labelledby="appointment-drawer-title"
         aria-busy={busy}
         tabIndex={-1}
-        onClick$={(event) => event.stopPropagation()}
+        stoppropagation:click
         onKeyDown$={(event) => {
           if (
             event.key === "Escape" &&

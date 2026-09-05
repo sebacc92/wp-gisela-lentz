@@ -38,10 +38,16 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
   );
   const savingCoverage = useSignal(false);
   const saving = useSignal(false);
+  const slotReloadVersion = useSignal(0);
   const error = useSignal("");
-  const state = useStore<{ slots: AppointmentSlot[]; loading: boolean }>({
+  const state = useStore<{
+    slots: AppointmentSlot[];
+    loading: boolean;
+    loadError: boolean;
+  }>({
     slots: [],
     loading: true,
+    loadError: false,
   });
 
   // Move focus into the drawer when it opens and return it to the control that
@@ -60,27 +66,39 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
     });
   });
 
-  useVisibleTask$(async ({ track }) => {
+  useVisibleTask$(async ({ track, cleanup }) => {
     track(() => date.value);
     track(() => coverage.value);
+    track(() => slotReloadVersion.value);
+    let cancelled = false;
+    cleanup(() => {
+      cancelled = true;
+    });
     selectedStartsAt.value = "";
     if (!coverage.value) {
       state.slots = [];
       state.loading = false;
+      state.loadError = false;
       return;
     }
     state.loading = true;
+    state.loadError = false;
+    state.slots = [];
     try {
-      state.slots = await loadAvailableSlots(
+      const slots = await loadAvailableSlots(
         getSupabaseClient(),
         props.appointment.professionalId,
         date.value,
         coverage.value || undefined,
       );
+      if (cancelled) return;
+      state.slots = slots;
     } catch {
+      if (cancelled) return;
       state.slots = [];
+      state.loadError = true;
     } finally {
-      state.loading = false;
+      if (!cancelled) state.loading = false;
     }
   });
   const busy = saving.value || savingCoverage.value;
@@ -101,7 +119,7 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
         aria-labelledby="reschedule-title"
         aria-busy={busy}
         tabIndex={-1}
-        onClick$={(event) => event.stopPropagation()}
+        stoppropagation:click
         onKeyDown$={(event) => {
           if (
             event.key === "Escape" &&
@@ -134,8 +152,17 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
           class="appointment-form"
           preventdefault:submit
           onSubmit$={async () => {
-            if (!coverage.value || !selectedStartsAt.value || saving.value)
+            if (saving.value || savingCoverage.value) return;
+            if (state.loading) {
+              error.value = "Esperá a que termine la consulta de horarios.";
               return;
+            }
+            if (state.loadError) {
+              error.value =
+                "No pudimos validar la disponibilidad. Reintentá la consulta de horarios.";
+              return;
+            }
+            if (!coverage.value || !selectedStartsAt.value) return;
             saving.value = true;
             error.value = "";
             try {
@@ -156,7 +183,8 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
               }
               await props.onSaved$("Turno reprogramado.");
             } catch {
-              error.value = "No pudimos reprogramar el turno.";
+              error.value =
+                "No pudimos confirmar si el turno se reprogramó. Cerrá y revisá la agenda antes de volver a intentar.";
             } finally {
               saving.value = false;
             }
@@ -194,21 +222,29 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
                     key={value}
                     type="button"
                     aria-pressed={coverage.value === value}
-                    disabled={savingCoverage.value}
+                    disabled={busy}
                     onClick$={async () => {
+                      if (saving.value || savingCoverage.value) return;
                       savingCoverage.value = true;
-                      const { error: coverageError } = await getSupabaseClient()
-                        .from("contacts")
-                        .update({ coverage: value })
-                        .eq("id", props.appointment.contactId);
-                      savingCoverage.value = false;
-                      if (coverageError) {
-                        error.value = "No pudimos guardar la cobertura.";
-                        return;
-                      }
-                      props.appointment.contactCoverage = value;
-                      coverage.value = value;
+                      selectedStartsAt.value = "";
                       error.value = "";
+                      try {
+                        const { error: coverageError } =
+                          await getSupabaseClient()
+                            .from("contacts")
+                            .update({ coverage: value })
+                            .eq("id", props.appointment.contactId);
+                        if (coverageError) {
+                          error.value = "No pudimos guardar la cobertura.";
+                          return;
+                        }
+                        props.appointment.contactCoverage = value;
+                        coverage.value = value;
+                      } catch {
+                        error.value = "No pudimos guardar la cobertura.";
+                      } finally {
+                        savingCoverage.value = false;
+                      }
                     }}
                   >
                     {value === "ioma"
@@ -227,36 +263,61 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
                 type="date"
                 min={businessDate()}
                 value={date.value}
-                onInput$={(_, element) => (date.value = element.value)}
+                disabled={busy}
+                onInput$={(_, element) => {
+                  date.value = element.value;
+                  selectedStartsAt.value = "";
+                }}
               />
             </div>
           </label>
           <fieldset class="slot-picker">
             <legend>Nuevo horario</legend>
-            <div>
-              {coverage.value &&
-                state.slots.map((slot) => (
-                  <button
-                    key={slot.startsAt}
-                    type="button"
-                    class={{
-                      selected: selectedStartsAt.value === slot.startsAt,
-                    }}
-                    onClick$={() => (selectedStartsAt.value = slot.startsAt)}
-                  >
-                    {slot.label}
-                  </button>
-                ))}
-            </div>
-            <small>
-              {state.loading
-                ? "Consultando horarios…"
-                : !coverage.value
-                  ? "Primero elegí la cobertura del paciente."
-                  : state.slots.length
-                    ? `${coverage.value === "ioma" ? props.bookingDurations.iomaMinutes : props.bookingDurations.privateMinutes} minutos`
-                    : "No hay horarios disponibles para ese día."}
-            </small>
+            {state.loadError ? (
+              <>
+                <p class="login-error" role="alert">
+                  No pudimos consultar los horarios. El turno actual sigue sin
+                  cambios.
+                </p>
+                <button
+                  class="secondary-button small"
+                  type="button"
+                  onClick$={() => (slotReloadVersion.value += 1)}
+                >
+                  Reintentar horarios
+                </button>
+              </>
+            ) : (
+              <>
+                <div>
+                  {coverage.value &&
+                    state.slots.map((slot) => (
+                      <button
+                        key={slot.startsAt}
+                        type="button"
+                        class={{
+                          selected: selectedStartsAt.value === slot.startsAt,
+                        }}
+                        disabled={busy}
+                        onClick$={() =>
+                          (selectedStartsAt.value = slot.startsAt)
+                        }
+                      >
+                        {slot.label}
+                      </button>
+                    ))}
+                </div>
+                <small>
+                  {state.loading
+                    ? "Consultando horarios…"
+                    : !coverage.value
+                      ? "Primero elegí la cobertura del paciente."
+                      : state.slots.length
+                        ? `${coverage.value === "ioma" ? props.bookingDurations.iomaMinutes : props.bookingDurations.privateMinutes} minutos`
+                        : "No hay horarios disponibles para ese día."}
+                </small>
+              </>
+            )}
           </fieldset>
           {error.value && (
             <p class="login-error" role="alert">
@@ -278,7 +339,12 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
               class="primary-button"
               type="submit"
               disabled={
-                !coverage.value || !selectedStartsAt.value || saving.value
+                !coverage.value ||
+                !selectedStartsAt.value ||
+                state.loading ||
+                state.loadError ||
+                saving.value ||
+                savingCoverage.value
               }
             >
               {saving.value ? "Guardando…" : "Confirmar cambio"}

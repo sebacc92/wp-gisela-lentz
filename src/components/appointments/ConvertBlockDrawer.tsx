@@ -46,10 +46,16 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
     const serviceId = useSignal(props.services[0]?.id ?? "");
     const note = useSignal("");
     const saving = useSignal(false);
+    const patientReloadVersion = useSignal(0);
     const error = useSignal("");
-    const state = useStore<{ patients: PatientOption[]; loading: boolean }>({
+    const state = useStore<{
+      patients: PatientOption[];
+      loading: boolean;
+      loadError: boolean;
+    }>({
       patients: [],
       loading: true,
+      loadError: false,
     });
 
     // eslint-disable-next-line qwik/no-use-visible-task
@@ -66,20 +72,41 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
       });
     });
 
-    useVisibleTask$(async () => {
-      const { data } = await getSupabaseClient()
-        .from("contacts")
-        .select("id,name,coverage")
-        .order("name");
-      state.patients = (data ?? []) as PatientOption[];
-      state.loading = false;
+    useVisibleTask$(async ({ track, cleanup }) => {
+      track(() => patientReloadVersion.value);
+      let cancelled = false;
+      cleanup(() => {
+        cancelled = true;
+      });
+      state.loading = true;
+      state.loadError = false;
+      try {
+        const { data, error: patientsError } = await getSupabaseClient()
+          .from("contacts")
+          .select("id,name,coverage")
+          .order("name");
+        if (patientsError) throw patientsError;
+        if (cancelled) return;
+        state.patients = (data ?? []) as PatientOption[];
+      } catch {
+        if (cancelled) return;
+        patientId.value = "";
+        state.patients = [];
+        state.loadError = true;
+      } finally {
+        if (!cancelled) state.loading = false;
+      }
     });
 
     const selectedPatient = state.patients.find(
       (patient) => patient.id === patientId.value,
     );
     const ready = Boolean(
-      patientId.value && professionalId.value && serviceId.value,
+      !state.loading &&
+      !state.loadError &&
+      selectedPatient?.coverage &&
+      professionalId.value &&
+      serviceId.value,
     );
 
     return (
@@ -98,7 +125,7 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
           aria-labelledby="convert-block-title"
           aria-busy={saving.value}
           tabIndex={-1}
-          onClick$={(event) => event.stopPropagation()}
+          stoppropagation:click
           onKeyDown$={(event) => {
             if (event.key === "Escape" && !saving.value) {
               event.preventDefault();
@@ -151,7 +178,7 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                 );
               } catch {
                 error.value =
-                  "No pudimos convertir el bloqueo. No se hicieron cambios; intentá de nuevo.";
+                  "No pudimos confirmar si el bloqueo se convirtió. Cerrá y revisá la agenda antes de volver a intentar.";
               } finally {
                 saving.value = false;
               }
@@ -182,11 +209,15 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
               <div class="select-wrap">
                 <select
                   value={patientId.value}
-                  disabled={state.loading}
+                  disabled={state.loading || state.loadError || saving.value}
                   onChange$={(_, element) => (patientId.value = element.value)}
                 >
                   <option value="">
-                    {state.loading ? "Cargando…" : "Elegí un paciente"}
+                    {state.loading
+                      ? "Cargando…"
+                      : state.loadError
+                        ? "Pacientes no disponibles"
+                        : "Elegí un paciente"}
                   </option>
                   {state.patients.map((patient) => (
                     <option key={patient.id} value={patient.id}>
@@ -197,6 +228,22 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                 <Icon name="chevron-down" size={17} />
               </div>
             </label>
+
+            {state.loadError && (
+              <div class="patient-search-empty" role="alert">
+                <p>
+                  No pudimos cargar los pacientes. El bloqueo sigue ocupando el
+                  horario y no se hizo ningún cambio.
+                </p>
+                <button
+                  class="secondary-button small"
+                  type="button"
+                  onClick$={() => (patientReloadVersion.value += 1)}
+                >
+                  Reintentar
+                </button>
+              </div>
+            )}
 
             {selectedPatient && !selectedPatient.coverage && (
               <p class="login-error" role="alert">
@@ -210,6 +257,7 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
               <div class="select-wrap">
                 <select
                   value={serviceId.value}
+                  disabled={saving.value}
                   onChange$={(_, element) => (serviceId.value = element.value)}
                 >
                   {props.services.map((service) => (
@@ -227,6 +275,7 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
               <div class="select-wrap">
                 <select
                   value={professionalId.value}
+                  disabled={saving.value}
                   onChange$={(_, element) =>
                     (professionalId.value = element.value)
                   }
@@ -248,6 +297,7 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
               <textarea
                 rows={2}
                 value={note.value}
+                disabled={saving.value}
                 placeholder="Visible solo para Gisela"
                 onInput$={(_, element) => (note.value = element.value)}
               />

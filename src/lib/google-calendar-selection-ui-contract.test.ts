@@ -123,6 +123,119 @@ test("metadata_changed sólo permite restaurar desde la agenda", () => {
   );
 });
 
+test("una falla al cargar conflictos queda visible y ofrece reintento", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+  const loaderStart = page.indexOf("const loadGoogleCalendarStatus");
+  const loaderEnd = page.indexOf(
+    "const loadSelectableGoogleCalendars",
+    loaderStart,
+  );
+  const loader = page.slice(loaderStart, loaderEnd);
+  const conflictsStart = page.indexOf('class="calendar-conflicts"');
+  const conflictsEnd = page.indexOf("{state.isAdmin && (", conflictsStart);
+  const conflicts = page.slice(conflictsStart, conflictsEnd);
+
+  assert.ok(loaderStart >= 0 && loaderEnd > loaderStart);
+  assert.doesNotMatch(
+    loader,
+    /loadCalendarConflicts[\s\S]*?\.catch\([\s\S]*?=>\s*\[\]/,
+    "una consulta fallida no debe aparentar que no hay conflictos",
+  );
+  assert.match(loader, /googleCalendar\.conflictsError\s*=\s*""/);
+  assert.match(loader, /catch\s*\{[\s\S]*googleCalendar\.conflictsError\s*=/);
+
+  assert.ok(conflictsStart >= 0 && conflictsEnd > conflictsStart);
+  assert.match(
+    page,
+    /googleCalendar\.conflictCount\s*>\s*0\s*\|\|\s*googleCalendar\.conflicts\.length\s*>\s*0/,
+  );
+  assert.match(conflicts, /googleCalendar\.conflictsError/);
+  assert.match(conflicts, /onClick\$=\{loadGoogleCalendarStatus\}/);
+  assert.match(conflicts, /Volver a intentar/);
+});
+
+test("resolver un conflicto es exclusivo, refresca resultados dudosos y libera el estado", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+
+  for (const contract of [
+    {
+      rpc: '"reject_google_calendar_conflict"',
+      progress: "Guardando…",
+    },
+    { rpc: '"apply_google_calendar_conflict"', progress: "Aplicando…" },
+  ]) {
+    const rpc = page.indexOf(contract.rpc);
+    const actionStart = page.lastIndexOf("onClick$={async () =>", rpc);
+    const actionEnd = page.indexOf("</button>", rpc);
+    const action = page.slice(actionStart, actionEnd);
+
+    assert.ok(rpc >= 0 && actionStart >= 0 && actionEnd > rpc);
+    assert.match(action, /Boolean\(googleCalendar\.resolving\)/);
+    assert.match(action, /Boolean\(googleCalendar\.action\)/);
+    assert.match(action, /try\s*\{/);
+    assert.match(action, /catch\s*\{/);
+    assert.match(
+      action,
+      /catch\s*\{[\s\S]*await loadGoogleCalendarStatus\(\)/,
+      "si la respuesta se pierde, debe refrescar antes de permitir un reintento",
+    );
+    assert.match(
+      action,
+      /const refreshed\s*=\s*await loadGoogleCalendarStatus/,
+    );
+    assert.match(action, /googleCalendar\.conflicts\.filter/);
+    assert.match(action, /se guardó, pero no pudimos actualizar la vista/);
+    assert.match(action, /No pudimos confirmar si/);
+    assert.doesNotMatch(action, /El turno quedó como estaba/);
+    assert.match(
+      action,
+      /finally\s*\{[\s\S]*googleCalendar\.resolving\s*=\s*""/,
+    );
+    assert.match(action, new RegExp(contract.progress));
+  }
+});
+
+test("sincronizar y desconectar se bloquean mientras se resuelve un conflicto", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+  const actionsStart = page.indexOf(
+    '<div class="google-calendar-actions">',
+    page.indexOf('class="calendar-conflicts"'),
+  );
+  const actionsEnd = page.indexOf(") : (", actionsStart);
+  const actions = page.slice(actionsStart, actionsEnd);
+
+  assert.ok(actionsStart >= 0 && actionsEnd > actionsStart);
+  for (const operation of [
+    'googleCalendar.action = "sync"',
+    'googleCalendar.action = "disconnect"',
+  ]) {
+    const operationIndex = actions.indexOf(operation);
+    const handlerStart = actions.lastIndexOf(
+      "onClick$={async () =>",
+      operationIndex,
+    );
+    const handler = actions.slice(handlerStart, operationIndex);
+    assert.ok(operationIndex >= 0 && handlerStart >= 0);
+    assert.match(handler, /Boolean\(googleCalendar\.action\)/);
+    assert.match(handler, /Boolean\(googleCalendar\.resolving\)/);
+  }
+});
+
+test("los eventos no soportados explican el cierre preventivo real", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+  const noticeStart = page.indexOf("{googleCalendar.unsupportedCount > 0 && (");
+  const noticeEnd = page.indexOf(
+    '<div class="google-calendar-note">',
+    noticeStart,
+  );
+  const notice = page.slice(noticeStart, noticeEnd);
+
+  assert.ok(noticeStart >= 0 && noticeEnd > noticeStart);
+  assert.match(notice, /la agenda no ofrece horarios/i);
+  assert.match(notice, /no crea ni\s+actualiza eventos de turnos en Google/i);
+  assert.doesNotMatch(notice, /para no ocupar la agenda por error/i);
+});
+
 test("la elección muestra sólo nombre, principal y zona horaria", () => {
   const page = source("src/routes/app/settings/index.tsx");
   const styles = source("src/global.css");

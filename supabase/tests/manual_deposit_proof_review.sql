@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(17);
+select plan(18);
 
 select ok(
   has_function_privilege('authenticated', 'public.admin_confirm_appointment_deposit(uuid)', 'EXECUTE')
@@ -183,6 +183,24 @@ select throws_ok(
 
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"96000000-0000-4000-8000-000000000001"}', true);
 select set_config('request.jwt.claim.sub', '96000000-0000-4000-8000-000000000001', true);
+
+savepoint successful_manual_review;
+
+select ok(
+  (
+    select review.changed
+      and review.status = 'more_requested'
+      and review.appointment_id = '96000000-0000-4000-8000-000000000006'
+    from public.admin_review_deposit_proof(
+      '96000000-0000-4000-8000-000000000006',
+      'more_requested',
+      'Prueba sintética de decisión manual'
+    ) review
+  ),
+  'ADMIN puede resolver una revisión pendiente sin ambigüedad en status'
+);
+
+rollback to savepoint successful_manual_review;
 
 select ok(
   (

@@ -428,6 +428,7 @@ export default component$(() => {
     unsupportedCount: 0,
     conflictCount: 0,
     conflicts: [] as CalendarConflict[],
+    conflictsError: "",
     preview: null as CalendarImportPreview | null,
     loaded: false,
     loading: false,
@@ -442,6 +443,7 @@ export default component$(() => {
       | "select-calendar"
       | "cancel-selection",
     resolving: "",
+    resolvingAction: "" as "" | "reject" | "apply",
     message:
       googleResult === "selection_required"
         ? GOOGLE_CALENDAR_SELECTION_REQUIRED_MESSAGE
@@ -603,7 +605,7 @@ export default component$(() => {
     }
   });
 
-  const loadGoogleCalendarStatus = $(async () => {
+  const loadGoogleCalendarStatus = $(async (): Promise<boolean> => {
     googleCalendar.loading = true;
     googleCalendar.error = false;
     try {
@@ -637,12 +639,19 @@ export default component$(() => {
       googleCalendar.blockCount = Number(data.blockCount ?? 0);
       googleCalendar.unsupportedCount = Number(data.unsupportedCount ?? 0);
       googleCalendar.conflictCount = Number(data.conflictCount ?? 0);
-      googleCalendar.conflicts =
-        Number(data.conflictCount ?? 0) > 0
-          ? await loadCalendarConflicts(getSupabaseClient()).catch(
-              (): CalendarConflict[] => [],
-            )
-          : [];
+      googleCalendar.conflictsError = "";
+      if (googleCalendar.conflictCount > 0) {
+        try {
+          googleCalendar.conflicts =
+            await loadCalendarConflicts(getSupabaseClient());
+        } catch {
+          googleCalendar.conflicts = [];
+          googleCalendar.conflictsError =
+            "Hay cambios pendientes, pero no pudimos cargar el detalle. Probá nuevamente antes de tomar una decisión.";
+        }
+      } else {
+        googleCalendar.conflicts = [];
+      }
       googleCalendar.lastSyncedAt =
         typeof data.lastSyncedAt === "string" ? data.lastSyncedAt : "";
       googleCalendar.pendingCount = Number(data.pendingCount ?? 0);
@@ -657,10 +666,12 @@ export default component$(() => {
         googleCalendar.message = data.message;
       }
       googleCalendar.loaded = true;
+      return true;
     } catch {
       googleCalendar.error = true;
       googleCalendar.message =
         "No pudimos consultar Google Calendar. Revisá tu conexión e intentá otra vez.";
+      return false;
     } finally {
       googleCalendar.loading = false;
     }
@@ -670,7 +681,8 @@ export default component$(() => {
     if (
       !state.isAdmin ||
       !googleCalendar.selectionPending ||
-      Boolean(googleCalendar.action)
+      Boolean(googleCalendar.action) ||
+      Boolean(googleCalendar.resolving)
     ) {
       return;
     }
@@ -717,7 +729,12 @@ export default component$(() => {
   });
 
   const cancelGoogleCalendarSelection = $(async () => {
-    if (!state.isAdmin || Boolean(googleCalendar.action)) return;
+    if (
+      !state.isAdmin ||
+      Boolean(googleCalendar.action) ||
+      Boolean(googleCalendar.resolving)
+    )
+      return;
 
     googleCalendar.action = "cancel-selection";
     googleCalendar.error = false;
@@ -1996,7 +2013,10 @@ export default component$(() => {
                           <button
                             class="secondary-button"
                             type="button"
-                            disabled={Boolean(googleCalendar.action)}
+                            disabled={
+                              Boolean(googleCalendar.action) ||
+                              Boolean(googleCalendar.resolving)
+                            }
                             onClick$={loadSelectableGoogleCalendars}
                           >
                             Volver a intentar
@@ -2072,7 +2092,10 @@ export default component$(() => {
                         <button
                           class="secondary-button google-calendar-load-button"
                           type="button"
-                          disabled={Boolean(googleCalendar.action)}
+                          disabled={
+                            Boolean(googleCalendar.action) ||
+                            Boolean(googleCalendar.resolving)
+                          }
                           onClick$={loadSelectableGoogleCalendars}
                         >
                           Cargar calendarios
@@ -2083,7 +2106,10 @@ export default component$(() => {
                         <button
                           class="secondary-button"
                           type="button"
-                          disabled={Boolean(googleCalendar.action)}
+                          disabled={
+                            Boolean(googleCalendar.action) ||
+                            Boolean(googleCalendar.resolving)
+                          }
                           onClick$={cancelGoogleCalendarSelection}
                         >
                           {googleCalendar.action === "cancel-selection"
@@ -2096,9 +2122,17 @@ export default component$(() => {
                             type="button"
                             disabled={
                               !googleCalendar.selectedCalendarId ||
-                              Boolean(googleCalendar.action)
+                              Boolean(googleCalendar.action) ||
+                              Boolean(googleCalendar.resolving)
                             }
                             onClick$={async () => {
+                              if (
+                                !state.isAdmin ||
+                                Boolean(googleCalendar.action) ||
+                                Boolean(googleCalendar.resolving)
+                              ) {
+                                return;
+                              }
                               const selectedCalendar =
                                 googleCalendar.selectableCalendars.find(
                                   (calendar) =>
@@ -2250,8 +2284,11 @@ export default component$(() => {
                       {googleCalendar.unsupportedCount > 0 && (
                         <p class="settings-note">
                           Los eventos de todo el día y los que se repiten no se
-                          importan como bloqueo. Quedan anotados como pendientes
-                          de revisión para no ocupar la agenda por error.
+                          pueden ubicar con seguridad. Mientras quede alguno
+                          pendiente, la agenda no ofrece horarios y no crea ni
+                          actualiza eventos de turnos en Google, para evitar
+                          dobles reservas. Convertí esos eventos en eventos
+                          individuales con horario o retiralos del calendario.
                         </p>
                       )}
 
@@ -2325,8 +2362,17 @@ export default component$(() => {
                             <button
                               class="secondary-button"
                               type="button"
-                              disabled={Boolean(googleCalendar.action)}
+                              disabled={
+                                Boolean(googleCalendar.action) ||
+                                Boolean(googleCalendar.resolving)
+                              }
                               onClick$={async () => {
+                                if (
+                                  Boolean(googleCalendar.action) ||
+                                  Boolean(googleCalendar.resolving)
+                                ) {
+                                  return;
+                                }
                                 googleCalendar.action = "preview";
                                 googleCalendar.error = false;
                                 googleCalendar.message = "";
@@ -2366,11 +2412,18 @@ export default component$(() => {
                               type="button"
                               disabled={
                                 Boolean(googleCalendar.action) ||
+                                Boolean(googleCalendar.resolving) ||
                                 !googleCalendar.preview ||
                                 googleCalendar.preview.truncated ||
                                 googleCalendar.preview.unsupportedEvents > 0
                               }
                               onClick$={async () => {
+                                if (
+                                  Boolean(googleCalendar.action) ||
+                                  Boolean(googleCalendar.resolving)
+                                ) {
+                                  return;
+                                }
                                 if (
                                   !window.confirm(
                                     "¿Habilitar la importación de los eventos que ya están en Google?\n\nLos eventos creados a mano pasarán a ocupar horarios en la agenda como bloqueos. Los turnos de pacientes no cambian.",
@@ -2415,103 +2468,204 @@ export default component$(() => {
                         </div>
                       )}
 
-                      {googleCalendar.conflicts.length > 0 && (
+                      {(googleCalendar.conflictCount > 0 ||
+                        googleCalendar.conflicts.length > 0) && (
                         <div class="calendar-conflicts">
                           <h3>Cambios hechos en Google que hay que revisar</h3>
                           <p>
                             Alguien movió, borró o modificó en Google un turno
                             de un paciente. No lo cambiamos solos: decidí vos.
                           </p>
-                          <ul>
-                            {googleCalendar.conflicts.map((conflict) => (
-                              <li key={conflict.id}>
-                                <div>
-                                  <strong>{conflict.contactName}</strong>
-                                  <span>
-                                    {conflict.kind === "cancellation_requested"
-                                      ? "Se borró el evento en Google."
-                                      : conflict.kind === "metadata_changed"
-                                        ? "Se modificaron datos del evento en Google. El turno en la agenda no cambió."
-                                        : `Se movió al ${formatLastCalendarSync(
-                                            conflict.proposedStartsAt ?? "",
-                                          )}.`}
-                                  </span>
-                                </div>
-                                <div class="calendar-conflict-actions">
-                                  <button
-                                    class="secondary-button"
-                                    type="button"
-                                    disabled={
-                                      !state.isAdmin ||
-                                      Boolean(googleCalendar.resolving)
-                                    }
-                                    onClick$={async () => {
-                                      googleCalendar.resolving = conflict.id;
-                                      googleCalendar.error = false;
-                                      const { error } =
-                                        await getSupabaseClient().rpc(
-                                          "reject_google_calendar_conflict",
-                                          { p_conflict_id: conflict.id },
-                                        );
-                                      googleCalendar.resolving = "";
-                                      if (error) {
-                                        googleCalendar.error = true;
-                                        googleCalendar.message =
-                                          "No pudimos guardar la decisión. Probá otra vez.";
-                                        return;
-                                      }
-                                      googleCalendar.message =
-                                        "Dejamos el turno como está acá y lo vamos a restaurar en Google.";
-                                      await loadGoogleCalendarStatus();
-                                    }}
-                                  >
-                                    Restaurar desde la agenda
-                                  </button>
-                                  {conflict.kind !== "metadata_changed" && (
+                          {googleCalendar.conflictsError ? (
+                            <div class="google-calendar-selection-retry">
+                              <div
+                                class="google-calendar-feedback error"
+                                role="alert"
+                              >
+                                <Icon name="alert" size={19} />
+                                <span>{googleCalendar.conflictsError}</span>
+                              </div>
+                              <button
+                                class="secondary-button"
+                                type="button"
+                                disabled={
+                                  googleCalendar.loading ||
+                                  Boolean(googleCalendar.action) ||
+                                  Boolean(googleCalendar.resolving)
+                                }
+                                onClick$={loadGoogleCalendarStatus}
+                              >
+                                {googleCalendar.loading
+                                  ? "Reintentando…"
+                                  : "Volver a intentar"}
+                              </button>
+                            </div>
+                          ) : (
+                            <ul>
+                              {googleCalendar.conflicts.map((conflict) => (
+                                <li key={conflict.id}>
+                                  <div>
+                                    <strong>{conflict.contactName}</strong>
+                                    <span>
+                                      {conflict.kind ===
+                                      "cancellation_requested"
+                                        ? "Se borró el evento en Google."
+                                        : conflict.kind === "metadata_changed"
+                                          ? "Se modificaron datos del evento en Google. El turno en la agenda no cambió."
+                                          : `Se movió al ${formatLastCalendarSync(
+                                              conflict.proposedStartsAt ?? "",
+                                            )}.`}
+                                    </span>
+                                  </div>
+                                  <div class="calendar-conflict-actions">
                                     <button
-                                      class="primary-button"
+                                      class="secondary-button"
                                       type="button"
                                       disabled={
                                         !state.isAdmin ||
-                                        Boolean(googleCalendar.resolving)
+                                        Boolean(googleCalendar.resolving) ||
+                                        Boolean(googleCalendar.action)
                                       }
                                       onClick$={async () => {
                                         if (
-                                          !window.confirm(
-                                            conflict.kind ===
-                                              "cancellation_requested"
-                                              ? "¿Cancelar este turno en la agenda?"
-                                              : "¿Mover este turno al horario que quedó en Google?",
-                                          )
+                                          !state.isAdmin ||
+                                          Boolean(googleCalendar.resolving) ||
+                                          Boolean(googleCalendar.action)
                                         ) {
                                           return;
                                         }
                                         googleCalendar.resolving = conflict.id;
+                                        googleCalendar.resolvingAction =
+                                          "reject";
                                         googleCalendar.error = false;
-                                        const { error } =
-                                          await getSupabaseClient().rpc(
-                                            "apply_google_calendar_conflict",
-                                            { p_conflict_id: conflict.id },
-                                          );
-                                        googleCalendar.resolving = "";
-                                        if (error) {
+                                        googleCalendar.message = "";
+                                        try {
+                                          const { error } =
+                                            await getSupabaseClient().rpc(
+                                              "reject_google_calendar_conflict",
+                                              { p_conflict_id: conflict.id },
+                                            );
+                                          if (error) throw error;
+
+                                          googleCalendar.conflicts =
+                                            googleCalendar.conflicts.filter(
+                                              (item) => item.id !== conflict.id,
+                                            );
+                                          googleCalendar.conflictCount =
+                                            Math.max(
+                                              0,
+                                              googleCalendar.conflictCount - 1,
+                                            );
+                                          const refreshed =
+                                            await loadGoogleCalendarStatus();
+                                          googleCalendar.error = !refreshed;
+                                          googleCalendar.message = refreshed
+                                            ? "Dejamos el turno como está acá y lo vamos a restaurar en Google."
+                                            : "La decisión se guardó, pero no pudimos actualizar la vista. Recargá esta sección antes de continuar.";
+                                        } catch {
+                                          const refreshed =
+                                            await loadGoogleCalendarStatus();
                                           googleCalendar.error = true;
-                                          googleCalendar.message =
-                                            "No pudimos aplicar el cambio. El turno quedó como estaba.";
-                                          return;
+                                          googleCalendar.message = refreshed
+                                            ? "No pudimos confirmar si la decisión se guardó. Revisá el estado antes de volver a intentar."
+                                            : "No pudimos confirmar si la decisión se guardó ni recargar el estado. Recargá esta sección antes de volver a intentar.";
+                                        } finally {
+                                          googleCalendar.resolving = "";
+                                          googleCalendar.resolvingAction = "";
                                         }
-                                        googleCalendar.message =
-                                          "Aplicamos el cambio en la agenda.";
-                                        await loadGoogleCalendarStatus();
                                       }}
                                     >
-                                      Aplicar cambio
+                                      {googleCalendar.resolving ===
+                                        conflict.id &&
+                                      googleCalendar.resolvingAction ===
+                                        "reject"
+                                        ? "Guardando…"
+                                        : "Restaurar desde la agenda"}
                                     </button>
-                                  )}
-                                </div>
-                              </li>
-                            ))}
-                          </ul>
+                                    {conflict.kind !== "metadata_changed" && (
+                                      <button
+                                        class="primary-button"
+                                        type="button"
+                                        disabled={
+                                          !state.isAdmin ||
+                                          Boolean(googleCalendar.resolving) ||
+                                          Boolean(googleCalendar.action)
+                                        }
+                                        onClick$={async () => {
+                                          if (
+                                            !state.isAdmin ||
+                                            Boolean(googleCalendar.resolving) ||
+                                            Boolean(googleCalendar.action)
+                                          ) {
+                                            return;
+                                          }
+                                          if (
+                                            !window.confirm(
+                                              conflict.kind ===
+                                                "cancellation_requested"
+                                                ? "¿Cancelar este turno en la agenda?"
+                                                : "¿Mover este turno al horario que quedó en Google?",
+                                            )
+                                          ) {
+                                            return;
+                                          }
+                                          googleCalendar.resolving =
+                                            conflict.id;
+                                          googleCalendar.resolvingAction =
+                                            "apply";
+                                          googleCalendar.error = false;
+                                          googleCalendar.message = "";
+                                          try {
+                                            const { error } =
+                                              await getSupabaseClient().rpc(
+                                                "apply_google_calendar_conflict",
+                                                { p_conflict_id: conflict.id },
+                                              );
+                                            if (error) throw error;
+
+                                            googleCalendar.conflicts =
+                                              googleCalendar.conflicts.filter(
+                                                (item) =>
+                                                  item.id !== conflict.id,
+                                              );
+                                            googleCalendar.conflictCount =
+                                              Math.max(
+                                                0,
+                                                googleCalendar.conflictCount -
+                                                  1,
+                                              );
+                                            const refreshed =
+                                              await loadGoogleCalendarStatus();
+                                            googleCalendar.error = !refreshed;
+                                            googleCalendar.message = refreshed
+                                              ? "Aplicamos el cambio en la agenda."
+                                              : "El cambio se guardó, pero no pudimos actualizar la vista. Recargá esta sección antes de continuar.";
+                                          } catch {
+                                            const refreshed =
+                                              await loadGoogleCalendarStatus();
+                                            googleCalendar.error = true;
+                                            googleCalendar.message = refreshed
+                                              ? "No pudimos confirmar si el cambio se aplicó. Revisá el estado antes de volver a intentar."
+                                              : "No pudimos confirmar si el cambio se aplicó ni recargar el estado. Recargá esta sección antes de volver a intentar.";
+                                          } finally {
+                                            googleCalendar.resolving = "";
+                                            googleCalendar.resolvingAction = "";
+                                          }
+                                        }}
+                                      >
+                                        {googleCalendar.resolving ===
+                                          conflict.id &&
+                                        googleCalendar.resolvingAction ===
+                                          "apply"
+                                          ? "Aplicando…"
+                                          : "Aplicar cambio"}
+                                      </button>
+                                    )}
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
                         </div>
                       )}
 
@@ -2521,8 +2675,17 @@ export default component$(() => {
                             <button
                               class="primary-button"
                               type="button"
-                              disabled={Boolean(googleCalendar.action)}
+                              disabled={
+                                Boolean(googleCalendar.action) ||
+                                Boolean(googleCalendar.resolving)
+                              }
                               onClick$={async () => {
+                                if (
+                                  Boolean(googleCalendar.action) ||
+                                  Boolean(googleCalendar.resolving)
+                                ) {
+                                  return;
+                                }
                                 googleCalendar.action = "connect";
                                 googleCalendar.error = false;
                                 googleCalendar.message = "";
@@ -2561,8 +2724,17 @@ export default component$(() => {
                                 : "primary-button"
                             }
                             type="button"
-                            disabled={Boolean(googleCalendar.action)}
+                            disabled={
+                              Boolean(googleCalendar.action) ||
+                              Boolean(googleCalendar.resolving)
+                            }
                             onClick$={async () => {
+                              if (
+                                Boolean(googleCalendar.action) ||
+                                Boolean(googleCalendar.resolving)
+                              ) {
+                                return;
+                              }
                               googleCalendar.action = "sync";
                               googleCalendar.error = false;
                               googleCalendar.message = "";
@@ -2632,8 +2804,17 @@ export default component$(() => {
                           <button
                             class="secondary-button danger-button"
                             type="button"
-                            disabled={Boolean(googleCalendar.action)}
+                            disabled={
+                              Boolean(googleCalendar.action) ||
+                              Boolean(googleCalendar.resolving)
+                            }
                             onClick$={async () => {
+                              if (
+                                Boolean(googleCalendar.action) ||
+                                Boolean(googleCalendar.resolving)
+                              ) {
+                                return;
+                              }
                               const confirmed = window.confirm(
                                 "¿Querés desconectar Google Calendar? Los turnos seguirán guardados en esta aplicación, pero dejarán de enviarse a Google.",
                               );
@@ -2710,9 +2891,16 @@ export default component$(() => {
                           type="button"
                           disabled={
                             !googleCalendar.configured ||
-                            Boolean(googleCalendar.action)
+                            Boolean(googleCalendar.action) ||
+                            Boolean(googleCalendar.resolving)
                           }
                           onClick$={async () => {
+                            if (
+                              Boolean(googleCalendar.action) ||
+                              Boolean(googleCalendar.resolving)
+                            ) {
+                              return;
+                            }
                             googleCalendar.action = "connect";
                             googleCalendar.error = false;
                             googleCalendar.message = "";

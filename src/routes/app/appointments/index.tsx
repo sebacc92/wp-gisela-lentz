@@ -946,7 +946,7 @@ export default component$(() => {
             aria-labelledby="appointment-detail-title"
             aria-busy={detailBusy}
             tabIndex={-1}
-            onClick$={(event) => event.stopPropagation()}
+            stoppropagation:click
             onKeyDown$={(event) => {
               if (event.key === "Escape" && !detailBusy) {
                 event.preventDefault();

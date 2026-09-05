@@ -65,6 +65,8 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
     const note = useSignal("");
     const saving = useSignal(false);
     const savingCoverage = useSignal(false);
+    const patientReloadVersion = useSignal(0);
+    const slotReloadVersion = useSignal(0);
     const error = useSignal("");
     const state = useStore<{
       patients: PatientOption[];
@@ -72,12 +74,14 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
       loadingPatients: boolean;
       patientLoadError: boolean;
       loadingSlots: boolean;
+      slotLoadError: boolean;
     }>({
       patients: [],
       slots: [],
       loadingPatients: true,
       patientLoadError: false,
       loadingSlots: false,
+      slotLoadError: false,
     });
 
     // Move focus into the drawer when it opens and return it to the control that
@@ -96,46 +100,73 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
       });
     });
 
-    useVisibleTask$(async () => {
-      const { data, error: patientError } = await getSupabaseClient()
-        .from("contacts")
-        .select("id,name,phone_e164,coverage,is_existing_patient")
-        .order("name");
-      state.patients = (data ?? []) as PatientOption[];
-      state.patientLoadError = Boolean(patientError);
-      const initialPatient = state.patients.find(
-        (patient) => patient.id === props.initialPatientId,
-      );
-      if (initialPatient) {
-        patientId.value = initialPatient.id;
-        patientSearch.value = initialPatient.name;
-        selectedCoverage.value = initialPatient.coverage ?? "";
+    useVisibleTask$(async ({ track, cleanup }) => {
+      track(() => patientReloadVersion.value);
+      let cancelled = false;
+      cleanup(() => {
+        cancelled = true;
+      });
+      state.loadingPatients = true;
+      state.patientLoadError = false;
+      try {
+        const { data, error: patientError } = await getSupabaseClient()
+          .from("contacts")
+          .select("id,name,phone_e164,coverage,is_existing_patient")
+          .order("name");
+        if (patientError) throw patientError;
+        if (cancelled) return;
+        state.patients = (data ?? []) as PatientOption[];
+        const initialPatient = state.patients.find(
+          (patient) => patient.id === props.initialPatientId,
+        );
+        if (initialPatient && !patientId.value) {
+          patientId.value = initialPatient.id;
+          patientSearch.value = initialPatient.name;
+          selectedCoverage.value = initialPatient.coverage ?? "";
+        }
+      } catch {
+        if (cancelled) return;
+        state.patients = [];
+        state.patientLoadError = true;
+      } finally {
+        if (!cancelled) state.loadingPatients = false;
       }
-      state.loadingPatients = false;
     });
 
-    useVisibleTask$(async ({ track }) => {
+    useVisibleTask$(async ({ track, cleanup }) => {
       track(() => professionalId.value);
       track(() => selectedCoverage.value);
       track(() => date.value);
+      track(() => slotReloadVersion.value);
+      let cancelled = false;
+      cleanup(() => {
+        cancelled = true;
+      });
       selectedStartsAt.value = "";
       if (!selectedCoverage.value) {
         state.slots = [];
         state.loadingSlots = false;
+        state.slotLoadError = false;
         return;
       }
       state.loadingSlots = true;
+      state.slotLoadError = false;
+      state.slots = [];
       try {
-        state.slots = await loadAvailableSlots(
+        const slots = await loadAvailableSlots(
           getSupabaseClient(),
           professionalId.value,
           date.value,
           selectedCoverage.value,
         );
+        if (cancelled) return;
+        state.slots = slots;
       } catch {
+        if (cancelled) return;
         state.slots = [];
+        state.slotLoadError = true;
       } finally {
-        state.loadingSlots = false;
+        if (!cancelled) state.loadingSlots = false;
       }
     });
 
@@ -176,7 +207,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
           aria-labelledby="manual-appointment-title"
           aria-busy={busy}
           tabIndex={-1}
-          onClick$={(event) => event.stopPropagation()}
+          stoppropagation:click
           onKeyDown$={(event) => {
             if (
               event.key === "Escape" &&
@@ -210,10 +241,19 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
             class="appointment-form"
             preventdefault:submit
             onSubmit$={async () => {
-              if (saving.value) return;
+              if (saving.value || savingCoverage.value) return;
               if (!professionalId.value || !serviceId.value) return;
               if (!selectedCoverage.value) {
                 error.value = "Elegí la cobertura para continuar.";
+                return;
+              }
+              if (state.loadingSlots) {
+                error.value = "Esperá a que termine la consulta de horarios.";
+                return;
+              }
+              if (state.slotLoadError) {
+                error.value =
+                  "No pudimos validar la disponibilidad. Reintentá la consulta de horarios.";
                 return;
               }
               if (!selectedStartsAt.value) {
@@ -299,7 +339,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                 );
               } catch {
                 error.value =
-                  "No pudimos guardar el turno. Intentá nuevamente.";
+                  "No pudimos confirmar si el turno se guardó. Cerrá y revisá la agenda antes de volver a intentar.";
               } finally {
                 saving.value = false;
               }
@@ -313,9 +353,11 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     type="radio"
                     name="patient-source"
                     checked={patientMode.value === "existing"}
+                    disabled={busy}
                     onChange$={() => {
                       patientMode.value = "existing";
                       selectedCoverage.value = selectedPatient?.coverage ?? "";
+                      selectedStartsAt.value = "";
                       error.value = "";
                     }}
                   />
@@ -326,10 +368,12 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     type="radio"
                     name="patient-source"
                     checked={patientMode.value === "new"}
+                    disabled={busy}
                     onChange$={() => {
                       patientMode.value = "new";
                       patientId.value = "";
                       selectedCoverage.value = "";
+                      selectedStartsAt.value = "";
                       error.value = "";
                     }}
                   />
@@ -357,10 +401,12 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                       <button
                         class="secondary-button small"
                         type="button"
+                        disabled={busy}
                         onClick$={() => {
                           patientId.value = "";
                           patientSearch.value = "";
                           selectedCoverage.value = "";
+                          selectedStartsAt.value = "";
                         }}
                       >
                         Cambiar
@@ -389,22 +435,31 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                               key={coverage}
                               type="button"
                               aria-pressed={selectedCoverage.value === coverage}
-                              disabled={savingCoverage.value}
+                              disabled={busy}
                               onClick$={async () => {
+                                if (savingCoverage.value) return;
                                 savingCoverage.value = true;
-                                const { error: updateError } =
-                                  await getSupabaseClient()
-                                    .from("contacts")
-                                    .update({ coverage })
-                                    .eq("id", selectedPatient.id);
-                                savingCoverage.value = false;
-                                if (updateError) {
+                                error.value = "";
+                                try {
+                                  const { error: updateError } =
+                                    await getSupabaseClient()
+                                      .from("contacts")
+                                      .update({ coverage })
+                                      .eq("id", selectedPatient.id);
+                                  if (updateError) {
+                                    error.value =
+                                      "No pudimos guardar la cobertura.";
+                                    return;
+                                  }
+                                  selectedPatient.coverage = coverage;
+                                  selectedCoverage.value = coverage;
+                                  selectedStartsAt.value = "";
+                                } catch {
                                   error.value =
                                     "No pudimos guardar la cobertura.";
-                                  return;
+                                } finally {
+                                  savingCoverage.value = false;
                                 }
-                                selectedPatient.coverage = coverage;
-                                selectedCoverage.value = coverage;
                               }}
                             >
                               {coverage === "ioma"
@@ -428,11 +483,16 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                           autocomplete="off"
                           placeholder="Nombre o WhatsApp"
                           value={patientSearch.value}
-                          disabled={state.loadingPatients}
+                          disabled={
+                            busy ||
+                            state.loadingPatients ||
+                            state.patientLoadError
+                          }
                           onInput$={(_, element) => {
                             patientSearch.value = element.value;
                             patientId.value = "";
                             selectedCoverage.value = "";
+                            selectedStartsAt.value = "";
                           }}
                         />
                       </div>
@@ -441,7 +501,19 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                       {state.loadingPatients ? (
                         <p>Buscando pacientes…</p>
                       ) : state.patientLoadError ? (
-                        <p role="alert">No pudimos cargar los pacientes.</p>
+                        <div class="patient-search-empty" role="alert">
+                          <p>
+                            No pudimos cargar los pacientes. Revisá la conexión
+                            e intentá nuevamente.
+                          </p>
+                          <button
+                            class="secondary-button small"
+                            type="button"
+                            onClick$={() => (patientReloadVersion.value += 1)}
+                          >
+                            Reintentar
+                          </button>
+                        </div>
                       ) : !normalizedPatientSearch ? (
                         <p>Escribí un nombre o WhatsApp para buscar.</p>
                       ) : matchingPatients.length ? (
@@ -450,11 +522,13 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                             <li key={patient.id}>
                               <button
                                 type="button"
+                                disabled={busy}
                                 onClick$={() => {
                                   patientId.value = patient.id;
                                   patientSearch.value = patient.name;
                                   selectedCoverage.value =
                                     patient.coverage ?? "";
+                                  selectedStartsAt.value = "";
                                   error.value = "";
                                 }}
                               >
@@ -473,10 +547,12 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                           <button
                             class="secondary-button small"
                             type="button"
+                            disabled={busy}
                             onClick$={() => {
                               patientMode.value = "new";
                               newPatientName.value = patientSearch.value;
                               selectedCoverage.value = "";
+                              selectedStartsAt.value = "";
                             }}
                           >
                             Cargar como paciente nuevo
@@ -496,6 +572,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                   <input
                     required
                     value={newPatientName.value}
+                    disabled={busy}
                     onInput$={(_, element) =>
                       (newPatientName.value = element.value)
                     }
@@ -508,6 +585,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     inputMode="tel"
                     placeholder="+54 9…"
                     value={newPatientPhone.value}
+                    disabled={busy}
                     onInput$={(_, element) =>
                       (newPatientPhone.value = element.value)
                     }
@@ -522,12 +600,14 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     <button
                       class="secondary-button small"
                       type="button"
+                      disabled={busy}
                       onClick$={() => {
                         patientMode.value = "existing";
                         patientId.value = duplicatePatient.id;
                         patientSearch.value = duplicatePatient.name;
                         selectedCoverage.value =
                           duplicatePatient.coverage ?? "";
+                        selectedStartsAt.value = "";
                       }}
                     >
                       Usar paciente guardado
@@ -545,7 +625,11 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                         }}
                         type="button"
                         aria-pressed={selectedCoverage.value === coverage}
-                        onClick$={() => (selectedCoverage.value = coverage)}
+                        disabled={busy}
+                        onClick$={() => {
+                          selectedCoverage.value = coverage;
+                          selectedStartsAt.value = "";
+                        }}
                       >
                         {coverage === "ioma"
                           ? `IOMA · ${props.bookingDurations.iomaMinutes} min`
@@ -561,6 +645,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                       class={{ selected: newPatientIsExisting.value === true }}
                       type="button"
                       aria-pressed={newPatientIsExisting.value === true}
+                      disabled={busy}
                       onClick$={() => (newPatientIsExisting.value = true)}
                     >
                       Sí
@@ -569,6 +654,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                       class={{ selected: newPatientIsExisting.value === false }}
                       type="button"
                       aria-pressed={newPatientIsExisting.value === false}
+                      disabled={busy}
                       onClick$={() => (newPatientIsExisting.value = false)}
                     >
                       No
@@ -586,6 +672,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                   <div class="select-wrap">
                     <select
                       value={serviceId.value}
+                      disabled={busy}
                       onChange$={(_, element) =>
                         (serviceId.value = element.value)
                       }
@@ -608,38 +695,62 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                       type="date"
                       min={businessDateInput()}
                       value={date.value}
-                      onInput$={(_, element) => (date.value = element.value)}
+                      disabled={busy}
+                      onInput$={(_, element) => {
+                        date.value = element.value;
+                        selectedStartsAt.value = "";
+                      }}
                     />
                   </div>
                 </label>
 
                 <fieldset class="slot-picker">
                   <legend>Hora</legend>
-                  <div>
-                    {state.slots.map((slot) => (
+                  {state.slotLoadError ? (
+                    <>
+                      <p class="login-error" role="alert">
+                        No pudimos consultar los horarios. El día no está
+                        confirmado como disponible.
+                      </p>
                       <button
-                        key={slot.startsAt}
+                        class="secondary-button small"
                         type="button"
-                        class={{
-                          selected: selectedStartsAt.value === slot.startsAt,
-                        }}
-                        onClick$={() =>
-                          (selectedStartsAt.value = slot.startsAt)
-                        }
+                        onClick$={() => (slotReloadVersion.value += 1)}
                       >
-                        {slot.label}
+                        Reintentar horarios
                       </button>
-                    ))}
-                  </div>
-                  <small>
-                    {!selectedCoverage.value
-                      ? "Primero elegí la cobertura del paciente."
-                      : state.loadingSlots
-                        ? "Consultando horarios…"
-                        : state.slots.length
-                          ? `${selectedCoverage.value === "ioma" ? `IOMA · ${props.bookingDurations.iomaMinutes}` : `Particular · ${props.bookingDurations.privateMinutes}`} minutos`
-                          : "No hay horarios disponibles para ese día."}
-                  </small>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        {state.slots.map((slot) => (
+                          <button
+                            key={slot.startsAt}
+                            type="button"
+                            class={{
+                              selected:
+                                selectedStartsAt.value === slot.startsAt,
+                            }}
+                            disabled={busy}
+                            onClick$={() =>
+                              (selectedStartsAt.value = slot.startsAt)
+                            }
+                          >
+                            {slot.label}
+                          </button>
+                        ))}
+                      </div>
+                      <small>
+                        {!selectedCoverage.value
+                          ? "Primero elegí la cobertura del paciente."
+                          : state.loadingSlots
+                            ? "Consultando horarios…"
+                            : state.slots.length
+                              ? `${selectedCoverage.value === "ioma" ? `IOMA · ${props.bookingDurations.iomaMinutes}` : `Particular · ${props.bookingDurations.privateMinutes}`} minutos`
+                              : "No hay horarios disponibles para ese día."}
+                      </small>
+                    </>
+                  )}
                 </fieldset>
 
                 <label class="form-field">
@@ -649,6 +760,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                   <textarea
                     rows={3}
                     value={note.value}
+                    disabled={busy}
                     onInput$={(_, element) => (note.value = element.value)}
                   />
                 </label>
@@ -677,6 +789,9 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                   type="submit"
                   disabled={
                     saving.value ||
+                    savingCoverage.value ||
+                    state.loadingSlots ||
+                    state.slotLoadError ||
                     !selectedStartsAt.value ||
                     !serviceId.value ||
                     !selectedCoverage.value

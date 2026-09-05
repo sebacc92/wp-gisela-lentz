@@ -178,7 +178,7 @@ export function describeCalendarSync(input: {
   }
   if (outcome === "skipped") {
     if (input.skippedReason === "FIRST_IMPORT_APPROVAL_REQUIRED") {
-      return "Los turnos se enviaron a Google. Para traer los eventos que ya existen en Google falta aprobar la primera importación.";
+      return "No enviamos turnos ni trajimos eventos esta vez. Para empezar de forma segura, falta aprobar la primera importación.";
     }
     if (input.skippedReason === "INBOUND_SYNC_IN_PROGRESS") {
       return "Ya había una sincronización en curso. Esperá unos segundos y volvé a intentar.";
