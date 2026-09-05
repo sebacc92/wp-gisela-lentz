@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(25);
+select plan(38);
 
 -- ---------------------------------------------------------------------------
 -- Permisos
@@ -498,6 +498,328 @@ end;
 $$;
 
 select pass('rechazar conserva el turno y vuelve a proyectar la app sobre Google');
+
+-- ---------------------------------------------------------------------------
+-- Aplicar un horario observado fuera de la regla semanal
+-- ---------------------------------------------------------------------------
+
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('request.jwt.claim.sub', '', true);
+
+insert into public.professionals (
+  id, name, appointment_duration_minutes, active
+) values (
+  '95000000-0000-4000-8000-000000000020',
+  'Profesional Apply Calendar', 60, true
+);
+
+-- El cambio propuesto sera a las 10:30. La regla empieza a las 13:30 para
+-- reproducir la configuracion real sin volver reservable ese horario normal.
+insert into public.availability_rules (
+  professional_id, weekday, start_time, end_time, slot_minutes
+)
+select
+  '95000000-0000-4000-8000-000000000020',
+  weekday, '13:30', '17:00', 30
+from generate_series(0, 6) as weekday;
+
+insert into public.contacts (id, phone_e164, name, coverage)
+values (
+  '95000000-0000-4000-8000-000000000021',
+  '+5491100009521', 'Paciente Apply Calendar', 'particular'
+);
+
+create temporary table calendar_apply_fixture as
+select
+  (
+    ((current_date + 78)::text || ' 14:00')::timestamp
+      at time zone (select timezone from public.app_settings where id = true)
+  ) as original_start,
+  (
+    ((current_date + 80)::text || ' 10:30')::timestamp
+      at time zone (select timezone from public.app_settings where id = true)
+  ) as accepted_start,
+  (
+    ((current_date + 81)::text || ' 10:30')::timestamp
+      at time zone (select timezone from public.app_settings where id = true)
+  ) as blocked_start;
+
+insert into public.appointments (
+  id, contact_id, professional_id, starts_at, ends_at, status, source,
+  coverage, duration_minutes, deposit_status
+)
+select
+  '95000000-0000-4000-8000-000000000022',
+  '95000000-0000-4000-8000-000000000021',
+  '95000000-0000-4000-8000-000000000020',
+  fixture.original_start, fixture.original_start + interval '60 minutes',
+  'confirmed', 'manual', 'particular', 60, 'confirmed'
+from calendar_apply_fixture fixture;
+
+-- Igual que el caso de una reconexion: el evento determinista existe en
+-- Google, pero esta generacion todavia no tiene baseline saliente.
+delete from public.google_calendar_sync_jobs
+where appointment_id = '95000000-0000-4000-8000-000000000022';
+
+create temporary table calendar_apply_lease as
+select lease.lease_token
+from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
+  calendar_generation.generation, 600
+) lease;
+
+-- El fixture anterior ya verifico el cierre fail-closed de unsupported. Se lo
+-- retira para que esta seccion aisle solamente la regla semanal.
+update public.google_calendar_external_events
+set status = 'removed', removed_at = clock_timestamp()
+where google_event_id = 'evento-manual-2' and status = 'active';
+
+select is(
+  (
+    select public.observe_google_calendar_managed_event(
+      calendar_generation.generation,
+      calendar_apply_lease.lease_token,
+      'gl' || replace('95000000-0000-4000-8000-000000000022', '-', ''),
+      '95000000-0000-4000-8000-000000000022', false,
+      fixture.accepted_start,
+      fixture.accepted_start + interval '60 minutes',
+      clock_timestamp(), '"etag-apply-outside-hours"'
+    )
+    from calendar_generation, calendar_apply_lease,
+      calendar_apply_fixture fixture
+  ),
+  'conflict_recorded',
+  'el cambio de Google fuera de la regla semanal abre una revision'
+);
+
+select public.complete_google_calendar_inbound_sync(
+  calendar_generation.generation,
+  calendar_apply_lease.lease_token,
+  'sync-token-apply-outside-hours', '{}'::jsonb, 1
+)
+from calendar_generation, calendar_apply_lease;
+
+select is(
+  (
+    select public.appointment_slot_is_available(
+      '95000000-0000-4000-8000-000000000020',
+      fixture.accepted_start, 60,
+      '95000000-0000-4000-8000-000000000022',
+      (select timezone from public.app_settings where id = true)
+    )
+    from calendar_apply_fixture fixture
+  ),
+  false,
+  'el horario observado sigue cerrado para una reserva comun'
+);
+
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"95000000-0000-4000-8000-000000000001"}', true);
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', '95000000-0000-4000-8000-000000000001', true);
+
+select lives_ok(
+  format(
+    'select public.apply_google_calendar_conflict(%L)',
+    (
+      select id from public.google_calendar_sync_conflicts
+      where appointment_id = '95000000-0000-4000-8000-000000000022'
+        and status = 'pending'
+    )
+  ),
+  'una ADMIN puede aceptar el horario exacto ya observado en Google'
+);
+
+select ok(
+  (
+    select count(*) = 1
+      and bool_and(
+        appointment.starts_at = fixture.accepted_start
+        and appointment.ends_at = fixture.accepted_start + interval '60 minutes'
+        and appointment.status = 'confirmed'
+        and appointment.deposit_status = 'confirmed'
+        and appointment.duration_minutes = 60
+      )
+    from public.appointments appointment, calendar_apply_fixture fixture
+    where appointment.id = '95000000-0000-4000-8000-000000000022'
+  ),
+  'apply mueve un unico turno y conserva estado, sena y duracion'
+);
+
+select ok(
+  exists (
+    select 1
+    from public.google_calendar_sync_conflicts conflict
+    where conflict.appointment_id = '95000000-0000-4000-8000-000000000022'
+      and conflict.status = 'applied'
+      and conflict.resolved_at is not null
+      and conflict.resolved_by = '95000000-0000-4000-8000-000000000001'
+  )
+  and not exists (
+    select 1
+    from public.google_calendar_sync_conflicts conflict
+    where conflict.appointment_id = '95000000-0000-4000-8000-000000000022'
+      and conflict.status = 'pending'
+  ),
+  'el conflicto queda aplicado por la misma transaccion'
+);
+
+select ok(
+  (
+    select count(*) = 1
+      and bool_and(
+        job.connection_generation = generation.generation
+        and job.operation = 'upsert'
+        and job.status = 'pending'
+      )
+    from public.google_calendar_sync_jobs job, calendar_generation generation
+    where job.appointment_id = '95000000-0000-4000-8000-000000000022'
+  ),
+  'apply deja un solo job en la generacion vigente'
+);
+
+create temporary table calendar_apply_job_version as
+select desired_version
+from public.google_calendar_sync_jobs
+where appointment_id = '95000000-0000-4000-8000-000000000022';
+
+select lives_ok(
+  format(
+    'select public.apply_google_calendar_conflict(%L)',
+    (
+      select id from public.google_calendar_sync_conflicts
+      where appointment_id = '95000000-0000-4000-8000-000000000022'
+        and status = 'applied'
+    )
+  ),
+  'repetir el mismo POST confirma el resultado sin volver a mutar'
+);
+
+select ok(
+  (
+    select count(*) = 1
+    from public.audit_logs audit
+    where audit.action = 'google_calendar.conflict_applied'
+      and audit.entity_id = '95000000-0000-4000-8000-000000000022'
+  )
+  and (
+    select job.desired_version = original.desired_version
+    from public.google_calendar_sync_jobs job,
+      calendar_apply_job_version original
+    where job.appointment_id = '95000000-0000-4000-8000-000000000022'
+  )
+  and not exists (
+    select reminder.type
+    from public.reminders reminder
+    where reminder.appointment_id = '95000000-0000-4000-8000-000000000022'
+    group by reminder.type
+    having count(*) > 1
+  )
+  and not exists (
+    select 1
+    from public.messages message
+    where message.contact_id = '95000000-0000-4000-8000-000000000021'
+  ),
+  'el retry no duplica auditoria, job ni recordatorios, y no envia mensajes'
+);
+
+-- Una segunda propuesta colisiona con un bloqueo externo. La excepcion debe
+-- revertir tambien cualquier trigger, job o resolucion parcial.
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('request.jwt.claim.sub', '', true);
+
+delete from calendar_apply_lease;
+insert into calendar_apply_lease (lease_token)
+select lease.lease_token
+from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
+  calendar_generation.generation, 600
+) lease;
+
+select is(
+  (
+    select public.apply_google_calendar_external_event(
+      calendar_generation.generation,
+      calendar_apply_lease.lease_token,
+      'manual-block-for-apply-test', 'block', false, 'Bloqueo de prueba',
+      fixture.blocked_start, fixture.blocked_start + interval '60 minutes',
+      false, false, null, '"etag-manual-block"', clock_timestamp()
+    )
+    from calendar_generation, calendar_apply_lease,
+      calendar_apply_fixture fixture
+  ),
+  'created',
+  'el fixture crea un bloqueo externo en el segundo destino'
+);
+
+select is(
+  (
+    select public.observe_google_calendar_managed_event(
+      calendar_generation.generation,
+      calendar_apply_lease.lease_token,
+      'gl' || replace('95000000-0000-4000-8000-000000000022', '-', ''),
+      '95000000-0000-4000-8000-000000000022', false,
+      fixture.blocked_start,
+      fixture.blocked_start + interval '60 minutes',
+      clock_timestamp(), '"etag-apply-blocked"'
+    )
+    from calendar_generation, calendar_apply_lease,
+      calendar_apply_fixture fixture
+  ),
+  'conflict_recorded',
+  'la segunda edicion de Google abre una nueva revision'
+);
+
+select public.complete_google_calendar_inbound_sync(
+  calendar_generation.generation,
+  calendar_apply_lease.lease_token,
+  'sync-token-apply-blocked', '{}'::jsonb, 2
+)
+from calendar_generation, calendar_apply_lease;
+
+select set_config('request.jwt.claims', '{"role":"authenticated","sub":"95000000-0000-4000-8000-000000000001"}', true);
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', '95000000-0000-4000-8000-000000000001', true);
+
+select throws_ok(
+  format(
+    'select public.apply_google_calendar_conflict(%L)',
+    (
+      select id from public.google_calendar_sync_conflicts
+      where appointment_id = '95000000-0000-4000-8000-000000000022'
+        and status = 'pending'
+    )
+  ),
+  'P0001',
+  'SLOT_UNAVAILABLE',
+  'un bloqueo externo sigue impidiendo aplicar la reprogramacion'
+);
+
+select ok(
+  (
+    select count(*) = 1
+      and bool_and(
+        appointment.starts_at = fixture.accepted_start
+        and appointment.ends_at = fixture.accepted_start + interval '60 minutes'
+      )
+    from public.appointments appointment, calendar_apply_fixture fixture
+    where appointment.id = '95000000-0000-4000-8000-000000000022'
+  )
+  and exists (
+    select 1 from public.google_calendar_sync_conflicts conflict
+    where conflict.appointment_id = '95000000-0000-4000-8000-000000000022'
+      and conflict.status = 'pending'
+  ),
+  'una colision deja turno y conflicto completamente intactos'
+);
+
+select ok(
+  exists (
+    select 1 from public.google_calendar_external_events external_event
+    where external_event.google_event_id = 'manual-block-for-apply-test'
+      and external_event.status = 'active'
+  ),
+  'el rollback tampoco modifica el bloqueo externo'
+);
 
 select * from finish();
 rollback;
