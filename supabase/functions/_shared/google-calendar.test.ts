@@ -3,23 +3,26 @@ import test from "node:test";
 import {
   appSettingsRedirect,
   buildGoogleAuthorizationUrl,
+  type CalendarSyncAppointment,
   classifyGoogleCalendarEvent,
-  listGoogleCalendarEvents,
   deleteGoogleCalendarEvent,
   deterministicGoogleEventId,
-  GOOGLE_CALENDAR_SCOPE,
-  GoogleIntegrationError,
+  getGoogleCalendarEvent,
+  getOwnedGoogleCalendar,
+  GOOGLE_CALENDAR_EVENTS_SCOPE,
+  GOOGLE_CALENDAR_LIST_SCOPE,
   googleCalendarEventPayload,
   googleErrorRetryable,
+  GoogleIntegrationError,
   googleOAuthConfiguration,
   isRetryableGoogleStatus,
+  listGoogleCalendarEvents,
+  listOwnedGoogleCalendars,
   refreshGoogleAccessToken,
-  reuseOrCreateManagedGoogleCalendar,
   retryDelaySeconds,
   sha256Base64Url,
   sha256Hex,
   upsertGoogleCalendarEvent,
-  type CalendarSyncAppointment,
 } from "./google-calendar.ts";
 
 const appointment: CalendarSyncAppointment = {
@@ -30,7 +33,7 @@ const appointment: CalendarSyncAppointment = {
   timezone: "America/Argentina/Buenos_Aires",
 };
 
-test("OAuth usa state, PKCE S256, acceso offline y el scope mínimo", () => {
+test("OAuth usa PKCE y sólo identidad, calendar list y eventos propios", () => {
   const authorizationUrl = new URL(
     buildGoogleAuthorizationUrl({
       clientId: "client-id",
@@ -45,6 +48,10 @@ test("OAuth usa state, PKCE S256, acceso offline y el scope mínimo", () => {
   assert.equal(authorizationUrl.origin, "https://accounts.google.com");
   assert.equal(authorizationUrl.searchParams.get("access_type"), "offline");
   assert.equal(authorizationUrl.searchParams.get("prompt"), "consent");
+  assert.equal(
+    authorizationUrl.searchParams.get("include_granted_scopes"),
+    "false",
+  );
   assert.equal(authorizationUrl.searchParams.get("state"), "opaque-state");
   assert.equal(
     authorizationUrl.searchParams.get("code_challenge_method"),
@@ -53,8 +60,15 @@ test("OAuth usa state, PKCE S256, acceso offline y el scope mínimo", () => {
   assert.deepEqual(authorizationUrl.searchParams.get("scope")?.split(" "), [
     "openid",
     "email",
-    GOOGLE_CALENDAR_SCOPE,
+    GOOGLE_CALENDAR_LIST_SCOPE,
+    GOOGLE_CALENDAR_EVENTS_SCOPE,
   ]);
+  assert.equal(
+    authorizationUrl.searchParams
+      .get("scope")
+      ?.includes("calendar.app.created"),
+    false,
+  );
 });
 
 test("hashes de state y PKCE usan SHA-256 sin relleno", async () => {
@@ -81,6 +95,10 @@ test("configuración y retorno usan URLs fijas y seguras", () => {
   assert.equal(
     appSettingsRedirect(config.appBaseUrl, "connected"),
     "https://agenda.example.com/app/settings?section=calendar&google_calendar=connected",
+  );
+  assert.equal(
+    appSettingsRedirect(config.appBaseUrl, "selection_required"),
+    "https://agenda.example.com/app/settings?section=calendar&google_calendar=selection_required",
   );
 
   values.APP_BASE_URL = "https://user:password@agenda.example.com";
@@ -166,7 +184,7 @@ test("un tombstone de Google se reintenta sin inventar otro event id", async () 
   assert.equal(calls, 2);
 });
 
-test("si el calendario dedicado desapareció pide reconectar", async () => {
+test("si el calendario seleccionado desapareció pide reconectar", async () => {
   await assert.rejects(
     upsertGoogleCalendarEvent({
       accessToken: "not-a-real-token",
@@ -182,44 +200,145 @@ test("si el calendario dedicado desapareció pide reconectar", async () => {
   );
 });
 
-test("una reconexión reutiliza el calendario accesible y evita duplicados", async () => {
-  let calls = 0;
-  const result = await reuseOrCreateManagedGoogleCalendar({
-    accessToken: "not-a-real-token",
-    existingCalendarId: "existing-calendar@example.com",
-    timezone: appointment.timezone,
-    fetcher: (async () => {
-      calls += 1;
+test("lista todos los calendarios owner paginando y filtra roles localmente", async () => {
+  const requests: URL[] = [];
+  const methods: string[] = [];
+  const authorizations: Array<string | null> = [];
+  const fetcher = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    const url = new URL(String(input));
+    requests.push(url);
+    methods.push(init?.method ?? "GET");
+    authorizations.push(new Headers(init?.headers).get("authorization"));
+    if (requests.length === 1) {
       return Response.json({
-        id: "existing-calendar@example.com",
-        summary: "Gisela Lentz · Turnos",
+        nextPageToken: "next-owner-page",
+        items: [
+          {
+            id: "writer-calendar@example.com",
+            summary: "Compartido",
+            timeZone: appointment.timezone,
+            accessRole: "writer",
+          },
+          {
+            id: "secondary-owner@example.com",
+            summary: "Turnos",
+            timeZone: appointment.timezone,
+            accessRole: "owner",
+          },
+          {
+            id: "deleted-owner@example.com",
+            summary: "Borrado",
+            timeZone: appointment.timezone,
+            accessRole: "owner",
+            deleted: true,
+          },
+        ],
+      });
+    }
+    return Response.json({
+      items: [
+        {
+          id: "primary-owner@example.com",
+          summary: "Principal",
+          timeZone: appointment.timezone,
+          accessRole: "owner",
+          primary: true,
+        },
+        // Un item repetido entre páginas no debe duplicarse.
+        {
+          id: "secondary-owner@example.com",
+          summary: "Turnos",
+          timeZone: appointment.timezone,
+          accessRole: "owner",
+        },
+      ],
+    });
+  }) as typeof fetch;
+
+  const result = await listOwnedGoogleCalendars({
+    accessToken: "not-a-real-token",
+    fetcher,
+  });
+
+  assert.deepEqual(result, [
+    {
+      id: "primary-owner@example.com",
+      name: "Principal",
+      timeZone: appointment.timezone,
+      primary: true,
+    },
+    {
+      id: "secondary-owner@example.com",
+      name: "Turnos",
+      timeZone: appointment.timezone,
+      primary: false,
+    },
+  ]);
+  assert.deepEqual(methods, ["GET", "GET"]);
+  assert.deepEqual(authorizations, [
+    "Bearer not-a-real-token",
+    "Bearer not-a-real-token",
+  ]);
+  assert.equal(requests[0].searchParams.get("minAccessRole"), "owner");
+  assert.equal(requests[0].searchParams.get("maxResults"), "250");
+  assert.equal(requests[0].searchParams.get("showDeleted"), "false");
+  assert.equal(requests[0].searchParams.get("showHidden"), "true");
+  assert.equal(requests[0].searchParams.has("pageToken"), false);
+  assert.equal(requests[1].searchParams.get("pageToken"), "next-owner-page");
+});
+
+test("revalida un CalendarList item owner por ID sin hacer escrituras", async () => {
+  let observedUrl: URL | undefined;
+  let observedMethod = "";
+  const result = await getOwnedGoogleCalendar({
+    accessToken: "not-a-real-token",
+    calendarId: "owned/calendar@example.com",
+    fetcher: (async (input, init) => {
+      observedUrl = new URL(String(input));
+      observedMethod = init?.method ?? "GET";
+      return Response.json({
+        id: "owned/calendar@example.com",
+        summary: "Agenda existente",
+        timeZone: appointment.timezone,
+        accessRole: "owner",
       });
     }) as typeof fetch,
   });
-  assert.equal(calls, 1);
-  assert.equal(result.reused, true);
-  assert.equal(result.id, "existing-calendar@example.com");
+
+  assert.equal(
+    observedUrl?.pathname,
+    "/calendar/v3/users/me/calendarList/owned%2Fcalendar%40example.com",
+  );
+  assert.equal(observedMethod, "GET");
+  assert.deepEqual(result, {
+    id: "owned/calendar@example.com",
+    name: "Agenda existente",
+    timeZone: appointment.timezone,
+    primary: false,
+  });
 });
 
-test("si el calendario anterior ya no es accesible crea uno nuevo", async () => {
-  const methods: string[] = [];
-  const result = await reuseOrCreateManagedGoogleCalendar({
-    accessToken: "not-a-real-token",
-    existingCalendarId: "old-calendar@example.com",
-    timezone: appointment.timezone,
-    fetcher: (async (_url, init) => {
-      methods.push(init?.method ?? "GET");
-      return methods.length === 1
-        ? new Response(null, { status: 404 })
-        : Response.json({
-            id: "new-calendar@example.com",
-            summary: "Gisela Lentz · Turnos",
-          });
-    }) as typeof fetch,
-  });
-  assert.deepEqual(methods, ["GET", "POST"]);
-  assert.equal(result.reused, false);
-  assert.equal(result.id, "new-calendar@example.com");
+test("rechaza al confirmar un calendario writer aunque Google lo devuelva", async () => {
+  await assert.rejects(
+    getOwnedGoogleCalendar({
+      accessToken: "not-a-real-token",
+      calendarId: "writer-calendar@example.com",
+      fetcher: (async () =>
+        Response.json({
+          id: "writer-calendar@example.com",
+          summary: "Compartido",
+          timeZone: appointment.timezone,
+          accessRole: "writer",
+        })) as typeof fetch,
+    }),
+    (error) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_CALENDAR_OWNER_REQUIRED" &&
+      error.status === 409,
+  );
 });
 
 test("borrar un evento inexistente o ya eliminado es idempotente", async () => {
@@ -353,6 +472,26 @@ test("el id determinista alcanza si alguien borró las propiedades privadas", ()
   );
 });
 
+test("un tombstone externo conserva únicamente un ETag saneado", () => {
+  const classified = classifyGoogleCalendarEvent({
+    id: "evento-opaco-borrado",
+    status: "cancelled",
+    etag: '  "etag-tombstone"  ',
+    updated: "2026-09-04T10:00:00.000Z",
+  });
+  assert.equal(classified.kind, "external_removed");
+  if (classified.kind !== "external_removed") return;
+  assert.equal(classified.etag, '"etag-tombstone"');
+
+  const unsafe = classifyGoogleCalendarEvent({
+    id: "evento-opaco-borrado-2",
+    status: "cancelled",
+    etag: '"etag\r\ninvalido"',
+  });
+  assert.equal(unsafe.kind, "external_removed");
+  assert.equal(unsafe.kind === "external_removed" ? unsafe.etag : "", null);
+});
+
 test("un evento creado a mano se clasifica como bloqueo con título acotado", () => {
   const classified = classifyGoogleCalendarEvent({
     id: "evento-manual",
@@ -474,6 +613,70 @@ test("al paginar una corrida incremental el syncToken viaja en cada página", as
   // Google exige el mismo juego de parámetros en todas las páginas.
   assert.ok(requestedUrl.includes("syncToken=sync-1"));
   assert.ok(requestedUrl.includes("pageToken=page-2"));
+  assert.equal(new URL(requestedUrl).searchParams.get("timeMin"), null);
+});
+
+test("events.list conserva timeMin y el tamaño máximo durante un full sync", async () => {
+  const requested: URL[] = [];
+  const cutoff = "2026-09-04T15:30:00.000Z";
+  const fetcher: typeof fetch = (input) => {
+    requested.push(new URL(String(input)));
+    return Promise.resolve(
+      new Response(JSON.stringify({ items: [], nextSyncToken: "next" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  };
+
+  await listGoogleCalendarEvents({
+    accessToken: "token",
+    calendarId: "calendar-id",
+    timeMin: cutoff,
+    maxResults: 2500,
+    fetcher,
+  });
+  await listGoogleCalendarEvents({
+    accessToken: "token",
+    calendarId: "calendar-id",
+    timeMin: cutoff,
+    pageToken: "page-2",
+    maxResults: 2500,
+    fetcher,
+  });
+
+  assert.equal(requested.length, 2);
+  for (const url of requested) {
+    assert.equal(url.searchParams.get("timeMin"), cutoff);
+    assert.equal(url.searchParams.get("maxResults"), "2500");
+    assert.equal(url.searchParams.get("syncToken"), null);
+  }
+  assert.equal(requested[0].searchParams.get("pageToken"), null);
+  assert.equal(requested[1].searchParams.get("pageToken"), "page-2");
+});
+
+test("events.list rechaza timeMin junto a syncToken antes de usar la red", async () => {
+  let fetches = 0;
+  const fetcher: typeof fetch = () => {
+    fetches += 1;
+    return Promise.resolve(new Response("{}"));
+  };
+
+  await assert.rejects(
+    () =>
+      listGoogleCalendarEvents({
+        accessToken: "token",
+        calendarId: "calendar-id",
+        syncToken: "sync-1",
+        timeMin: "2026-09-04T15:30:00.000Z",
+        fetcher,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENTS_LIST_PARAMETERS_INVALID" &&
+      error.status === 400,
+  );
+  assert.equal(fetches, 0);
 });
 
 test("un syncToken vencido se reporta como 410 sin marcar reconexión", async () => {
@@ -497,5 +700,111 @@ test("un syncToken vencido se reporta como 410 sin marcar reconexión", async ()
       error instanceof GoogleIntegrationError &&
       error.code === "GOOGLE_SYNC_TOKEN_EXPIRED" &&
       error.status === 410,
+  );
+});
+
+test("events.get codifica IDs y devuelve un evento válido sin escribir", async () => {
+  const requests: Array<{
+    url: URL;
+    method: string;
+    authorization: string | null;
+  }> = [];
+  const eventId = "evento/con espacios";
+  const result = await getGoogleCalendarEvent({
+    accessToken: "token-sintetico",
+    calendarId: "calendar/id@example.com",
+    eventId,
+    fetcher: (async (input, init) => {
+      requests.push({
+        url: new URL(String(input)),
+        method: init?.method ?? "GET",
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      return Response.json({
+        id: eventId,
+        status: "confirmed",
+        summary: "Evento sintético",
+      });
+    }) as typeof fetch,
+  });
+
+  assert.equal(result.kind, "found");
+  assert.equal(result.kind === "found" ? result.event.id : null, eventId);
+  assert.equal(requests.length, 1);
+  const request = requests[0];
+  assert.equal(
+    request.url.pathname,
+    "/calendar/v3/calendars/calendar%2Fid%40example.com/events/evento%2Fcon%20espacios",
+  );
+  assert.equal(request.url.search, "");
+  assert.equal(request.method, "GET");
+  assert.equal(request.authorization, "Bearer token-sintetico");
+});
+
+test("events.get distingue ausencia 404 de tombstone 410", async () => {
+  for (const [status, expectedKind] of [
+    [404, "missing"],
+    [410, "tombstone"],
+  ] as const) {
+    const result = await getGoogleCalendarEvent({
+      accessToken: "token-sintetico",
+      calendarId: "calendar-id",
+      eventId: "event-id",
+      fetcher: (async () =>
+        new Response("detalle remoto sensible", { status })) as typeof fetch,
+    });
+    assert.equal(result.kind, expectedKind);
+  }
+});
+
+test("events.get sanea errores remotos y rechaza respuestas 200 ambiguas", async () => {
+  await assert.rejects(
+    () =>
+      getGoogleCalendarEvent({
+        accessToken: "token-sintetico",
+        calendarId: "calendar-id",
+        eventId: "event-id",
+        fetcher: (async () =>
+          Response.json(
+            { error: { message: "detalle-remoto-no-debe-salir" } },
+            { status: 403 },
+          )) as typeof fetch,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENT_GET_FAILED" &&
+      error.message === "GOOGLE_EVENT_GET_FAILED" &&
+      !error.message.includes("detalle-remoto"),
+  );
+
+  for (const body of [{}, [], { id: "otro-evento" }]) {
+    await assert.rejects(
+      () =>
+        getGoogleCalendarEvent({
+          accessToken: "token-sintetico",
+          calendarId: "calendar-id",
+          eventId: "event-id",
+          fetcher: (async () => Response.json(body)) as typeof fetch,
+        }),
+      (error: unknown) =>
+        error instanceof GoogleIntegrationError &&
+        error.code === "GOOGLE_EVENT_GET_RESPONSE_INVALID" &&
+        error.status === 502,
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      getGoogleCalendarEvent({
+        accessToken: "token-sintetico",
+        calendarId: "calendar-id",
+        eventId: "event-id",
+        fetcher: (async () =>
+          Response.json({ id: "event-id" }, { status: 201 })) as typeof fetch,
+      }),
+    (error: unknown) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENT_GET_RESPONSE_INVALID" &&
+      error.status === 502,
   );
 });

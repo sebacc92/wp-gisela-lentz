@@ -2,21 +2,29 @@ import {
   appSettingsRedirect,
   exchangeGoogleAuthorizationCode,
   fetchGoogleUserInfo,
-  GOOGLE_CALENDAR_NAME,
+  type GoogleOAuthConfiguration,
   googleOAuthConfiguration,
-  reuseOrCreateManagedGoogleCalendar,
-  revokeGoogleToken,
   sha256Hex,
 } from "../_shared/google-calendar.ts";
 import { createServiceClient } from "../_shared/supabase.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
 interface ConsumedState {
   user_id: string;
   code_verifier: string;
+  connection_generation: number | string;
+  oauth_attempt_generation: number | string;
 }
 
-interface ExistingConnection {
-  google_calendar_id?: string | null;
+interface StagedCandidate {
+  candidate_id?: unknown;
+  expires_at?: unknown;
+}
+
+export interface GoogleCalendarOAuthCallbackDependencies {
+  createClient?: () => SupabaseClient;
+  environment?: (name: string) => string | undefined;
+  fetchImpl?: typeof fetch;
 }
 
 function redirect(location: string): Response {
@@ -26,7 +34,42 @@ function redirect(location: string): Response {
   });
 }
 
-Deno.serve(async (request) => {
+function validGeneration(value: unknown, allowZero: boolean): boolean {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && (allowZero ? value >= 0 : value > 0);
+  }
+  if (typeof value !== "string" || !/^(0|[1-9]\d{0,18})$/.test(value)) {
+    return false;
+  }
+  const parsed = BigInt(value);
+  return (
+    parsed <= 9_223_372_036_854_775_807n &&
+    (allowZero ? parsed >= 0n : parsed > 0n)
+  );
+}
+
+function stagedCandidateIsValid(value: unknown): boolean {
+  const row = (
+    Array.isArray(value) ? value[0] : value
+  ) as StagedCandidate | null;
+  if (!row || typeof row !== "object") return false;
+  const candidateId =
+    typeof row.candidate_id === "string" ? row.candidate_id.trim() : "";
+  const expiresAt =
+    typeof row.expires_at === "string" ? Date.parse(row.expires_at) : NaN;
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      candidateId,
+    ) &&
+    Number.isFinite(expiresAt) &&
+    expiresAt > Date.now()
+  );
+}
+
+export async function handleGoogleCalendarOAuthCallbackRequest(
+  request: Request,
+  dependencies: GoogleCalendarOAuthCallbackDependencies = {},
+): Promise<Response> {
   if (request.method !== "GET") {
     return new Response("Method not allowed", {
       status: 405,
@@ -34,11 +77,11 @@ Deno.serve(async (request) => {
     });
   }
 
-  let appBaseUrl: string;
+  const environment =
+    dependencies.environment ?? ((name: string) => Deno.env.get(name));
+  let config: GoogleOAuthConfiguration;
   try {
-    appBaseUrl = googleOAuthConfiguration((name) =>
-      Deno.env.get(name),
-    ).appBaseUrl;
+    config = googleOAuthConfiguration(environment);
   } catch {
     return new Response("Google Calendar no está configurado.", {
       status: 503,
@@ -47,14 +90,13 @@ Deno.serve(async (request) => {
   }
 
   const errorRedirect = () =>
-    redirect(appSettingsRedirect(appBaseUrl, "error"));
+    redirect(appSettingsRedirect(config.appBaseUrl, "error"));
   const url = new URL(request.url);
   const state = url.searchParams.get("state")?.trim() ?? "";
   if (!state || state.length > 256) return errorRedirect();
 
-  const client = createServiceClient();
-  let refreshToken: string | undefined;
-  let connectionStored = false;
+  const client = (dependencies.createClient ?? createServiceClient)();
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
   try {
     const stateHash = await sha256Hex(state);
     const { data, error: consumeError } = await client.rpc(
@@ -64,13 +106,19 @@ Deno.serve(async (request) => {
     const consumed = (
       Array.isArray(data) ? data[0] : data
     ) as ConsumedState | null;
-    if (consumeError || !consumed?.user_id || !consumed.code_verifier) {
+    if (
+      consumeError ||
+      !consumed?.user_id ||
+      !consumed.code_verifier ||
+      !validGeneration(consumed.connection_generation, true) ||
+      !validGeneration(consumed.oauth_attempt_generation, false)
+    ) {
       return errorRedirect();
     }
 
     const providerError = url.searchParams.get("error");
     if (providerError) {
-      return redirect(appSettingsRedirect(appBaseUrl, "denied"));
+      return redirect(appSettingsRedirect(config.appBaseUrl, "denied"));
     }
     const issuer = url.searchParams.get("iss");
     if (
@@ -83,61 +131,47 @@ Deno.serve(async (request) => {
     const code = url.searchParams.get("code")?.trim() ?? "";
     if (!code || code.length > 2048) return errorRedirect();
 
-    const config = googleOAuthConfiguration((name) => Deno.env.get(name));
     const tokens = await exchangeGoogleAuthorizationCode({
       code,
       codeVerifier: consumed.code_verifier,
       config,
+      fetcher: fetchImpl,
     });
-    refreshToken = tokens.refresh_token;
+    const refreshToken = tokens.refresh_token;
     if (!refreshToken) throw new Error("GOOGLE_REFRESH_TOKEN_MISSING");
 
-    const [googleUser, settingsResult] = await Promise.all([
-      fetchGoogleUserInfo(tokens.access_token),
-      client.from("app_settings").select("timezone").eq("id", true).single(),
-    ]);
-    if (settingsResult.error || !settingsResult.data?.timezone) {
-      throw new Error("APP_SETTINGS_NOT_FOUND");
-    }
-
-    const { data: existingData, error: existingError } = await client.rpc(
-      "get_google_calendar_connection_metadata",
-      {},
+    const googleUser = await fetchGoogleUserInfo(
+      tokens.access_token,
+      fetchImpl,
     );
-    if (existingError) throw new Error("GOOGLE_CONNECTION_LOOKUP_FAILED");
-    const existingConnection = (
-      Array.isArray(existingData) ? existingData[0] : existingData
-    ) as ExistingConnection | null;
-
-    const calendar = await reuseOrCreateManagedGoogleCalendar({
-      accessToken: tokens.access_token,
-      existingCalendarId: existingConnection?.google_calendar_id,
-      timezone: settingsResult.data.timezone as string,
-    });
-
-    const { error: completeError } = await client.rpc(
-      "complete_google_calendar_connection",
+    const { data: stagedData, error: stageError } = await client.rpc(
+      "stage_google_calendar_connection_candidate",
       {
         p_user_id: consumed.user_id,
         p_google_account_id: googleUser.sub,
         p_google_account_email: googleUser.email,
-        p_google_calendar_id: calendar.id,
-        p_google_calendar_name: calendar.summary ?? GOOGLE_CALENDAR_NAME,
         p_refresh_token: refreshToken,
+        p_expected_connection_generation: consumed.connection_generation,
+        p_expected_oauth_attempt_generation: consumed.oauth_attempt_generation,
       },
     );
-    if (completeError) throw new Error("GOOGLE_CONNECTION_STORE_FAILED");
-    connectionStored = true;
-
-    return redirect(appSettingsRedirect(appBaseUrl, "connected"));
-  } catch {
-    if (refreshToken && !connectionStored) {
-      try {
-        await revokeGoogleToken(refreshToken);
-      } catch {
-        // La respuesta nunca incluye ni registra credenciales o errores crudos.
-      }
+    if (stageError || !stagedCandidateIsValid(stagedData)) {
+      throw new Error("GOOGLE_CONNECTION_STAGE_FAILED");
     }
+
+    // No se revoca el token ante un fallo posterior: Google puede invalidar
+    // toda la grant y con ella una conexión activa de la misma cuenta. El
+    // candidato queda exclusivamente en Vault y expira del lado de Postgres.
+    return redirect(
+      appSettingsRedirect(config.appBaseUrl, "selection_required"),
+    );
+  } catch {
+    // La respuesta nunca incluye ni registra tokens, errores crudos o datos de
+    // la cuenta. La conexión activa anterior tampoco se modifica acá.
     return errorRedirect();
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve((request) => handleGoogleCalendarOAuthCallbackRequest(request));
+}

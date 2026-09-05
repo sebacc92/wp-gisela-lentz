@@ -40,7 +40,7 @@ export function corsHeaders(request: Request): HeadersInit {
   const headers: Record<string, string> = {
     "Access-Control-Allow-Headers":
       "authorization, apikey, content-type, x-client-info, x-cron-secret, x-google-calendar-cron-secret, x-internal-secret, x-hub-signature-256",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     Vary: "Origin",
   };
   if (origin && allowedOrigins().includes(origin)) {

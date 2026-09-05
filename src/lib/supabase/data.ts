@@ -520,7 +520,7 @@ export async function loadCalendarUnsupportedEvents(
 export interface CalendarConflict {
   id: string;
   appointmentId: string;
-  kind: "reschedule_requested" | "cancellation_requested";
+  kind: "reschedule_requested" | "cancellation_requested" | "metadata_changed";
   proposedStartsAt: string | null;
   proposedEndsAt: string | null;
   observedStartsAt: string | null;

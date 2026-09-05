@@ -91,11 +91,36 @@ select
   'confirmed', 'manual', 'particular', 60, 'confirmed'
 from calendar_fixture fixture;
 
-select public.complete_google_calendar_connection(
-  '95000000-0000-4000-8000-000000000001',
-  'google-user-bidi', 'bidi@example.test', 'calendar-id-bidi',
-  'Gisela Lentz · Turnos', 'fake-refresh-token-for-bidirectional-test'
-);
+do $calendar_connect$
+declare
+  oauth_attempt record;
+  candidate_id uuid;
+begin
+  perform public.create_google_calendar_oauth_state(
+    '95000000-0000-4000-8000-000000000001', repeat('c', 64),
+    repeat('v', 64), clock_timestamp() + interval '10 minutes'
+  );
+  select * into oauth_attempt
+  from public.consume_google_calendar_oauth_state(repeat('c', 64));
+  select candidate.candidate_id into candidate_id
+  from public.stage_google_calendar_connection_candidate(
+    '95000000-0000-4000-8000-000000000001',
+    'google-user-bidi', 'bidi@example.test',
+    'fake-refresh-token-for-bidirectional-test',
+    oauth_attempt.connection_generation,
+    oauth_attempt.oauth_attempt_generation
+  ) candidate;
+  perform 1 from public.get_google_calendar_connection_candidate_secret(
+    '95000000-0000-4000-8000-000000000001'
+  );
+  perform public.finalize_google_calendar_connection_selection(
+    '95000000-0000-4000-8000-000000000001',
+    candidate_id,
+    'calendar-id-bidi', 'Gisela Lentz · Turnos',
+    'America/Argentina/Buenos_Aires'
+  );
+end;
+$calendar_connect$;
 
 -- La conexión encola una proyección para cada turno futuro. El pull ignora un
 -- push en vuelo, así que la cola se vacía antes de probar las observaciones.
@@ -137,6 +162,26 @@ select ok(
   and (select sync_token is null from calendar_lease),
   'sin aprobación ADMIN no hay primera importación ni token previo'
 );
+
+-- A partir de acá el fixture representa una primera importación aprobada y
+-- completa; así las aserciones de disponibilidad miden los eventos importados,
+-- no el cierre fail-closed previo al incremental.
+select public.approve_google_calendar_first_import(
+  '95000000-0000-4000-8000-000000000001'
+);
+select public.complete_google_calendar_inbound_sync(
+  calendar_generation.generation,
+  calendar_lease.lease_token,
+  'sync-token-bidi-inicial',
+  '{}'::jsonb,
+  0
+) from calendar_generation, calendar_lease;
+delete from calendar_lease;
+insert into calendar_lease (lease_token, sync_token, first_import_approved)
+select lease.lease_token, lease.sync_token, lease.first_import_approved
+from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
+  calendar_generation.generation, 240
+) lease;
 
 -- ---------------------------------------------------------------------------
 -- Eventos externos -> bloqueos

@@ -166,6 +166,7 @@ Deno.test(
               last_sync_error: null,
               inbound_sync_state: "incremental",
               inbound_first_import_approved: true,
+              selection_pending: true,
               pending_count: 0,
               failed_count: 0,
               active_block_count: 1,
@@ -196,6 +197,11 @@ Deno.test(
     assert.equal(body.unsupportedCount, 2);
     assert.equal(body.conflictCount, 1);
     assert.equal(body.firstImportApproved, true);
+    assert.equal(body.selectionPending, true);
+    assert.equal(
+      body.message,
+      "Google ya autorizó la cuenta. Falta elegir el calendario.",
+    );
     assert.equal(body.inboundSyncState, "incremental");
     // Un conflicto pendiente pide revisión aunque la cola saliente esté al día.
     assert.equal(body.status, "attention");
@@ -237,3 +243,41 @@ Deno.test("un código de error de sincronización llega sanitizado", async () =>
   const body = (await response.json()) as Record<string, unknown>;
   assert.equal(body.lastSyncError, null);
 });
+
+Deno.test(
+  "un OPERADOR no recibe identidad de cuenta ni calendario",
+  async () => {
+    const client = {
+      rpc: () =>
+        Promise.resolve({
+          data: [
+            {
+              connected: true,
+              status: "connected",
+              google_account_email: "private-calendar@example.com",
+              google_calendar_name: "Agenda privada",
+              pending_count: 0,
+              failed_count: 0,
+            },
+          ],
+          error: null,
+        }),
+    } as unknown as SupabaseClient;
+
+    const response = await handleGoogleCalendarStatusRequest(
+      new Request("http://127.0.0.1/functions/v1/google-calendar-status"),
+      {
+        createClient: () => client,
+        authorize: authorization("OPERADOR"),
+        environment: (name) => CALENDAR_ENVIRONMENT[name],
+      },
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 200);
+    assert.equal(body.email, null);
+    assert.equal(body.calendarName, null);
+    assert.equal(JSON.stringify(body).includes("private-calendar"), false);
+    assert.equal(JSON.stringify(body).includes("Agenda privada"), false);
+  },
+);
