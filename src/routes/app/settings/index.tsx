@@ -19,6 +19,11 @@ import {
   parseCalendarSyncSummary,
 } from "~/lib/calendar-sync-summary";
 import {
+  parseCalendarImportPreview,
+  sameCalendarImportPreview,
+  type CalendarImportPreview,
+} from "~/lib/google-calendar-import-preview";
+import {
   canRunManualGoogleCalendarSync,
   googleCalendarSyncStatus,
   type GoogleCalendarSyncStatus,
@@ -134,62 +139,6 @@ interface ProfileRow {
   full_name: string;
   role: "ADMIN" | "OPERADOR";
   active: boolean;
-}
-
-interface CalendarImportPreview {
-  managedEvents: number;
-  externalEvents: number;
-  wouldBecomeBlocks: number;
-  unsupportedEvents: number;
-  pastEventsIgnored: number;
-  truncated: boolean;
-}
-
-function parseCalendarImportPreview(
-  value: unknown,
-): CalendarImportPreview | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const response = value as Record<string, unknown>;
-  const preview = response.preview;
-  if (!preview || typeof preview !== "object" || Array.isArray(preview)) {
-    return null;
-  }
-  const counts = preview as Record<string, unknown>;
-  const count = (name: string): number | null => {
-    const candidate = counts[name];
-    return typeof candidate === "number" &&
-      Number.isSafeInteger(candidate) &&
-      candidate >= 0
-      ? candidate
-      : null;
-  };
-  const managedEvents = count("managedEvents");
-  const externalEvents = count("externalEvents");
-  const wouldBecomeBlocks = count("wouldBecomeBlocks");
-  const unsupportedEvents = count("unsupportedEvents");
-  const pastEventsIgnored = count("pastEventsIgnored");
-  if (
-    response.processed !== true ||
-    response.mutated !== false ||
-    response.mode !== "preview" ||
-    response.outcome !== "completed" ||
-    typeof response.truncated !== "boolean" ||
-    managedEvents === null ||
-    externalEvents === null ||
-    wouldBecomeBlocks === null ||
-    unsupportedEvents === null ||
-    pastEventsIgnored === null
-  ) {
-    return null;
-  }
-  return {
-    managedEvents,
-    externalEvents,
-    wouldBecomeBlocks,
-    unsupportedEvents,
-    pastEventsIgnored,
-    truncated: response.truncated,
-  };
 }
 
 interface SelectableGoogleCalendar {
@@ -2307,175 +2256,347 @@ export default component$(() => {
                         </span>
                       </div>
 
-                      {state.isAdmin && !googleCalendar.firstImportApproved && (
-                        <div class="calendar-first-import">
-                          <h3>Traer los eventos que ya están en Google</h3>
-                          <p>
-                            Todavía no importamos nada. Primero podés ver un
-                            resumen de lo que hay en el calendario y recién
-                            después habilitar la importación.
-                          </p>
-                          {googleCalendar.preview && (
-                            <>
-                              <ul class="calendar-preview-list">
-                                <li>
-                                  <strong>
-                                    {googleCalendar.preview.managedEvents}
-                                  </strong>{" "}
-                                  eventos que ya administra la aplicación
-                                </li>
-                                <li>
-                                  <strong>
-                                    {googleCalendar.preview.externalEvents}
-                                  </strong>{" "}
-                                  eventos creados a mano en Google
-                                </li>
-                                <li>
-                                  <strong>
-                                    {googleCalendar.preview.wouldBecomeBlocks}
-                                  </strong>{" "}
-                                  pasarían a ser bloqueos de agenda
-                                </li>
-                                <li>
-                                  <strong>
-                                    {googleCalendar.preview.unsupportedEvents}
-                                  </strong>{" "}
-                                  no se pueden importar (todo el día o
-                                  repetidos)
-                                </li>
-                              </ul>
-                              {(googleCalendar.preview.truncated ||
-                                googleCalendar.preview.unsupportedEvents >
-                                  0) && (
-                                <div
-                                  class="google-calendar-feedback error"
-                                  role="alert"
-                                >
-                                  <Icon name="alert" size={19} />
-                                  <span>
-                                    {googleCalendar.preview.truncated
-                                      ? "El calendario tiene demasiados eventos para una revisión completa. No habilites la importación."
-                                      : "Antes de habilitar, convertí en Google los eventos de todo el día o repetidos en eventos individuales con horario y volvé a revisar."}
-                                  </span>
-                                </div>
-                              )}
-                            </>
-                          )}
-                          <div class="calendar-first-import-actions">
-                            <button
-                              class={
-                                googleCalendar.preview
-                                  ? "secondary-button"
-                                  : "primary-button"
-                              }
-                              type="button"
-                              disabled={
-                                Boolean(googleCalendar.action) ||
-                                Boolean(googleCalendar.resolving)
-                              }
-                              onClick$={async () => {
-                                if (
+                      {state.isAdmin &&
+                        googleCalendar.inboundSyncState !== "incremental" && (
+                          <div class="calendar-first-import">
+                            <h3>Traer los eventos que ya están en Google</h3>
+                            <p>
+                              {googleCalendar.firstImportApproved
+                                ? "La importación ya está habilitada, pero todavía no terminó. Revisá nuevamente el calendario antes de reintentar."
+                                : "Todavía no importamos nada. Primero podés ver un resumen de lo que hay en el calendario y recién después habilitar e importar."}
+                            </p>
+                            {googleCalendar.preview && (
+                              <>
+                                <ul class="calendar-preview-list">
+                                  <li>
+                                    <strong>
+                                      {googleCalendar.preview.managedEvents}
+                                    </strong>{" "}
+                                    eventos administrados por esta versión de la
+                                    agenda
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {googleCalendar.preview.externalEvents}
+                                    </strong>{" "}
+                                    eventos creados a mano en Google
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {
+                                        googleCalendar.preview
+                                          .legacyManagedEvents
+                                      }
+                                    </strong>{" "}
+                                    eventos de una integración anterior sin un
+                                    turno asociado
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {googleCalendar.preview.wouldBecomeBlocks}
+                                    </strong>{" "}
+                                    eventos en total pasarían a ocupar horarios
+                                    como bloqueos de agenda
+                                  </li>
+                                  <li>
+                                    <strong>
+                                      {googleCalendar.preview.unsupportedEvents}
+                                    </strong>{" "}
+                                    no se pueden importar (todo el día o
+                                    repetidos)
+                                  </li>
+                                </ul>
+                                {(googleCalendar.preview.truncated ||
+                                  googleCalendar.preview.unsupportedEvents >
+                                    0) && (
+                                  <div
+                                    class="google-calendar-feedback error"
+                                    role="alert"
+                                  >
+                                    <Icon name="alert" size={19} />
+                                    <span>
+                                      {googleCalendar.preview.truncated
+                                        ? "El calendario tiene demasiados eventos para una revisión completa. No habilites la importación."
+                                        : "Antes de habilitar, convertí en Google los eventos de todo el día o repetidos en eventos individuales con horario y volvé a revisar."}
+                                    </span>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                            <div class="calendar-first-import-actions">
+                              <button
+                                class={
+                                  googleCalendar.preview
+                                    ? "secondary-button"
+                                    : "primary-button"
+                                }
+                                type="button"
+                                disabled={
                                   Boolean(googleCalendar.action) ||
                                   Boolean(googleCalendar.resolving)
-                                ) {
-                                  return;
                                 }
-                                googleCalendar.action = "preview";
-                                googleCalendar.error = false;
-                                googleCalendar.message = "";
-                                googleCalendar.preview = null;
-                                try {
-                                  const { data, error } =
-                                    await getSupabaseClient().functions.invoke(
-                                      "process-calendar-sync",
-                                      {
-                                        method: "POST",
-                                        body: { mode: "preview" },
-                                      },
-                                    );
-                                  const preview =
-                                    parseCalendarImportPreview(data);
-                                  if (error || !preview) {
-                                    throw new Error("CALENDAR_PREVIEW_FAILED");
+                                onClick$={async () => {
+                                  if (
+                                    Boolean(googleCalendar.action) ||
+                                    Boolean(googleCalendar.resolving)
+                                  ) {
+                                    return;
                                   }
-                                  googleCalendar.preview = preview;
-                                  googleCalendar.message =
-                                    "Revisamos el calendario sin importar nada todavía.";
-                                } catch {
-                                  googleCalendar.error = true;
-                                  googleCalendar.message =
-                                    "No pudimos revisar el calendario. Probá nuevamente.";
-                                } finally {
-                                  googleCalendar.action = "";
-                                }
-                              }}
-                            >
-                              {googleCalendar.action === "preview"
-                                ? "Revisando…"
-                                : "1. Ver qué hay en Google"}
-                            </button>
-                            <button
-                              class="primary-button"
-                              type="button"
-                              disabled={
-                                Boolean(googleCalendar.action) ||
-                                Boolean(googleCalendar.resolving) ||
-                                !googleCalendar.preview ||
-                                googleCalendar.preview.truncated ||
-                                googleCalendar.preview.unsupportedEvents > 0
-                              }
-                              onClick$={async () => {
-                                if (
-                                  Boolean(googleCalendar.action) ||
-                                  Boolean(googleCalendar.resolving)
-                                ) {
-                                  return;
-                                }
-                                if (
-                                  !window.confirm(
-                                    "¿Habilitar la importación de los eventos que ya están en Google?\n\nLos eventos creados a mano pasarán a ocupar horarios en la agenda como bloqueos. Los turnos de pacientes no cambian.",
-                                  )
-                                ) {
-                                  return;
-                                }
-                                googleCalendar.action = "approve";
-                                googleCalendar.error = false;
-                                googleCalendar.message = "";
-                                try {
-                                  const { data, error } =
-                                    await getSupabaseClient().functions.invoke(
-                                      "process-calendar-sync",
-                                      {
-                                        method: "POST",
-                                        body: {
-                                          mode: "approve_first_import",
+                                  googleCalendar.action = "preview";
+                                  googleCalendar.error = false;
+                                  googleCalendar.message = "";
+                                  googleCalendar.preview = null;
+                                  try {
+                                    const { data, error } =
+                                      await getSupabaseClient().functions.invoke(
+                                        "process-calendar-sync",
+                                        {
+                                          method: "POST",
+                                          body: { mode: "preview" },
                                         },
-                                      },
-                                    );
-                                  if (error || data?.approved !== true) {
-                                    throw new Error("CALENDAR_APPROVE_FAILED");
+                                      );
+                                    const preview =
+                                      parseCalendarImportPreview(data);
+                                    if (error || !preview) {
+                                      throw new Error(
+                                        "CALENDAR_PREVIEW_FAILED",
+                                      );
+                                    }
+                                    googleCalendar.preview = preview;
+                                    googleCalendar.message =
+                                      "Revisamos el calendario sin importar nada todavía.";
+                                  } catch {
+                                    googleCalendar.error = true;
+                                    googleCalendar.message =
+                                      "No pudimos revisar el calendario. Probá nuevamente.";
+                                  } finally {
+                                    googleCalendar.action = "";
                                   }
-                                  await loadGoogleCalendarStatus();
-                                  googleCalendar.message =
-                                    "Listo. La próxima vez que toques «Sincronizar ahora» vamos a traer los eventos de Google.";
-                                } catch {
-                                  googleCalendar.error = true;
-                                  googleCalendar.message =
-                                    "No pudimos habilitar la importación. Probá nuevamente.";
-                                } finally {
-                                  googleCalendar.action = "";
+                                }}
+                              >
+                                {googleCalendar.action === "preview"
+                                  ? "Revisando…"
+                                  : "1. Ver qué hay en Google"}
+                              </button>
+                              <button
+                                class="primary-button"
+                                type="button"
+                                disabled={
+                                  Boolean(googleCalendar.action) ||
+                                  Boolean(googleCalendar.resolving) ||
+                                  !googleCalendar.preview ||
+                                  googleCalendar.preview.truncated ||
+                                  googleCalendar.preview.unsupportedEvents > 0
                                 }
-                              }}
-                            >
-                              {googleCalendar.action === "approve"
-                                ? "Habilitando…"
-                                : googleCalendar.preview
-                                  ? "2. Habilitar importación"
-                                  : "2. Primero revisá el calendario"}
-                            </button>
+                                onClick$={async () => {
+                                  if (
+                                    Boolean(googleCalendar.action) ||
+                                    Boolean(googleCalendar.resolving)
+                                  ) {
+                                    return;
+                                  }
+                                  const reviewedPreview =
+                                    googleCalendar.preview;
+                                  if (!reviewedPreview) return;
+
+                                  googleCalendar.action = "approve";
+                                  googleCalendar.error = false;
+                                  googleCalendar.message = "";
+                                  let phase:
+                                    | "rechecking"
+                                    | "approving"
+                                    | "importing"
+                                    | "refreshing" = "rechecking";
+                                  let approvalSaved =
+                                    googleCalendar.firstImportApproved;
+                                  let importCompleted = false;
+                                  let completedSummaryMessage = "";
+                                  try {
+                                    // El calendario puede cambiar entre el
+                                    // primer resumen y la confirmación. Volvemos
+                                    // a leerlo antes de guardar la aprobación.
+                                    const {
+                                      data: recheckedData,
+                                      error: recheckedError,
+                                    } =
+                                      await getSupabaseClient().functions.invoke(
+                                        "process-calendar-sync",
+                                        {
+                                          method: "POST",
+                                          body: { mode: "preview" },
+                                        },
+                                      );
+                                    const recheckedPreview =
+                                      parseCalendarImportPreview(recheckedData);
+                                    if (recheckedError || !recheckedPreview) {
+                                      throw new Error(
+                                        "CALENDAR_PREVIEW_RECHECK_FAILED",
+                                      );
+                                    }
+                                    if (
+                                      !sameCalendarImportPreview(
+                                        reviewedPreview,
+                                        recheckedPreview,
+                                      )
+                                    ) {
+                                      googleCalendar.preview = recheckedPreview;
+                                      googleCalendar.error = true;
+                                      googleCalendar.message =
+                                        "El calendario cambió desde la revisión. Actualizamos el resumen y no importamos nada. Revisalo antes de continuar.";
+                                      return;
+                                    }
+                                    googleCalendar.preview = recheckedPreview;
+
+                                    if (!approvalSaved) {
+                                      if (
+                                        !window.confirm(
+                                          `¿Habilitar e importar los eventos que ya están en Google?\n\n${recheckedPreview.wouldBecomeBlocks} evento(s) pasarán a ocupar horarios en la agenda como bloqueos. Los turnos de pacientes no cambian.`,
+                                        )
+                                      ) {
+                                        return;
+                                      }
+
+                                      phase = "approving";
+                                      const { data, error } =
+                                        await getSupabaseClient().functions.invoke(
+                                          "process-calendar-sync",
+                                          {
+                                            method: "POST",
+                                            body: {
+                                              mode: "approve_first_import",
+                                            },
+                                          },
+                                        );
+                                      if (error || data?.approved !== true) {
+                                        throw new Error(
+                                          "CALENDAR_APPROVE_FAILED",
+                                        );
+                                      }
+                                      approvalSaved = true;
+                                      googleCalendar.firstImportApproved = true;
+                                    }
+
+                                    phase = "importing";
+                                    const {
+                                      data: importData,
+                                      error: importError,
+                                    } =
+                                      await getSupabaseClient().functions.invoke(
+                                        "process-calendar-sync",
+                                        {
+                                          method: "POST",
+                                          body: { mode: "initial_import" },
+                                        },
+                                      );
+                                    const rawSummary = importData?.summary;
+                                    const rawInbound = importData?.inbound;
+                                    const summary =
+                                      parseCalendarSyncSummary(rawSummary);
+                                    const outcome = parseCalendarSyncOutcome(
+                                      importData?.outcome,
+                                    );
+                                    if (
+                                      importError ||
+                                      importData?.processed !== true ||
+                                      importData?.mode !== "initial_import" ||
+                                      importData?.ignored === true ||
+                                      importData?.reconnectRequired === true ||
+                                      !rawSummary ||
+                                      typeof rawSummary !== "object" ||
+                                      Array.isArray(rawSummary) ||
+                                      !rawInbound ||
+                                      typeof rawInbound !== "object" ||
+                                      Array.isArray(rawInbound) ||
+                                      outcome !== "completed" ||
+                                      summary.failed > 0 ||
+                                      rawInbound.error !== null ||
+                                      rawInbound.skippedReason !== null ||
+                                      rawInbound.truncated !== false
+                                    ) {
+                                      throw new Error(
+                                        "CALENDAR_INITIAL_IMPORT_FAILED",
+                                      );
+                                    }
+
+                                    importCompleted = true;
+                                    completedSummaryMessage =
+                                      describeCalendarSync({
+                                        summary,
+                                        outcome,
+                                        checkedAt: new Date(),
+                                      });
+                                    phase = "refreshing";
+                                    const refreshed =
+                                      await loadGoogleCalendarStatus();
+                                    if (
+                                      !refreshed ||
+                                      googleCalendar.inboundSyncState !==
+                                        "incremental"
+                                    ) {
+                                      throw new Error(
+                                        "CALENDAR_INITIAL_IMPORT_UNCONFIRMED",
+                                      );
+                                    }
+                                    googleCalendar.preview = null;
+                                    googleCalendar.error = false;
+                                    googleCalendar.message = `Importación inicial completada. ${completedSummaryMessage}`;
+                                  } catch {
+                                    if (phase === "rechecking") {
+                                      googleCalendar.error = true;
+                                      googleCalendar.message =
+                                        "No pudimos volver a revisar el calendario. No habilitamos ni importamos nada; probá nuevamente.";
+                                      return;
+                                    }
+
+                                    if (importCompleted) {
+                                      googleCalendar.error = true;
+                                      googleCalendar.message = `Importación inicial completada. ${completedSummaryMessage} No pudimos actualizar el estado del panel; recargá la página antes de volver a intentarlo.`;
+                                      return;
+                                    }
+
+                                    const refreshed =
+                                      await loadGoogleCalendarStatus();
+                                    if (
+                                      refreshed &&
+                                      googleCalendar.inboundSyncState ===
+                                        "incremental"
+                                    ) {
+                                      googleCalendar.preview = null;
+                                      googleCalendar.error = true;
+                                      googleCalendar.message =
+                                        "La importación quedó registrada, pero no recibimos un resultado completo. Revisá el estado antes de sincronizar nuevamente.";
+                                      return;
+                                    }
+
+                                    googleCalendar.error = true;
+                                    if (
+                                      approvalSaved ||
+                                      googleCalendar.firstImportApproved
+                                    ) {
+                                      googleCalendar.message =
+                                        "La habilitación quedó guardada, pero la importación no se completó. No se perdió la aprobación: revisá el resumen y tocá «Reintentar importación».";
+                                    } else {
+                                      googleCalendar.message =
+                                        "No pudimos confirmar la habilitación y no importamos eventos. Probá nuevamente.";
+                                    }
+                                  } finally {
+                                    googleCalendar.action = "";
+                                  }
+                                }}
+                              >
+                                {googleCalendar.action === "approve"
+                                  ? googleCalendar.firstImportApproved
+                                    ? "Importando…"
+                                    : "Habilitando e importando…"
+                                  : googleCalendar.preview
+                                    ? googleCalendar.firstImportApproved
+                                      ? "2. Reintentar importación"
+                                      : "2. Habilitar e importar"
+                                    : "2. Primero revisá el calendario"}
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
 
                       {(googleCalendar.conflictCount > 0 ||
                         googleCalendar.conflicts.length > 0) && (
@@ -2736,6 +2857,7 @@ export default component$(() => {
                             disabled={
                               !canRunManualGoogleCalendarSync(
                                 googleCalendar.firstImportApproved,
+                                googleCalendar.inboundSyncState,
                               ) ||
                               Boolean(googleCalendar.action) ||
                               Boolean(googleCalendar.resolving)
@@ -2744,11 +2866,12 @@ export default component$(() => {
                               if (
                                 !canRunManualGoogleCalendarSync(
                                   googleCalendar.firstImportApproved,
+                                  googleCalendar.inboundSyncState,
                                 )
                               ) {
                                 googleCalendar.error = false;
                                 googleCalendar.message =
-                                  "Primero revisá qué hay en Google y habilitá la importación.";
+                                  "Completá la importación inicial desde el panel anterior antes de sincronizar nuevamente.";
                                 return;
                               }
                               if (
@@ -2819,8 +2942,8 @@ export default component$(() => {
                               }
                             }}
                           >
-                            {!googleCalendar.firstImportApproved
-                              ? "Habilitá la importación primero"
+                            {googleCalendar.inboundSyncState !== "incremental"
+                              ? "Completá la importación primero"
                               : googleCalendar.action === "sync"
                                 ? "Sincronizando…"
                                 : "Sincronizar ahora"}

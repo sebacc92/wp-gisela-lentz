@@ -5,6 +5,7 @@ import {
   buildGoogleAuthorizationUrl,
   type CalendarSyncAppointment,
   classifyGoogleCalendarEvent,
+  classifyGoogleCalendarEventAsExternal,
   deleteGoogleCalendarEvent,
   deterministicGoogleEventId,
   getGoogleCalendarEvent,
@@ -456,6 +457,49 @@ test("un evento administrado por la app se reconoce por sus propiedades privadas
   );
 });
 
+test("un marcador managed legado puede reclasificarse sólo por su forma externa", () => {
+  const legacyManaged = {
+    id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
+    status: "confirmed",
+    summary: "Evento legado",
+    extendedProperties: {
+      private: {
+        managed_by: "gisela_lentz_agenda",
+        appointment_id: "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
+      },
+    },
+    start: { dateTime: "2026-09-07T14:00:00.000Z" },
+    end: { dateTime: "2026-09-07T15:00:00.000Z" },
+  };
+
+  assert.equal(classifyGoogleCalendarEvent(legacyManaged).kind, "managed");
+  const fallback = classifyGoogleCalendarEventAsExternal(legacyManaged);
+  assert.equal(fallback.kind, "external_block");
+  if (fallback.kind !== "external_block") return;
+  assert.equal(fallback.eventId, legacyManaged.id);
+  assert.equal(fallback.summary, "Evento legado");
+  assert.equal(fallback.startsAt, "2026-09-07T14:00:00.000Z");
+  assert.equal(fallback.endsAt, "2026-09-07T15:00:00.000Z");
+
+  assert.equal(
+    classifyGoogleCalendarEventAsExternal({
+      ...legacyManaged,
+      status: "cancelled",
+      start: undefined,
+      end: undefined,
+    }).kind,
+    "external_removed",
+  );
+  assert.equal(
+    classifyGoogleCalendarEventAsExternal({
+      ...legacyManaged,
+      start: { date: "2026-09-07" },
+      end: { date: "2026-09-08" },
+    }).kind,
+    "external_unsupported",
+  );
+});
+
 test("el id determinista alcanza si alguien borró las propiedades privadas", () => {
   const classified = classifyGoogleCalendarEvent({
     id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
@@ -470,6 +514,27 @@ test("el id determinista alcanza si alguien borró las propiedades privadas", ()
     classified.kind === "managed" ? classified.cancelled : false,
     true,
   );
+});
+
+test("un id determinista que contradice las propiedades managed falla cerrado", () => {
+  const classified = classifyGoogleCalendarEvent({
+    id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
+    status: "confirmed",
+    extendedProperties: {
+      private: {
+        managed_by: "gisela_lentz_agenda",
+        appointment_id: "9d5c878a-a4c9-4ce9-89dc-b6b68b50caf2",
+      },
+    },
+    start: { dateTime: "2026-09-04T14:00:00.000Z" },
+    end: { dateTime: "2026-09-04T14:30:00.000Z" },
+  });
+
+  assert.deepEqual(classified, {
+    kind: "managed_mismatch",
+    eventId: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
+    reason: "APPOINTMENT_ID_MISMATCH",
+  });
 });
 
 test("un tombstone externo conserva únicamente un ETag saneado", () => {

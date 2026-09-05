@@ -23,6 +23,7 @@ test("sólo se aceptan los modos declarados de sincronización manual", () => {
     parseCalendarSyncMode("approve_first_import"),
     "approve_first_import",
   );
+  assert.equal(parseCalendarSyncMode("initial_import"), "initial_import");
   assert.equal(parseCalendarSyncMode("automatic"), null);
   assert.equal(parseCalendarSyncMode(""), null);
   assert.equal(parseCalendarSyncMode(undefined), null);

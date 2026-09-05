@@ -1,11 +1,16 @@
 import type { ClassifiedGoogleEvent } from "../_shared/google-calendar.ts";
 
-export type CalendarSyncMode = "manual" | "preview" | "approve_first_import";
+export type CalendarSyncMode =
+  | "manual"
+  | "preview"
+  | "approve_first_import"
+  | "initial_import";
 
 export function parseCalendarSyncMode(value: unknown): CalendarSyncMode | null {
   return value === "manual" ||
     value === "preview" ||
-    value === "approve_first_import"
+    value === "approve_first_import" ||
+    value === "initial_import"
     ? value
     : null;
 }

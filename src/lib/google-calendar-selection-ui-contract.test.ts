@@ -85,10 +85,12 @@ test("Settings refleja el alcance confirmed y una revocación no confirmada", ()
 
 test("la primera importación exige un preview completo y compatible", () => {
   const page = source("src/routes/app/settings/index.tsx");
+  const parser = source("src/lib/google-calendar-import-preview.ts");
 
-  assert.match(page, /function parseCalendarImportPreview/);
-  assert.match(page, /Number\.isSafeInteger\(candidate\)/);
-  assert.match(page, /response\.mutated !== false/);
+  assert.match(page, /parseCalendarImportPreview/);
+  assert.match(parser, /Number\.isSafeInteger\(candidate\)/);
+  assert.match(parser, /response\.mutated !== false/);
+  assert.match(parser, /legacyManagedEvents/);
   assert.match(page, /googleCalendar\.preview = null;\s*try \{/);
   assert.match(page, /googleCalendar\.preview = preview/);
   assert.match(page, /!googleCalendar\.preview \|\|/);
@@ -97,7 +99,69 @@ test("la primera importación exige un preview completo y compatible", () => {
   assert.match(page, /No habilites la importación/);
   assert.match(page, /1\. Ver qué hay en Google/);
   assert.match(page, /2\. Primero revisá el calendario/);
-  assert.match(page, /2\. Habilitar importación/);
+  assert.match(page, /2\. Habilitar e importar/);
+});
+
+test("el preview separa eventos actuales, manuales y de una integración anterior", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+
+  assert.match(page, /googleCalendar\.preview\.managedEvents/);
+  assert.match(page, /administrados por esta versión de la\s+agenda/);
+  assert.match(page, /googleCalendar\.preview\.externalEvents/);
+  assert.match(page, /eventos creados a mano en Google/);
+  assert.match(page, /googleCalendar\.preview\s*\.legacyManagedEvents/);
+  assert.match(page, /integración anterior sin un\s+turno asociado/);
+  assert.match(page, /googleCalendar\.preview\.wouldBecomeBlocks/);
+  assert.match(page, /en total pasarían a ocupar horarios\s+como bloqueos/);
+});
+
+test("habilitar revalida el alcance y ejecuta la importación inicial en orden", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+  const start = page.indexOf("const reviewedPreview");
+  const end = page.indexOf("</button>", start);
+  const action = page.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  const secondPreview = action.indexOf('body: { mode: "preview" }');
+  const comparison = action.indexOf("sameCalendarImportPreview");
+  const confirmation = action.indexOf("window.confirm");
+  const approval = action.indexOf('mode: "approve_first_import"');
+  const initialImport = action.indexOf('mode: "initial_import"');
+  const refresh = action.indexOf(
+    "await loadGoogleCalendarStatus()",
+    initialImport,
+  );
+  assert.ok(secondPreview >= 0);
+  assert.ok(comparison > secondPreview);
+  assert.ok(confirmation > comparison);
+  assert.ok(approval > confirmation);
+  assert.ok(initialImport > approval);
+  assert.ok(refresh > initialImport);
+  assert.match(action, /Actualizamos el resumen y no importamos nada/);
+  assert.match(action, /importData\?\.processed !== true/);
+  assert.match(action, /importData\?\.mode !== "initial_import"/);
+  assert.match(action, /outcome !== "completed"/);
+  assert.match(action, /summary\.failed > 0/);
+  assert.match(action, /rawInbound\.error !== null/);
+  assert.match(action, /rawInbound\.skippedReason !== null/);
+  assert.match(action, /rawInbound\.truncated !== false/);
+  assert.match(action, /describeCalendarSync/);
+});
+
+test("una aprobación persistida conserva un reintento explícito de initial_import", () => {
+  const page = source("src/routes/app/settings/index.tsx");
+  const start = page.indexOf("const reviewedPreview");
+  const end = page.indexOf("</button>", start);
+  const action = page.slice(start, end);
+
+  assert.match(
+    page,
+    /googleCalendar\.inboundSyncState !== "incremental" && \(/,
+  );
+  assert.match(action, /if \(!approvalSaved\)/);
+  assert.match(action, /body: \{ mode: "initial_import" \}/);
+  assert.match(action, /No se perdió la aprobación/);
+  assert.match(action, /2\. Reintentar importación/);
 });
 
 test("el panel no confunde una conexión nueva con una sincronización completa", () => {
@@ -110,7 +174,7 @@ test("el panel no confunde una conexión nueva con una sincronización completa"
   assert.match(page, /"Sin revisión"/);
 });
 
-test("Sincronizar ahora queda bloqueado hasta aprobar la primera importación", () => {
+test("Sincronizar ahora queda bloqueado hasta completar la primera importación", () => {
   const page = source("src/routes/app/settings/index.tsx");
   const syncStart = page.indexOf('googleCalendar.action = "sync"');
   const buttonStart = page.lastIndexOf("<button", syncStart);
@@ -122,8 +186,8 @@ test("Sincronizar ahora queda bloqueado hasta aprobar la primera importación", 
   );
   assert.match(syncButton, /canRunManualGoogleCalendarSync/);
   assert.match(syncButton, /googleCalendar\.firstImportApproved/);
-  assert.match(syncButton, /Habilitá la importación primero/);
-  assert.match(syncButton, /Primero revisá qué hay en Google/);
+  assert.match(syncButton, /googleCalendar\.inboundSyncState/);
+  assert.match(syncButton, /Completá la importación primero/);
 });
 
 test("reconnect_required conserva la acción de desconexión para cambiar de cuenta", () => {

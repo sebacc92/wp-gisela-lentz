@@ -43,22 +43,27 @@ interface HttpCall {
   headers: Record<string, string>;
 }
 
+interface TableReadCall {
+  table: string;
+  columns: string;
+  filterColumn: string;
+  values: unknown[];
+}
+
 type RpcHandler = (args: Record<string, unknown>) => {
   data: unknown;
   error: unknown;
 };
 
-function fakeSupabase(handlers: Record<string, RpcHandler>) {
+function fakeSupabase(
+  handlers: Record<string, RpcHandler>,
+  options: {
+    existingAppointmentIds?: string[];
+    appointmentReadError?: unknown;
+  } = {},
+) {
   const rpcCalls: RpcCall[] = [];
-  const chain = {
-    select: () => chain,
-    eq: () => chain,
-    maybeSingle: () =>
-      Promise.resolve({
-        data: { status: "connected", connection_generation: 1 },
-        error: null,
-      }),
-  };
+  const tableReads: TableReadCall[] = [];
   const client = {
     rpc(name: string, args: Record<string, unknown> = {}) {
       rpcCalls.push({ name, args });
@@ -67,9 +72,54 @@ function fakeSupabase(handlers: Record<string, RpcHandler>) {
         handler ? handler(args) : { data: null, error: null },
       );
     },
-    from: () => chain,
+    from(table: string) {
+      let columns = "";
+      const chain = {
+        select(value: string) {
+          columns = value;
+          return chain;
+        },
+        eq: () => chain,
+        in(filterColumn: string, values: unknown[]) {
+          tableReads.push({ table, columns, filterColumn, values });
+          if (table === "appointments") {
+            if (options.appointmentReadError) {
+              return Promise.resolve({
+                data: null,
+                error: options.appointmentReadError,
+              });
+            }
+            const existing = new Set(
+              (options.existingAppointmentIds ?? []).map((id) =>
+                id.toLowerCase(),
+              ),
+            );
+            return Promise.resolve({
+              data: values
+                .filter(
+                  (id): id is string =>
+                    typeof id === "string" && existing.has(id.toLowerCase()),
+                )
+                .map((id) => ({ id: id.toLowerCase() })),
+              error: null,
+            });
+          }
+          return Promise.resolve({ data: [], error: null });
+        },
+        maybeSingle: () =>
+          Promise.resolve({
+            data: { status: "connected", connection_generation: 1 },
+            error: null,
+          }),
+      };
+      return chain;
+    },
   };
-  return { client: client as unknown as SupabaseClient, rpcCalls };
+  return {
+    client: client as unknown as SupabaseClient,
+    rpcCalls,
+    tableReads,
+  };
 }
 
 function jsonResponseOf(body: unknown, status = 200, etag?: string): Response {
@@ -165,6 +215,10 @@ function baseHandlers(
     invalidate_google_calendar_sync_token: () => ({ data: true, error: null }),
     list_google_calendar_full_resync_managed_candidates: () => ({
       data: [],
+      error: null,
+    }),
+    apply_google_calendar_external_event: () => ({
+      data: "already_removed",
       error: null,
     }),
     fail_google_calendar_inbound_sync: () => ({ data: true, error: null }),
@@ -363,13 +417,16 @@ Deno.test(
     assert.equal(observe?.args.p_appointment_id, APPOINTMENT_ID);
     assert.equal(observe?.args.p_cancelled, true);
     assert.equal(observe?.args.p_google_etag, '"etag-tombstone"');
-    // Nunca se importa como bloqueo externo un evento que era un turno.
-    assert.equal(
-      rpcCalls.some(
-        (call) => call.name === "apply_google_calendar_external_event",
-      ),
-      false,
+    // Nunca se importa como bloqueo externo un evento que era un turno. La
+    // única aplicación permitida retira idempotentemente un fallback previo.
+    const fallbackRetirement = rpcCalls.find(
+      (call) => call.name === "apply_google_calendar_external_event",
     );
+    assert.equal(
+      fallbackRetirement?.args.p_google_event_id,
+      "evento-opaco-borrado",
+    );
+    assert.equal(fallbackRetirement?.args.p_removed, true);
     assert.equal(body.outcome, "completed");
   },
 );
@@ -403,6 +460,378 @@ Deno.test(
     );
     assert.equal(observe?.args.p_appointment_id, APPOINTMENT_ID);
     assert.equal(observe?.args.p_cancelled, true);
+  },
+);
+
+Deno.test(
+  "la primera importación preserva un managed huérfano como bloqueo y el retry es idempotente",
+  async () => {
+    const legacyEventId = "evento-managed-de-integracion-anterior";
+    let leases = 0;
+    let applications = 0;
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => {
+          leases += 1;
+          return {
+            data: [
+              {
+                lease_token: `lease-${leases}`,
+                sync_token: leases === 1 ? null : "token-primera-corrida",
+                first_import_approved: true,
+                google_calendar_id: "cal-1",
+              },
+            ],
+            error: null,
+          };
+        },
+        observe_google_calendar_managed_event: () => ({
+          data: "ignored_unknown_appointment",
+          error: null,
+        }),
+        apply_google_calendar_external_event: () => {
+          applications += 1;
+          return {
+            data: applications === 1 ? "created" : "unchanged",
+            error: null,
+          };
+        },
+        reconcile_google_calendar_external_events: () => ({
+          data: 0,
+          error: null,
+        }),
+      }),
+    );
+    const legacyEvent = {
+      id: legacyEventId,
+      status: "confirmed",
+      summary: "Evento legado sin turno local",
+      etag: '"etag-legado"',
+      updated: "2099-01-01T09:00:00.000Z",
+      extendedProperties: {
+        private: {
+          managed_by: "gisela_lentz_agenda",
+          appointment_id: APPOINTMENT_ID,
+        },
+      },
+      start: { dateTime: "2099-01-01T10:00:00.000Z" },
+      end: { dateTime: "2099-01-01T11:00:00.000Z" },
+    };
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([legacyEvent])
+        : null,
+    );
+
+    const firstResponse = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const firstBody = (await firstResponse.json()) as {
+      summary: {
+        blocksImported: number;
+        blocksUnchanged: number;
+        skipped: number;
+        fullResync: boolean;
+      };
+    };
+    const retryResponse = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const retryBody = (await retryResponse.json()) as {
+      summary: {
+        blocksImported: number;
+        blocksUnchanged: number;
+        skipped: number;
+        fullResync: boolean;
+      };
+    };
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(firstBody.summary.blocksImported, 1);
+    assert.equal(firstBody.summary.blocksUnchanged, 0);
+    assert.equal(firstBody.summary.skipped, 0);
+    assert.equal(firstBody.summary.fullResync, true);
+    assert.equal(retryResponse.status, 200);
+    assert.equal(retryBody.summary.blocksImported, 0);
+    assert.equal(retryBody.summary.blocksUnchanged, 1);
+    assert.equal(retryBody.summary.skipped, 0);
+    assert.equal(retryBody.summary.fullResync, false);
+
+    const observations = rpcCalls.filter(
+      (call) => call.name === "observe_google_calendar_managed_event",
+    );
+    const externalApplications = rpcCalls.filter(
+      (call) => call.name === "apply_google_calendar_external_event",
+    );
+    assert.equal(observations.length, 2);
+    assert.equal(externalApplications.length, 2);
+    assert.equal(externalApplications[0].args.p_expected_generation, 1);
+    assert.equal(externalApplications[0].args.p_lease_token, "lease-1");
+    assert.equal(externalApplications[1].args.p_lease_token, "lease-2");
+    for (const application of externalApplications) {
+      assert.equal(application.args.p_google_event_id, legacyEventId);
+      assert.equal(application.args.p_kind, "block");
+      assert.equal(application.args.p_removed, false);
+      assert.equal(application.args.p_summary, "Evento legado sin turno local");
+      assert.equal(application.args.p_starts_at, "2099-01-01T10:00:00.000Z");
+      assert.equal(application.args.p_ends_at, "2099-01-01T11:00:00.000Z");
+    }
+    const reconciliation = rpcCalls.find(
+      (call) => call.name === "reconcile_google_calendar_external_events",
+    );
+    assert.deepEqual(reconciliation?.args.p_seen_event_ids, [legacyEventId]);
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+      "la recuperación sólo registra el bloqueo local; nunca toca Google",
+    );
+  },
+);
+
+Deno.test(
+  "la cancelación de un managed huérfano retira el bloqueo externo sin tocar Google",
+  async () => {
+    const legacyEventId = "evento-managed-huerfano-cancelado";
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        observe_google_calendar_managed_event: () => ({
+          data: "ignored_unknown_appointment",
+          error: null,
+        }),
+        apply_google_calendar_external_event: () => ({
+          data: "removed",
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: legacyEventId,
+              status: "cancelled",
+              etag: '"etag-cancelado"',
+              updated: "2099-01-02T09:00:00.000Z",
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: APPOINTMENT_ID,
+                },
+              },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as {
+      summary: { blocksRemoved: number; skipped: number };
+    };
+
+    assert.equal(response.status, 200);
+    const application = rpcCalls.find(
+      (call) => call.name === "apply_google_calendar_external_event",
+    );
+    assert.equal(application?.args.p_google_event_id, legacyEventId);
+    assert.equal(application?.args.p_expected_generation, 1);
+    assert.equal(application?.args.p_lease_token, "lease-1");
+    assert.equal(application?.args.p_removed, true);
+    assert.equal(application?.args.p_summary, null);
+    assert.equal(application?.args.p_starts_at, null);
+    assert.equal(application?.args.p_ends_at, null);
+    assert.equal(application?.args.p_google_etag, '"etag-cancelado"');
+    assert.equal(body.summary.blocksRemoved, 1);
+    assert.equal(body.summary.skipped, 0);
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un UUID managed que contradice el id determinista no avanza token ni hace fallback",
+  async () => {
+    const otherAppointmentId = "9d5c878a-a4c9-4ce9-89dc-b6b68b50caf2";
+    const { client, rpcCalls } = fakeSupabase(baseHandlers());
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: MANAGED_EVENT_ID,
+              status: "confirmed",
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: otherAppointmentId,
+                },
+              },
+              start: { dateTime: APP_START },
+              end: { dateTime: APP_END },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as {
+      outcome: string;
+      inbound: { error: string };
+    };
+
+    assert.equal(response.status, 503);
+    assert.equal(body.outcome, "error");
+    assert.equal(body.inbound.error, "CALENDAR_INBOUND_MANAGED_EVENT_MISMATCH");
+    const failure = rpcCalls.find(
+      (call) => call.name === "fail_google_calendar_inbound_sync",
+    );
+    assert.equal(
+      failure?.args.p_error_code,
+      "CALENDAR_INBOUND_MANAGED_EVENT_MISMATCH",
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "observe_google_calendar_managed_event",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "apply_google_calendar_external_event",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
+      false,
+    );
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "un managed conocido retira idempotentemente cualquier bloqueo fallback previo",
+  async () => {
+    let retirements = 0;
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        observe_google_calendar_managed_event: () => ({
+          data: "in_sync",
+          error: null,
+        }),
+        apply_google_calendar_external_event: () => {
+          retirements += 1;
+          return {
+            data: retirements === 1 ? "removed" : "already_removed",
+            error: null,
+          };
+        },
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: MANAGED_EVENT_ID,
+              status: "confirmed",
+              etag: '"etag-managed"',
+              updated: "2099-01-03T09:00:00.000Z",
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: APPOINTMENT_ID,
+                },
+              },
+              start: { dateTime: APP_START },
+              end: { dateTime: APP_END },
+            },
+          ])
+        : null,
+    );
+
+    const firstResponse = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const firstBody = (await firstResponse.json()) as {
+      summary: {
+        managedInSync: number;
+        blocksRemoved: number;
+        skipped: number;
+      };
+    };
+    const retryResponse = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const retryBody = (await retryResponse.json()) as typeof firstBody;
+
+    assert.equal(firstResponse.status, 200);
+    assert.equal(firstBody.summary.managedInSync, 1);
+    assert.equal(firstBody.summary.blocksRemoved, 1);
+    assert.equal(firstBody.summary.skipped, 0);
+    assert.equal(retryResponse.status, 200);
+    assert.equal(retryBody.summary.managedInSync, 1);
+    assert.equal(retryBody.summary.blocksRemoved, 0);
+    assert.equal(retryBody.summary.skipped, 0);
+    const applications = rpcCalls.filter(
+      (call) => call.name === "apply_google_calendar_external_event",
+    );
+    assert.equal(applications.length, 2);
+    for (const application of applications) {
+      assert.equal(application.args.p_google_event_id, MANAGED_EVENT_ID);
+      assert.equal(application.args.p_removed, true);
+      assert.equal(application.args.p_google_etag, '"etag-managed"');
+    }
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
   },
 );
 
@@ -643,6 +1072,133 @@ Deno.test(
 );
 
 Deno.test(
+  "initial_import hace sólo pull aunque existan cola saliente y cleanup pendientes",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        begin_google_calendar_inbound_sync: () => ({
+          data: [
+            {
+              lease_token: "lease-initial-import",
+              sync_token: null,
+              first_import_approved: true,
+              google_calendar_id: "cal-1",
+            },
+          ],
+          error: null,
+        }),
+        apply_google_calendar_external_event: () => ({
+          data: "created",
+          error: null,
+        }),
+        reconcile_google_calendar_external_events: () => ({
+          data: 0,
+          error: null,
+        }),
+        // Si el modo reclamara trabajo por error, estas filas provocarían
+        // escrituras observables contra el Google simulado.
+        reconcile_google_calendar_sync: () => ({
+          data: [{ queued: 1, already_queued: 0 }],
+          error: null,
+        }),
+        claim_google_calendar_sync_jobs: () => ({
+          data: [
+            {
+              job_id: "55555555-5555-4555-8555-555555555555",
+              appointment_id: APPOINTMENT_ID,
+              operation: "upsert",
+              desired_version: 1,
+              attempts: 1,
+              starts_at: APP_START,
+              ends_at: APP_END,
+              patient_name: "Paciente Sintético",
+              timezone: "America/Argentina/Buenos_Aires",
+              connection_generation: 1,
+              google_etag: null,
+            },
+          ],
+          error: null,
+        }),
+        claim_google_calendar_external_cleanup: () => ({
+          data: [{ google_event_id: "evento-pendiente-de-cleanup" }],
+          error: null,
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        return eventsListResponse([
+          {
+            id: "evento-manual-initial-import",
+            summary: "Bloqueo previo",
+            start: { dateTime: "2099-01-01T10:00:00.000Z" },
+            end: { dateTime: "2099-01-01T11:00:00.000Z" },
+          },
+        ]);
+      }
+      if (call.method === "POST" && call.url.includes("/events?")) {
+        return jsonResponseOf({ id: MANAGED_EVENT_ID }, 200, '"etag-nuevo"');
+      }
+      if (call.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      return null;
+    });
+
+    const response = await handleCalendarSyncRequest(
+      syncRequest("initial_import"),
+      {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      },
+    );
+    const body = (await response.json()) as {
+      mode: string;
+      claimed: number;
+      cleanup: { done: number; failed: number };
+      summary: { blocksImported: number };
+      reconciliation: { queued: number; alreadyQueued: number };
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.mode, "initial_import");
+    assert.equal(body.claimed, 0);
+    assert.deepEqual(body.cleanup, { done: 0, failed: 0 });
+    assert.equal(body.summary.blocksImported, 1);
+    assert.deepEqual(body.reconciliation, { queued: 0, alreadyQueued: 0 });
+    for (const forbiddenRpc of [
+      "reconcile_google_calendar_sync",
+      "claim_google_calendar_sync_jobs",
+      "claim_google_calendar_external_cleanup",
+      "complete_google_calendar_external_cleanup",
+    ]) {
+      assert.equal(
+        rpcCalls.some((call) => call.name === forbiddenRpc),
+        false,
+        `${forbiddenRpc} no pertenece a una importación inbound-only`,
+      );
+    }
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+      "initial_import nunca escribe ni borra eventos en Google",
+    );
+    assert.ok(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ),
+      "el pull inbound sí debe completar y guardar el syncToken",
+    );
+  },
+);
+
+Deno.test(
   "el preview pagina con un cutoff fijo sin tocar la agenda",
   async () => {
     const { client, rpcCalls } = fakeSupabase(baseHandlers());
@@ -689,6 +1245,10 @@ Deno.test(
       (body.preview as { wouldBecomeBlocks: number }).wouldBecomeBlocks,
       1,
     );
+    assert.equal(
+      (body.preview as { legacyManagedEvents: number }).legacyManagedEvents,
+      0,
+    );
     const eventReads = calls
       .filter((call) => call.method === "GET" && call.url.includes("/events?"))
       .map((call) => new URL(call.url));
@@ -701,6 +1261,164 @@ Deno.test(
       assert.equal(url.searchParams.get("maxResults"), "2500");
       assert.equal(url.searchParams.get("syncToken"), null);
     }
+  },
+);
+
+Deno.test(
+  "el preview reclasifica managed huérfanos sin exponer eventos ni mutar estado",
+  async () => {
+    const legacyAppointmentId = "9d5c878a-a4c9-4ce9-89dc-b6b68b50caf2";
+    const legacyEventId = "evento-managed-legado-preview";
+    const { client, rpcCalls, tableReads } = fakeSupabase(baseHandlers(), {
+      existingAppointmentIds: [APPOINTMENT_ID],
+    });
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: MANAGED_EVENT_ID,
+              summary: "Turno administrado",
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: APPOINTMENT_ID,
+                },
+              },
+              start: { dateTime: "2099-01-01T10:00:00.000Z" },
+              end: { dateTime: "2099-01-01T11:00:00.000Z" },
+            },
+            {
+              id: legacyEventId,
+              summary: "Managed legado huérfano",
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: legacyAppointmentId,
+                },
+              },
+              start: { dateTime: "2099-01-02T10:00:00.000Z" },
+              end: { dateTime: "2099-01-02T11:00:00.000Z" },
+            },
+            {
+              id: "evento-manual-preview",
+              summary: "Manual externo",
+              start: { dateTime: "2099-01-03T10:00:00.000Z" },
+              end: { dateTime: "2099-01-03T11:00:00.000Z" },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest("preview"), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as {
+      mutated: boolean;
+      preview: {
+        managedEvents: number;
+        legacyManagedEvents: number;
+        externalEvents: number;
+        wouldBecomeBlocks: number;
+      };
+    };
+
+    assert.equal(response.status, 200);
+    assert.equal(body.mutated, false);
+    assert.deepEqual(body.preview, {
+      managedEvents: 1,
+      legacyManagedEvents: 1,
+      externalEvents: 1,
+      wouldBecomeBlocks: 2,
+      pastEventsIgnored: 0,
+      unsupportedEvents: 0,
+      cancelledEvents: 0,
+      ignoredEvents: 0,
+    });
+    assert.deepEqual(
+      rpcCalls.map((call) => call.name),
+      ["get_google_calendar_connection_secret"],
+    );
+    assert.equal(tableReads.length, 1);
+    assert.equal(tableReads[0].table, "appointments");
+    assert.equal(tableReads[0].columns, "id");
+    assert.equal(tableReads[0].filterColumn, "id");
+    assert.deepEqual(
+      new Set(tableReads[0].values),
+      new Set([APPOINTMENT_ID, legacyAppointmentId]),
+    );
+    const serialized = JSON.stringify(body);
+    for (const sensitiveDetail of [
+      MANAGED_EVENT_ID,
+      legacyEventId,
+      APPOINTMENT_ID,
+      legacyAppointmentId,
+      "Turno administrado",
+      "Managed legado huérfano",
+      "Manual externo",
+    ]) {
+      assert.equal(serialized.includes(sensitiveDetail), false);
+    }
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
+  },
+);
+
+Deno.test(
+  "el preview falla cerrado si no puede verificar appointments managed",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(baseHandlers(), {
+      appointmentReadError: { code: "42501" },
+    });
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([
+            {
+              id: MANAGED_EVENT_ID,
+              extendedProperties: {
+                private: {
+                  managed_by: "gisela_lentz_agenda",
+                  appointment_id: APPOINTMENT_ID,
+                },
+              },
+              start: { dateTime: "2099-01-01T10:00:00.000Z" },
+              end: { dateTime: "2099-01-01T11:00:00.000Z" },
+            },
+          ])
+        : null,
+    );
+
+    const response = await handleCalendarSyncRequest(syncRequest("preview"), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = (await response.json()) as { error: string; outcome: string };
+
+    assert.equal(response.status, 503);
+    assert.equal(body.error, "CALENDAR_PREVIEW_APPOINTMENTS_FAILED");
+    assert.equal(body.outcome, "error");
+    assert.deepEqual(
+      rpcCalls.map((call) => call.name),
+      ["get_google_calendar_connection_secret"],
+    );
+    assert.equal(
+      calls.some(
+        (call) =>
+          ["POST", "PATCH", "DELETE"].includes(call.method) &&
+          call.url.includes("/events"),
+      ),
+      false,
+    );
   },
 );
 

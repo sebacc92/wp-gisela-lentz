@@ -988,6 +988,11 @@ export type ClassifiedGoogleEvent =
       etag: string | null;
     }
   | {
+      kind: "managed_mismatch";
+      eventId: string;
+      reason: "APPOINTMENT_ID_MISMATCH";
+    }
+  | {
       kind: "external_block";
       eventId: string;
       summary: string | null;
@@ -1011,6 +1016,11 @@ export type ClassifiedGoogleEvent =
       etag: string | null;
     }
   | { kind: "ignored"; eventId: string | null; reason: string };
+
+export type ClassifiedExternalGoogleEvent = Exclude<
+  ClassifiedGoogleEvent,
+  { kind: "managed" } | { kind: "managed_mismatch" }
+>;
 
 const APPOINTMENT_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1037,7 +1047,7 @@ export function classifyGoogleCalendarEvent(
     properties.managed_by === GOOGLE_MANAGED_BY &&
     typeof properties.appointment_id === "string" &&
     APPOINTMENT_UUID_PATTERN.test(properties.appointment_id.trim())
-      ? properties.appointment_id.trim()
+      ? properties.appointment_id.trim().toLowerCase()
       : null;
   const deterministicMatch = /^gl([0-9a-f]{32})$/.exec(eventId);
   const derivedAppointmentId = deterministicMatch
@@ -1054,6 +1064,18 @@ export function classifyGoogleCalendarEvent(
   const updatedAt = isoOrNull(event.updated);
   const etag = boundedGoogleString(event.etag, 255);
 
+  if (
+    declaredAppointmentId &&
+    derivedAppointmentId &&
+    declaredAppointmentId.toLowerCase() !== derivedAppointmentId
+  ) {
+    return {
+      kind: "managed_mismatch",
+      eventId,
+      reason: "APPOINTMENT_ID_MISMATCH",
+    };
+  }
+
   if (appointmentId) {
     return {
       kind: "managed",
@@ -1066,6 +1088,26 @@ export function classifyGoogleCalendarEvent(
       etag,
     };
   }
+
+  return classifyGoogleCalendarEventAsExternal(event);
+}
+
+/**
+ * Clasifica únicamente la forma externa del evento. Se usa como recuperación
+ * cuando Google conserva marcadores de una integración anterior pero el turno
+ * referenciado ya no existe en esta base. No cambia ni elimina esos marcadores:
+ * sólo evita perder la ocupación remota al importarla como bloqueo (o como no
+ * soportada) bajo el mismo lease de sincronización.
+ */
+export function classifyGoogleCalendarEventAsExternal(
+  event: GoogleCalendarEvent,
+): ClassifiedExternalGoogleEvent {
+  const eventId = typeof event.id === "string" ? event.id.trim() : "";
+  if (!eventId) return { kind: "ignored", eventId: null, reason: "NO_ID" };
+
+  const cancelled = event.status === "cancelled";
+  const updatedAt = isoOrNull(event.updated);
+  const etag = boundedGoogleString(event.etag, 255);
 
   if (cancelled) {
     return { kind: "external_removed", eventId, updatedAt, etag };

@@ -85,7 +85,14 @@ test("reconexión y sincronización en curso conservan prioridad", () => {
   );
 });
 
-test("la sincronización manual sólo se habilita después de aprobar", () => {
-  assert.equal(canRunManualGoogleCalendarSync(false), false);
-  assert.equal(canRunManualGoogleCalendarSync(true), true);
+test("la sincronización manual sólo se habilita al completar la importación", () => {
+  assert.equal(
+    canRunManualGoogleCalendarSync(false, "awaiting_first_import"),
+    false,
+  );
+  assert.equal(
+    canRunManualGoogleCalendarSync(true, "awaiting_first_import"),
+    false,
+  );
+  assert.equal(canRunManualGoogleCalendarSync(true, "incremental"), true);
 });

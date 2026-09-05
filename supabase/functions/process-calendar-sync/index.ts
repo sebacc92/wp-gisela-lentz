@@ -1,6 +1,9 @@
 import {
   type CalendarSyncAppointment,
+  type ClassifiedExternalGoogleEvent,
+  type ClassifiedGoogleEvent,
   classifyGoogleCalendarEvent,
+  classifyGoogleCalendarEventAsExternal,
   deleteGoogleCalendarEvent,
   deleteGoogleCalendarEventById,
   deterministicGoogleEventId,
@@ -83,6 +86,7 @@ export interface CalendarSyncDependencies {
 }
 
 const MAX_INBOUND_PAGES = 12;
+const PREVIEW_APPOINTMENT_BATCH_SIZE = 100;
 const FULL_RESYNC_MANAGED_PAGE_SIZE = 100;
 const MAX_FULL_RESYNC_MANAGED_PAGES = 100;
 const APPOINTMENT_UUID_PATTERN =
@@ -116,6 +120,46 @@ function inboundFailureRequiresReconnect(
 
 function calendarWorkerFailure(code: string): GoogleIntegrationError {
   return new GoogleIntegrationError(code, { status: 503, retryable: true });
+}
+
+async function existingPreviewAppointmentIds(
+  client: SupabaseClient,
+  appointmentIds: string[],
+): Promise<Set<string>> {
+  const existing = new Set<string>();
+  for (
+    let offset = 0;
+    offset < appointmentIds.length;
+    offset += PREVIEW_APPOINTMENT_BATCH_SIZE
+  ) {
+    const batch = appointmentIds.slice(
+      offset,
+      offset + PREVIEW_APPOINTMENT_BATCH_SIZE,
+    );
+    const requested = new Set(batch);
+    const { data, error } = await client
+      .from("appointments")
+      .select("id")
+      .in("id", batch);
+    if (error || !Array.isArray(data)) {
+      throw calendarWorkerFailure("CALENDAR_PREVIEW_APPOINTMENTS_FAILED");
+    }
+    for (const value of data) {
+      const id =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as { id?: unknown }).id
+          : null;
+      const normalized = typeof id === "string" ? id.toLowerCase() : "";
+      if (
+        !APPOINTMENT_UUID_PATTERN.test(normalized) ||
+        !requested.has(normalized)
+      ) {
+        throw calendarWorkerFailure("CALENDAR_PREVIEW_APPOINTMENTS_FAILED");
+      }
+      existing.add(normalized);
+    }
+  }
+  return existing;
 }
 
 async function isAuthorizedInvocation(
@@ -227,11 +271,12 @@ export async function handleCalendarSyncRequest(
     }
 
     const preview = mode === "preview";
+    const inboundOnly = mode === "initial_import";
 
     // El preview no toca estado de sincronización: ni credenciales, ni cola
     // saliente, ni lease, ni bitácora.
     let reconciliation: ReconcileResult | null = null;
-    if (!preview) {
+    if (!preview && !inboundOnly) {
       const { data: reconcileData, error: reconcileError } = await client.rpc(
         "reconcile_google_calendar_sync",
         {},
@@ -297,6 +342,9 @@ export async function handleCalendarSyncRequest(
       const now = new Date();
       const timeMin = now.toISOString();
       let counts = emptyInboundPreviewCounts();
+      let legacyManagedEvents = 0;
+      let manualExternalEvents = 0;
+      const knownAppointments = new Map<string, boolean>();
       let pageToken: string | null = null;
       let pages = 0;
       do {
@@ -309,12 +357,62 @@ export async function handleCalendarSyncRequest(
           fetcher,
         });
         pages += 1;
-        for (const item of page.items) {
-          counts = countClassifiedEvent(
-            counts,
-            classifyGoogleCalendarEvent(item),
-            now,
+        const classifiedItems: {
+          item: (typeof page.items)[number];
+          classified: ClassifiedGoogleEvent;
+        }[] = page.items.map((item) => ({
+          item,
+          classified: classifyGoogleCalendarEvent(item),
+        }));
+        if (
+          classifiedItems.some(
+            ({ classified }) => classified.kind === "managed_mismatch",
+          )
+        ) {
+          throw calendarWorkerFailure(
+            "CALENDAR_INBOUND_MANAGED_EVENT_MISMATCH",
           );
+        }
+        const uncheckedAppointments = [
+          ...new Set(
+            classifiedItems.flatMap(({ classified }) => {
+              if (classified.kind !== "managed") return [];
+              const appointmentId = classified.appointmentId.toLowerCase();
+              return knownAppointments.has(appointmentId)
+                ? []
+                : [appointmentId];
+            }),
+          ),
+        ];
+        const existingAppointments = await existingPreviewAppointmentIds(
+          client,
+          uncheckedAppointments,
+        );
+        for (const appointmentId of uncheckedAppointments) {
+          knownAppointments.set(
+            appointmentId,
+            existingAppointments.has(appointmentId),
+          );
+        }
+
+        for (const { item, classified } of classifiedItems) {
+          if (
+            classified.kind === "managed" &&
+            knownAppointments.get(classified.appointmentId.toLowerCase()) ===
+              false
+          ) {
+            legacyManagedEvents += 1;
+            counts = countClassifiedEvent(
+              counts,
+              classifyGoogleCalendarEventAsExternal(item),
+              now,
+            );
+            continue;
+          }
+          if (classified.kind === "external_block") {
+            manualExternalEvents += 1;
+          }
+          counts = countClassifiedEvent(counts, classified, now);
         }
         pageToken = page.nextPageToken;
       } while (pageToken && pages < MAX_INBOUND_PAGES);
@@ -328,7 +426,8 @@ export async function handleCalendarSyncRequest(
         truncated: Boolean(pageToken),
         preview: {
           managedEvents: counts.managed,
-          externalEvents: counts.externalBlocks + counts.pastBlocks,
+          legacyManagedEvents,
+          externalEvents: manualExternalEvents,
           wouldBecomeBlocks: counts.externalBlocks,
           pastEventsIgnored: counts.pastBlocks,
           unsupportedEvents: counts.externalUnsupported,
@@ -433,9 +532,11 @@ export async function handleCalendarSyncRequest(
     // -----------------------------------------------------------------------
     // Salida: App -> Google. Los turnos con un conflicto pendiente quedan
     // retenidos por `claim_google_calendar_sync_jobs`, no se reproyectan.
+    // La importación inicial explícita es inbound-only: primero preserva todo
+    // lo que ya existe en Google y no procesa ninguna cola global.
     // -----------------------------------------------------------------------
     let jobs: CalendarSyncJob[] = [];
-    if (inboundObservationSafe) {
+    if (inboundObservationSafe && !inboundOnly) {
       const { data: claimedData, error: claimError } = await client.rpc(
         "claim_google_calendar_sync_jobs",
         { p_limit: 3, p_expected_generation: generation },
@@ -580,7 +681,7 @@ export async function handleCalendarSyncRequest(
     // -----------------------------------------------------------------------
     let cleanupDone = 0;
     let cleanupFailed = 0;
-    if (inboundObservationSafe && leaseToken) {
+    if (inboundObservationSafe && leaseToken && !inboundOnly) {
       const { data: cleanupData, error: cleanupClaimError } = await client.rpc(
         "claim_google_calendar_external_cleanup",
         {
@@ -737,7 +838,7 @@ export async function handleCalendarSyncRequest(
       {
         processed: true,
         outcome,
-        mode: automatic ? "automatic" : "manual",
+        mode: automatic ? "automatic" : mode,
         reconciliation: {
           queued: Number(reconciliation?.queued ?? 0),
           alreadyQueued: Number(reconciliation?.already_queued ?? 0),
@@ -882,8 +983,95 @@ async function pullGoogleCalendar(input: {
     if (!outcome) {
       throw calendarWorkerFailure("CALENDAR_INBOUND_OBSERVE_INVALID_OUTCOME");
     }
-    summary = applyManagedEventOutcome(summary, outcome);
+    // Un marcador managed legado puede apuntar a un turno que no existe en
+    // esta base. En ese único caso quien llama lo vuelve a clasificar por su
+    // forma externa para no perder la ocupación remota.
+    if (outcome !== "ignored_unknown_appointment") {
+      summary = applyManagedEventOutcome(summary, outcome);
+    }
     observedManagedAppointments.set(managed.eventId, managed.appointmentId);
+    return outcome;
+  };
+
+  const applyExternal = async (
+    classified: ClassifiedExternalGoogleEvent,
+    options: { suppressRemovalNoop?: boolean } = {},
+  ): Promise<void> => {
+    if (classified.kind === "ignored") {
+      summary = { ...summary, skipped: summary.skipped + 1 };
+      return;
+    }
+
+    // Un bloqueo ya conocido puede moverse desde un horario futuro hacia el
+    // pasado. Tratarlo sólo como "ignorado" dejaría activo en la base su rango
+    // futuro anterior. `p_removed=true` retira el existente de forma
+    // idempotente y no crea ninguna fila si nunca se había importado.
+    const pastExternalBlock =
+      classified.kind === "external_block" &&
+      !shouldImportExternalBlock({ endsAt: classified.endsAt, now });
+    const removed = classified.kind === "external_removed" || pastExternalBlock;
+    const { data, error } = await client.rpc(
+      "apply_google_calendar_external_event",
+      {
+        p_expected_generation: generation,
+        p_lease_token: leaseToken,
+        p_google_event_id: classified.eventId,
+        p_kind: classified.kind === "external_block" ? "block" : "unsupported",
+        p_removed: removed,
+        p_summary: removed ? null : (classified.summary ?? null),
+        p_starts_at:
+          classified.kind === "external_block" && !pastExternalBlock
+            ? classified.startsAt
+            : null,
+        p_ends_at:
+          classified.kind === "external_block" && !pastExternalBlock
+            ? classified.endsAt
+            : null,
+        p_all_day:
+          classified.kind === "external_unsupported" &&
+          classified.reason === "ALL_DAY",
+        p_recurring:
+          classified.kind === "external_unsupported" &&
+          classified.reason === "RECURRING",
+        p_unsupported_reason:
+          classified.kind === "external_unsupported" ? classified.reason : null,
+        p_google_etag: classified.etag,
+        p_google_updated_at: classified.updatedAt,
+      },
+    );
+    if (error !== null) {
+      // La clasificación ya aisló formatos no soportados. Un error del RPC
+      // puede ser pérdida de lease o una falla transitoria de base: avanzar el
+      // syncToken lo perdería de manera definitiva.
+      throw calendarWorkerFailure("CALENDAR_INBOUND_APPLY_FAILED");
+    }
+    const outcome = parseExternalEventRpcOutcome(data);
+    if (!outcome) {
+      throw calendarWorkerFailure("CALENDAR_INBOUND_APPLY_INVALID_OUTCOME");
+    }
+    if (
+      options.suppressRemovalNoop &&
+      (outcome === "already_removed" || outcome === "skipped_converted")
+    ) {
+      return;
+    }
+    summary = applyExternalEventOutcome(summary, outcome);
+  };
+
+  const retireExternalFallback = async (managed: {
+    eventId: string;
+    updatedAt: string | null;
+    etag: string | null;
+  }): Promise<void> => {
+    await applyExternal(
+      {
+        kind: "external_removed",
+        eventId: managed.eventId,
+        updatedAt: managed.updatedAt,
+        etag: managed.etag,
+      },
+      { suppressRemovalNoop: true },
+    );
   };
 
   do {
@@ -902,6 +1090,9 @@ async function pullGoogleCalendar(input: {
 
     for (const item of page.items) {
       const classified = classifyGoogleCalendarEvent(item);
+      if (classified.kind === "managed_mismatch") {
+        throw calendarWorkerFailure("CALENDAR_INBOUND_MANAGED_EVENT_MISMATCH");
+      }
       if (classified.kind === "ignored") {
         summary = { ...summary, skipped: summary.skipped + 1 };
         continue;
@@ -909,7 +1100,12 @@ async function pullGoogleCalendar(input: {
       seenEventIds.add(classified.eventId);
 
       if (classified.kind === "managed") {
-        await observeManaged(classified);
+        const outcome = await observeManaged(classified);
+        if (outcome === "ignored_unknown_appointment") {
+          await applyExternal(classifyGoogleCalendarEventAsExternal(item));
+        } else {
+          await retireExternalFallback(classified);
+        }
         continue;
       }
 
@@ -922,7 +1118,7 @@ async function pullGoogleCalendar(input: {
           });
         if (mappingError) throw new Error("CALENDAR_INBOUND_MAPPING_FAILED");
         if (typeof mappedAppointment === "string" && mappedAppointment) {
-          await observeManaged({
+          const outcome = await observeManaged({
             eventId: classified.eventId,
             appointmentId: mappedAppointment,
             cancelled: true,
@@ -931,62 +1127,13 @@ async function pullGoogleCalendar(input: {
             updatedAt: classified.updatedAt,
             etag: classified.etag,
           });
-          continue;
+          if (outcome !== "ignored_unknown_appointment") {
+            await retireExternalFallback(classified);
+            continue;
+          }
         }
       }
-
-      // Un bloqueo ya conocido puede moverse desde un horario futuro hacia el
-      // pasado. Tratarlo sólo como "ignorado" dejaría activo en la base su rango
-      // futuro anterior. `p_removed=true` retira el existente de forma
-      // idempotente y no crea ninguna fila si nunca se había importado.
-      const pastExternalBlock =
-        classified.kind === "external_block" &&
-        !shouldImportExternalBlock({ endsAt: classified.endsAt, now });
-      const removed =
-        classified.kind === "external_removed" || pastExternalBlock;
-      const { data, error } = await client.rpc(
-        "apply_google_calendar_external_event",
-        {
-          p_expected_generation: generation,
-          p_lease_token: leaseToken,
-          p_google_event_id: classified.eventId,
-          p_kind:
-            classified.kind === "external_block" ? "block" : "unsupported",
-          p_removed: removed,
-          p_summary: removed ? null : (classified.summary ?? null),
-          p_starts_at:
-            classified.kind === "external_block" && !pastExternalBlock
-              ? classified.startsAt
-              : null,
-          p_ends_at:
-            classified.kind === "external_block" && !pastExternalBlock
-              ? classified.endsAt
-              : null,
-          p_all_day:
-            classified.kind === "external_unsupported" &&
-            classified.reason === "ALL_DAY",
-          p_recurring:
-            classified.kind === "external_unsupported" &&
-            classified.reason === "RECURRING",
-          p_unsupported_reason:
-            classified.kind === "external_unsupported"
-              ? classified.reason
-              : null,
-          p_google_etag: classified.etag,
-          p_google_updated_at: classified.updatedAt,
-        },
-      );
-      if (error !== null) {
-        // La clasificación ya aisló formatos no soportados. Un error del RPC
-        // puede ser pérdida de lease o una falla transitoria de base: avanzar el
-        // syncToken lo perdería de manera definitiva.
-        throw calendarWorkerFailure("CALENDAR_INBOUND_APPLY_FAILED");
-      }
-      const outcome = parseExternalEventRpcOutcome(data);
-      if (!outcome) {
-        throw calendarWorkerFailure("CALENDAR_INBOUND_APPLY_INVALID_OUTCOME");
-      }
-      summary = applyExternalEventOutcome(summary, outcome);
+      await applyExternal(classified);
     }
 
     pageToken = page.nextPageToken;
@@ -1101,9 +1248,20 @@ async function pullGoogleCalendar(input: {
               "CALENDAR_FULL_RESYNC_MANAGED_EVENT_MISMATCH",
             );
           }
-          await observeManaged(classified);
+          const outcome = await observeManaged(classified);
+          if (outcome === "ignored_unknown_appointment") {
+            // El GET confirma que el evento todavía existe aunque el turno haya
+            // desaparecido durante el audit. Se conserva en la reconciliación
+            // y se aplica por su forma externa bajo el mismo lease/generación.
+            seenEventIds.add(eventId);
+            await applyExternal(
+              classifyGoogleCalendarEventAsExternal(lookup.event),
+            );
+          } else {
+            await retireExternalFallback(classified);
+          }
         } else if (value.remote_known) {
-          await observeManaged({
+          const outcome = await observeManaged({
             eventId,
             appointmentId,
             cancelled: true,
@@ -1112,6 +1270,20 @@ async function pullGoogleCalendar(input: {
             updatedAt: null,
             etag: null,
           });
+          if (outcome === "ignored_unknown_appointment") {
+            await applyExternal({
+              kind: "external_removed",
+              eventId,
+              updatedAt: null,
+              etag: null,
+            });
+          } else {
+            await retireExternalFallback({
+              eventId,
+              updatedAt: null,
+              etag: null,
+            });
+          }
         }
       }
 

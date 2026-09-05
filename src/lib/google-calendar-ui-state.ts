@@ -62,6 +62,7 @@ export function googleCalendarSyncStatus({
 
 export function canRunManualGoogleCalendarSync(
   firstImportApproved: boolean,
+  inboundSyncState: string,
 ): boolean {
-  return firstImportApproved;
+  return firstImportApproved && inboundSyncState === "incremental";
 }
