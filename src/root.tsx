@@ -1,17 +1,16 @@
 import { component$ } from "@qwik.dev/core";
 import {
   DocumentHeadTags,
+  QwikRouterProvider,
   RouterOutlet,
   useLocation,
-  useQwikRouter,
 } from "@qwik.dev/router";
 import { BUSINESS_CONFIG } from "~/config/business";
 import { getCanonicalUrl } from "~/config/site";
 
 import "./global.css";
 
-export default component$(() => {
-  useQwikRouter();
+const RouterDocument = component$(() => {
   const { url } = useLocation();
   const canonicalUrl = getCanonicalUrl(url.pathname);
 
@@ -50,3 +49,9 @@ export default component$(() => {
     </>
   );
 });
+
+export default component$(() => (
+  <QwikRouterProvider>
+    <RouterDocument />
+  </QwikRouterProvider>
+));
