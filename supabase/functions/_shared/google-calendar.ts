@@ -70,6 +70,7 @@ export interface GoogleCalendarEventPayload {
   description: string;
   visibility: "private";
   status: "confirmed";
+  reminders: { useDefault: false };
   start: { dateTime: string; timeZone: string };
   end: { dateTime: string; timeZone: string };
   extendedProperties: {
@@ -256,6 +257,7 @@ function managedGoogleCalendarFingerprintSource(input: {
   description: string;
   visibility: string;
   status: string;
+  remindersUseDefault: boolean;
   startsAt: string;
   startTimeZone: string;
   endsAt: string;
@@ -286,12 +288,13 @@ function managedGoogleCalendarFingerprintSource(input: {
     return null;
   }
   return JSON.stringify({
-    version: 1,
+    version: 2,
     eventId: input.eventId,
     summary: input.summary,
     description: input.description,
     visibility: input.visibility,
     status: input.status,
+    reminders: { useDefault: input.remindersUseDefault },
     start: {
       dateTime: start.toISOString(),
       timeZone: input.startTimeZone,
@@ -368,6 +371,7 @@ export async function googleCalendarEventPayload(
       : "Turno confirmado administrado desde la agenda de Gisela Lentz.",
     visibility: "private" as const,
     status: "confirmed" as const,
+    reminders: { useDefault: false as const },
     start: {
       dateTime: start.toISOString(),
       timeZone: appointment.timezone,
@@ -386,6 +390,7 @@ export async function googleCalendarEventPayload(
     description: payloadWithoutFingerprint.description,
     visibility: payloadWithoutFingerprint.visibility,
     status: payloadWithoutFingerprint.status,
+    remindersUseDefault: payloadWithoutFingerprint.reminders.useDefault,
     startsAt: payloadWithoutFingerprint.start.dateTime,
     startTimeZone: payloadWithoutFingerprint.start.timeZone,
     endsAt: payloadWithoutFingerprint.end.dateTime,
@@ -943,13 +948,13 @@ export async function managedGoogleCalendarEventFingerprintIsValid(
   const reminderKeys = event.reminders
     ? Object.keys(event.reminders).sort()
     : [];
-  const remindersAreDefault =
-    event.reminders === undefined ||
-    (event.reminders !== null &&
-      !Array.isArray(event.reminders) &&
-      event.reminders.useDefault === true &&
-      (event.reminders.overrides?.length ?? 0) === 0 &&
-      reminderKeys.every((key) => key === "overrides" || key === "useDefault"));
+  const remindersAreDisabled =
+    event.reminders !== undefined &&
+    event.reminders !== null &&
+    !Array.isArray(event.reminders) &&
+    event.reminders.useDefault === false &&
+    (event.reminders.overrides?.length ?? 0) === 0 &&
+    reminderKeys.every((key) => key === "overrides" || key === "useDefault");
   if (
     privateKeys.length !== expectedKeys.length ||
     !privateKeys.every((key, index) => key === expectedKeys[index]) ||
@@ -965,7 +970,7 @@ export async function managedGoogleCalendarEventFingerprintIsValid(
     event.source !== undefined ||
     event.hangoutLink !== undefined ||
     (event.eventType !== undefined && event.eventType !== "default") ||
-    !remindersAreDefault
+    !remindersAreDisabled
   ) {
     return false;
   }
@@ -975,6 +980,7 @@ export async function managedGoogleCalendarEventFingerprintIsValid(
     description: event.description ?? "",
     visibility: event.visibility ?? "",
     status: event.status ?? "",
+    remindersUseDefault: event.reminders?.useDefault === true,
     startsAt: event.start?.dateTime ?? "",
     startTimeZone: event.start?.timeZone ?? "",
     endsAt: event.end?.dateTime ?? "",
@@ -1016,6 +1022,8 @@ async function googleCalendarEventMatchesPayload(
     event.description === payload.description &&
     event.visibility === payload.visibility &&
     event.status === payload.status &&
+    event.reminders?.useDefault === payload.reminders.useDefault &&
+    (event.reminders?.overrides?.length ?? 0) === 0 &&
     Number.isFinite(remoteStart) &&
     Number.isFinite(remoteEnd) &&
     remoteStart === expectedStart &&

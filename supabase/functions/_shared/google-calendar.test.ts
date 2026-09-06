@@ -149,6 +149,7 @@ test("el evento excluye teléfono, notas internas y datos del servicio", async (
   assert.equal(payload.summary, "Turno confirmado · Ana Pérez");
   assert.equal(payload.visibility, "private");
   assert.equal(payload.status, "confirmed");
+  assert.deepEqual(payload.reminders, { useDefault: false });
   assert.equal(
     payload.extendedProperties.private.appointment_id,
     appointment.appointment_id,
@@ -352,7 +353,14 @@ test("una respuesta perdida no adopta payload con descripción o marker alterado
     { description: "Descripción editada manualmente" },
     { location: "Consultorio agregado manualmente" },
     { colorId: "11" },
-    { reminders: { useDefault: false, overrides: [] } },
+    { reminders: undefined },
+    { reminders: { useDefault: true, overrides: [] } },
+    {
+      reminders: {
+        useDefault: false,
+        overrides: [{ method: "popup", minutes: 10 }],
+      },
+    },
     {
       extendedProperties: {
         private: {
