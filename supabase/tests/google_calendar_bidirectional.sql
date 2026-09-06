@@ -309,6 +309,17 @@ select is(
   'un cambio en Google actualiza el mismo bloqueo'
 );
 
+select public.complete_google_calendar_inbound_sync(
+  calendar_generation.generation,
+  calendar_lease.lease_token,
+  'sync-token-bidi-after-move', '{}'::jsonb, 0,
+  2,
+  calendar_sync_window.starts_at,
+  calendar_sync_window.ends_at
+)
+from calendar_generation, calendar_lease, calendar_sync_window;
+delete from calendar_lease;
+
 select is(
   (
     select public.appointment_slot_is_available(
@@ -320,6 +331,14 @@ select is(
   true,
   'al moverse el bloqueo el horario original vuelve a estar libre'
 );
+
+insert into calendar_lease (lease_token, sync_token, first_import_approved)
+select lease.lease_token, lease.sync_token, lease.first_import_approved
+from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
+  calendar_generation.generation, 240, 2,
+  (select starts_at from calendar_sync_window),
+  (select ends_at from calendar_sync_window)
+) lease;
 
 select is(
   (

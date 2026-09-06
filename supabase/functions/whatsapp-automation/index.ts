@@ -39,6 +39,7 @@ import {
   whatsappConversationOperationallyEnabled,
   type WhatsAppAutomationExecutionLease,
 } from "../_shared/app-automations.ts";
+import { refreshCalendarAvailabilityBeforeBooking } from "../_shared/calendar-booking-availability.ts";
 import {
   conciseBusinessLocationMessage,
   configuredBusinessHoursMessage,
@@ -639,6 +640,11 @@ Deno.serve(async (request) => {
     if (!Number.isFinite(executionNow.getTime())) {
       throw new Error("AUTOMATION_EXECUTION_SNAPSHOT_INVALID");
     }
+    const refreshCalendarAvailability = () =>
+      refreshCalendarAvailabilityBeforeBooking({
+        projectUrl: Deno.env.get("SUPABASE_URL"),
+        cronSecret: Deno.env.get("GOOGLE_CALENDAR_CRON_SECRET"),
+      });
     const priorEffectResult = await client
       .from("whatsapp_automation_effects")
       .select("effect_type,appointment_id,result")
@@ -1570,6 +1576,15 @@ Deno.serve(async (request) => {
             reasons: ["CONFIGURATION_INCOMPLETE"],
           };
 
+      const calendarAvailabilityVerified = validation.approved
+        ? await refreshCalendarAvailability()
+        : true;
+      if (validation.approved && !calendarAvailabilityVerified) {
+        // SQL correlates the committed pull with this execution and turns an
+        // unverifiable automatic approval into review instead of confirming.
+        validation.reasons.push("CALENDAR_AVAILABILITY_UNVERIFIED");
+      }
+
       const proofLease = executionLease;
       if (!proofLease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
       const proofResult = await client.rpc("process_automated_deposit_proof", {
@@ -1584,10 +1599,11 @@ Deno.serve(async (request) => {
           destination: mediaUnderstanding.reading.destination,
           holder: mediaUnderstanding.reading.holder,
           operationId: mediaUnderstanding.reading.operationId,
+          calendarAvailabilityVerified,
         },
         p_media_sha256: mediaUnderstanding.mediaSha256,
         p_policy_version: "deposit-proof-basic/v1",
-        p_auto_approve: validation.approved,
+        p_auto_approve: validation.approved && calendarAvailabilityVerified,
       });
       if (proofResult.error) {
         if (isDepositProofReviewableRpcError(proofResult.error)) {
@@ -1912,6 +1928,9 @@ Deno.serve(async (request) => {
       coverage: PatientCoverage,
       limit = 8,
     ): Promise<AutomationSlot[]> => {
+      if (!(await refreshCalendarAvailability())) {
+        throw new Error("CALENDAR_AVAILABILITY_UNAVAILABLE");
+      }
       // Se recorren varios días y se toman pocos de cada uno: así la lista
       // abarca distintos días en vez de agotarse en el primero que esté
       // abierto.
@@ -3115,6 +3134,18 @@ Deno.serve(async (request) => {
         if (!slot) throw new Error("AUTOMATION_CONTEXT_INVALID");
         const lease = executionLease;
         if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+        if (!(await refreshCalendarAvailability())) {
+          await handoff(
+            "No pudimos comprobar la disponibilidad actual del calendario.",
+            {},
+            "No pudimos comprobar la disponibilidad actual y no reservamos el horario. Lo va a revisar la secretaria.",
+          );
+          return await finish({
+            processed: true,
+            state: "human_handoff",
+            reason: "CALENDAR_AVAILABILITY_UNAVAILABLE",
+          });
+        }
         const { data: createdAppointment, error } = await client.rpc(
           "create_whatsapp_automation_appointment",
           {
@@ -3151,6 +3182,20 @@ Deno.serve(async (request) => {
               session.context.serviceName ?? "Consulta",
               "selecting_slot",
             );
+          } else if (
+            effectError === "CALENDAR_AVAILABILITY_UNAVAILABLE" ||
+            error?.message.includes("CALENDAR_AVAILABILITY_UNAVAILABLE")
+          ) {
+            await handoff(
+              "No pudimos comprobar la disponibilidad actual del calendario.",
+              {},
+              "No pudimos comprobar la disponibilidad actual y no reservamos el horario. Lo va a revisar la secretaria.",
+            );
+            return await finish({
+              processed: true,
+              state: "human_handoff",
+              reason: "CALENDAR_AVAILABILITY_UNAVAILABLE",
+            });
           } else {
             throw new Error("APPOINTMENT_CREATE_FAILED");
           }
@@ -3387,6 +3432,19 @@ Deno.serve(async (request) => {
         } else {
           const lease = executionLease;
           if (!lease) throw new Error("AUTOMATION_EXECUTION_LEASE_LOST");
+          if (!(await refreshCalendarAvailability())) {
+            await handoff(
+              "No pudimos comprobar la disponibilidad actual del calendario.",
+              { appointmentId },
+              "No pudimos comprobar la disponibilidad actual. Tu turno original sigue reservado y la secretaria va a revisar el cambio.",
+            );
+            return await finish({
+              processed: true,
+              state: "human_handoff",
+              reason: "CALENDAR_AVAILABILITY_UNAVAILABLE",
+              appointmentId,
+            });
+          }
           const { data: rescheduleResult, error } = await client.rpc(
             "reschedule_whatsapp_automation_appointment",
             {
@@ -3425,6 +3483,23 @@ Deno.serve(async (request) => {
               "selecting_new_slot",
               { appointmentId },
             );
+          } else if (
+            effectError === "CALENDAR_AVAILABILITY_UNAVAILABLE" ||
+            error?.message.includes("CALENDAR_AVAILABILITY_UNAVAILABLE")
+          ) {
+            await handoff(
+              "No pudimos comprobar la disponibilidad actual del calendario.",
+              { appointmentId },
+              "No pudimos comprobar la disponibilidad actual. Tu turno original sigue reservado y la secretaria va a revisar el cambio.",
+            );
+            return await finish({
+              processed: true,
+              state: "human_handoff",
+              reason: "CALENDAR_AVAILABILITY_UNAVAILABLE",
+              appointmentId,
+            });
+          } else if (effectError) {
+            throw new Error("APPOINTMENT_RESCHEDULE_FAILED");
           } else if (error) {
             throw error;
           } else {

@@ -289,6 +289,7 @@ select is(
 -- retenido para no pisar título, estado u otros metadatos ajenos.
 update public.google_calendar_sync_jobs job
 set status = 'pending',
+    attempts = 0,
     processing_started_at = null,
     operation = 'upsert',
     google_etag = '"etag-metadata-base"',
@@ -582,6 +583,17 @@ select is(
   'el bloqueo de partida existe y ocupa el horario'
 );
 
+select public.complete_google_calendar_inbound_sync(
+  safety_generation.generation,
+  safety_lease.lease_token,
+  'sync-token-safety-convertible', '{}'::jsonb, 1,
+  2,
+  safety_sync_window.starts_at,
+  safety_sync_window.ends_at
+)
+from safety_generation, safety_lease, safety_sync_window;
+delete from safety_lease;
+
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"97000000-0000-4000-8000-000000000001"}', true);
 select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', '97000000-0000-4000-8000-000000000001', true);
@@ -712,6 +724,14 @@ select is(
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+insert into safety_lease (lease_token)
+select lease.lease_token
+from safety_generation, lateral public.begin_google_calendar_inbound_sync(
+  safety_generation.generation, 600, 2,
+  (select starts_at from safety_sync_window),
+  (select ends_at from safety_sync_window)
+) lease;
+
 select is(
   (
     select public.apply_google_calendar_external_event(
@@ -738,6 +758,17 @@ select public.apply_google_calendar_external_event(
   safety_fixture.cancelled_slot + interval '60 minutes',
   false, false, null, '"etag-cancelado-manual"', clock_timestamp()
 ) from safety_generation, safety_lease, safety_fixture;
+
+select public.complete_google_calendar_inbound_sync(
+  safety_generation.generation,
+  safety_lease.lease_token,
+  'sync-token-safety-cancelled', '{}'::jsonb, 1,
+  2,
+  safety_sync_window.starts_at,
+  safety_sync_window.ends_at
+)
+from safety_generation, safety_lease, safety_sync_window;
+delete from safety_lease;
 
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"97000000-0000-4000-8000-000000000001"}', true);
 select set_config('request.jwt.claim.role', 'authenticated', true);
@@ -839,6 +870,14 @@ select ok(
   'reconciliar repite la política read-only sin liberar ni reproyectar el horario'
 );
 
+insert into safety_lease (lease_token)
+select lease.lease_token
+from safety_generation, lateral public.begin_google_calendar_inbound_sync(
+  safety_generation.generation, 600, 2,
+  (select starts_at from safety_sync_window),
+  (select ends_at from safety_sync_window)
+) lease;
+
 select public.apply_google_calendar_external_event(
   safety_generation.generation, safety_lease.lease_token,
   'bloque-hold-vencido', 'block', false,
@@ -846,6 +885,17 @@ select public.apply_google_calendar_external_event(
   safety_fixture.expired_slot + interval '60 minutes',
   false, false, null, '"etag-hold-vencido"', clock_timestamp()
 ) from safety_generation, safety_lease, safety_fixture;
+
+select public.complete_google_calendar_inbound_sync(
+  safety_generation.generation,
+  safety_lease.lease_token,
+  'sync-token-safety-expired', '{}'::jsonb, 1,
+  2,
+  safety_sync_window.starts_at,
+  safety_sync_window.ends_at
+)
+from safety_generation, safety_lease, safety_sync_window;
+delete from safety_lease;
 
 select set_config('request.jwt.claims', '{"role":"authenticated","sub":"97000000-0000-4000-8000-000000000001"}', true);
 select set_config('request.jwt.claim.role', 'authenticated', true);
@@ -923,6 +973,14 @@ select 'calendar-A', 'converted-old-generation', generation - 1,
        repeat('3', 32), conversion.appointment_id, 'failed', 'OLD_CLEANUP_ERROR'
 from safety_generation, safety_fixture fixture, safety_cancel_conversion conversion;
 
+insert into safety_lease (lease_token)
+select lease.lease_token
+from safety_generation, lateral public.begin_google_calendar_inbound_sync(
+  safety_generation.generation, 600, 2,
+  (select starts_at from safety_sync_window),
+  (select ends_at from safety_sync_window)
+) lease;
+
 select is(
   (
     select public.apply_google_calendar_external_event(
@@ -937,6 +995,17 @@ select is(
   'updated',
   'un converted de otra generación no se saltea al reaparecer en Google'
 );
+
+select public.complete_google_calendar_inbound_sync(
+  safety_generation.generation,
+  safety_lease.lease_token,
+  'sync-token-safety-generation', '{}'::jsonb, 1,
+  2,
+  safety_sync_window.starts_at,
+  safety_sync_window.ends_at
+)
+from safety_generation, safety_lease, safety_sync_window;
+delete from safety_lease;
 
 select ok(
   exists (
@@ -966,6 +1035,15 @@ select ok(
 update public.google_calendar_sync_jobs
 set google_etag = '"etag-antes-tombstone"'
 where appointment_id = '97000000-0000-4000-8000-000000000004';
+
+insert into safety_lease (lease_token)
+select lease.lease_token
+from safety_generation, lateral public.begin_google_calendar_inbound_sync(
+  safety_generation.generation, 600, 2,
+  (select starts_at from safety_sync_window),
+  (select ends_at from safety_sync_window)
+) lease;
+
 select public.observe_google_calendar_managed_event(
   safety_generation.generation, safety_lease.lease_token,
   'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
@@ -1061,6 +1139,17 @@ select is(
   'reconcile mantiene excluido el turno convertido sin duplicar Google'
 );
 
+select public.complete_google_calendar_inbound_sync(
+  safety_generation.generation,
+  safety_lease.lease_token,
+  'sync-token-safety-tombstone', '{}'::jsonb, 1,
+  2,
+  safety_sync_window.starts_at,
+  safety_sync_window.ends_at
+)
+from safety_generation, safety_lease, safety_sync_window;
+delete from safety_lease;
+
 select ok(
   (select status = 'converted'
       and external_cleanup_status = 'pending'
@@ -1074,6 +1163,14 @@ select ok(
   ),
   'el bloqueo convertido permanece como ocupación read-only, sin cleanup'
 );
+
+insert into safety_lease (lease_token)
+select lease.lease_token
+from safety_generation, lateral public.begin_google_calendar_inbound_sync(
+  safety_generation.generation, 600, 2,
+  (select starts_at from safety_sync_window),
+  (select ends_at from safety_sync_window)
+) lease;
 
 -- ---------------------------------------------------------------------------
 -- Cambio de cuenta y de calendario

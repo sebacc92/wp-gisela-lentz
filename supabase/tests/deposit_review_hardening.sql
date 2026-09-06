@@ -123,6 +123,27 @@ begin
     'calendar-hardening', 'Gisela Lentz · Turnos',
     'America/Argentina/Buenos_Aires'
   );
+  update public.google_calendar_connections connection
+  set inbound_first_import_approved_at = clock_timestamp(),
+      inbound_sync_state = 'incremental',
+      inbound_sync_token = 'hardening-sync-token',
+      inbound_sync_token_generation = connection.connection_generation,
+      inbound_sync_contract_version = 2,
+      inbound_sync_timezone = connection.google_calendar_timezone,
+      inbound_coverage_starts_at = date_trunc(
+        'day', clock_timestamp() at time zone connection.google_calendar_timezone
+      ) at time zone connection.google_calendar_timezone,
+      inbound_coverage_ends_at = (
+        date_trunc(
+          'day', clock_timestamp() at time zone connection.google_calendar_timezone
+        ) + interval '21 days'
+      ) at time zone connection.google_calendar_timezone,
+      sync_scope_google_account_id = connection.google_account_id,
+      sync_scope_google_calendar_id = connection.google_calendar_id,
+      sync_scope_generation = connection.connection_generation,
+      last_sync_completed_at = clock_timestamp(),
+      last_sync_error = null
+  where connection.id = true;
 end;
 $calendar_connect$;
 
