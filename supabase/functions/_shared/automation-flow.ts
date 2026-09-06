@@ -16,12 +16,20 @@ export type PatientProfileField =
 export const APPOINTMENT_WELCOME_MESSAGE =
   "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.";
 
+export const ACCEPTED_COVERAGE_MESSAGE =
+  "La Dra. Gisela Lentz atiende únicamente por IOMA o de forma particular. No atiende otras obras sociales ni prepagas.";
+
+export const PATIENT_COVERAGE_OPTIONS = [
+  { id: "profile:coverage:ioma", title: "IOMA" },
+  { id: "profile:coverage:particular", title: "Particular" },
+];
+
 export const PATIENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
   name: "¿Cuál es tu nombre y apellido?",
   is_existing_patient: "¿Ya te atendiste en el consultorio antes?",
   contact_phone:
     "¿Cuál es tu teléfono de contacto? Podés escribir otro número o elegir este WhatsApp.",
-  coverage: "¿Cómo vas a atenderte: IOMA, Particular u otra cobertura?",
+  coverage: `${ACCEPTED_COVERAGE_MESSAGE} ¿Cómo vas a atenderte?`,
 };
 
 export interface PatientProfileDraft {
@@ -210,27 +218,86 @@ function plausibleFullName(value: string): string | null {
   return titleCaseName(candidate);
 }
 
+/** Insurer names here classify questions; only IOMA is accepted as coverage. */
+const COVERAGE_TOPIC =
+  "(?:coberturas?|obras? social(?:es)?|prepagas?|ioma|particular|osde|swiss medical|pami|galeno|medife|sancor|federada)";
+const COVERAGE_WORDS = new RegExp(`\\b${COVERAGE_TOPIC}\\b`);
+const COVERAGE_QUESTION = new RegExp(
+  `\\b(?:aceptas?|aceptan|atiendes?|atienden|atendes|trabajas?|trabajan|reciben|toman|sirve|puedo (?:ir|atenderme)|se puede(?: atender)?)(?: (?:tambien|con|por|como|de forma|pacientes con|afiliados a|otras?|la|las|una))* ${COVERAGE_TOPIC}\\b`,
+);
+
+/** A coverage question is informational, never consent to assign coverage. */
+export function asksAboutCoverage(value: string): boolean {
+  if (value === "profile:coverage:other") return true;
+  const input = normalizeUserInput(value);
+  return (
+    /\b(?:que|cual|cuales)(?: son| es)?(?: las?| su| tus?)?(?: otras?)? (?:coberturas?|obras? social(?:es)?|prepagas?)\b/.test(
+      input,
+    ) ||
+    COVERAGE_QUESTION.test(input) ||
+    /^[¿\s]*(?:ioma|particular)\s*\?$/i.test(value)
+  );
+}
+
 export function parseCoverageReply(value: string): PatientCoverage | null {
   if (value === "profile:coverage:ioma") return "ioma";
   if (value === "profile:coverage:particular") return "particular";
-  const input = normalizeUserInput(value);
   const matches: PatientCoverage[] = [];
-  if (/\bioma\b/.test(input)) matches.push("ioma");
-  if (
-    /\bparticular\b/.test(input) ||
-    /^(?:sin cobertura|sin obra social|no tengo (?:cobertura|obra social))$/.test(
-      input,
+  for (const part of value.split(/[\n;,|]+/)) {
+    if (/[¿?]/.test(part) || asksAboutCoverage(part)) continue;
+    const input = normalizeUserInput(part)
+      .replace(/^4 /, "")
+      .replace(/^(?:mi )?(?:cobertura|obra social)(?: es)? /, "")
+      .replace(
+        /^.*\bpero (?=(?:elijo|prefiero|quiero atenderme|acepto atenderme)\b)/,
+        "",
+      );
+    // A mention or negation is not a selection. Match only explicit affirmative
+    // clauses, including the coverage line of a structured patient profile.
+    const choice = input.match(
+      /^(?:(?:(?:tengo|uso|cuento con|soy(?: de)?|(?:soy|estoy) afiliad[oa] (?:a|de)|elijo|prefiero|me atiendo|quiero atenderme|voy a atenderme|acepto atenderme|quiero (?:un )?turno|el turno es)(?: por| con| como| de forma)?|por|con|como|de forma) )?(ioma|particular)$/,
+    );
+    if (choice) matches.push(choice[1] as PatientCoverage);
+    else if (
+      /^(?:sin cobertura|sin obra social|no tengo (?:cobertura|obra social))$/.test(
+        input,
+      )
     )
-  ) {
-    matches.push("particular");
+      matches.push("particular");
   }
   return uniqueValue(matches);
 }
 
+/** An ambiguous coverage mention must not reuse a previously saved choice. */
+export function needsCoverageChoice(value: string): boolean {
+  const input = normalizeUserInput(value);
+  return (
+    (COVERAGE_WORDS.test(input) || /\bafiliad[oa]\b/.test(input)) &&
+    parseCoverageReply(value) === null
+  );
+}
+
+/** Explicit insurer statements must not book using a previously saved IOMA. */
+export function hasUnsupportedCoverageStatement(value: string): boolean {
+  if (parseCoverageReply(value) !== null) return false;
+  const input = normalizeUserInput(value);
+  return (
+    /\b(?:mi (?:obra social|prepaga|cobertura) es|tengo (?:otra|(?:la |una )?(?:obra social|prepaga|cobertura)))\b/.test(
+      input,
+    ) ||
+    (/\b(?:tengo|uso|cuento con|soy de|(?:soy|estoy) afiliad[oa] (?:a|de)|me atiendo (?:con|por))\b/.test(
+      input,
+    ) &&
+      /\b(?:osde|swiss medical|pami|galeno|medife|sancor|federada)\b/.test(
+        input,
+      ))
+  );
+}
+
 /**
- * Reconoce una cobertura distinta de las dos rutas automáticas. Se usa sólo
- * cuando el flujo está esperando este dato, para derivar sin hacer que la
- * persona repita el nombre de su obra social o prepaga.
+ * Reconoce respuestas no admitidas mientras se solicita la cobertura. Se
+ * aclaran las dos opciones sin asignar Particular ni prometer otra cobertura.
+ * El ID antiguo se reconoce para los botones que ya están en conversaciones.
  */
 export function isOtherCoverageReply(value: string): boolean {
   if (value === "profile:coverage:other") return true;

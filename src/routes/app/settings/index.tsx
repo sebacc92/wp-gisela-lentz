@@ -984,8 +984,9 @@ export default component$(() => {
                     <div>
                       <h2>Duración según cobertura</h2>
                       <p>
-                        Al elegir IOMA o Particular, la agenda aplica esta
-                        duración sin pedir ningún cálculo.
+                        Gisela atiende únicamente por IOMA o de forma
+                        particular. La agenda aplica la duración configurada
+                        para cada opción.
                       </p>
                     </div>
                     <div class="settings-form-grid">

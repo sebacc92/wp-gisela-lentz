@@ -10,6 +10,10 @@ la transferencia.
 
 ## Flujo simple para Gisela
 
+Gisela atiende únicamente por **IOMA** o de forma **Particular**. No se ofrecen
+otras obras sociales. Si el paciente menciona otra cobertura, debe aceptar la
+atención particular antes de registrarlo con esa opción.
+
 1. El paciente queda identificado con nombre, WhatsApp, condición de paciente
    anterior y cobertura **IOMA** o **Particular**.
 2. La cobertura calcula automáticamente la duración. Los valores iniciales son

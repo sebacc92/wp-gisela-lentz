@@ -129,6 +129,11 @@ export const ManualContent = component$<ManualContentProps>(
             <strong> Particular</strong>.
           </p>
           <p>
+            Gisela atiende únicamente por IOMA o de forma particular. Si alguien
+            tiene otra obra social, confirmá que acepta atenderse de forma
+            particular antes de registrarlo así.
+          </p>
+          <p>
             La ficha es administrativa. No cargues diagnósticos, recetas ni
             información clínica sensible en las notas de esta plataforma.
           </p>

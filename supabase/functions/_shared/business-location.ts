@@ -52,7 +52,7 @@ const PROFILE_RESUME_PROMPTS: Record<string, string> = {
   is_existing_patient:
     "Seguimos con tu turno 😊 ¿Ya te atendiste en el consultorio antes?",
   contact_phone: "Seguimos con tu turno 😊 ¿Cuál es tu teléfono de contacto?",
-  coverage: "Seguimos con tu turno 😊 ¿Qué cobertura tenés?",
+  coverage: "Seguimos con tu turno 😊 ¿Vas a atenderte por IOMA o Particular?",
 };
 
 function cleanText(value: unknown, maximum: number): string | null {

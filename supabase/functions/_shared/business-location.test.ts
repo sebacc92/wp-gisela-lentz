@@ -167,7 +167,7 @@ test("la consulta lateral retoma la pregunta exacta sin menú genérico", () => 
     informationFlowResumePrompt("collecting_patient_profile", {
       expectedProfileField: "coverage",
     }),
-    "Seguimos con tu turno 😊 ¿Qué cobertura tenés?",
+    "Seguimos con tu turno 😊 ¿Vas a atenderte por IOMA o Particular?",
   );
   assert.equal(
     informationFlowResumePrompt("selecting_slot", {

@@ -1,9 +1,14 @@
 import { loadOwnerAgenda } from "../_shared/owner-agenda.ts";
 import {
+  ACCEPTED_COVERAGE_MESSAGE,
+  PATIENT_COVERAGE_OPTIONS,
   PATIENT_PROFILE_PROMPTS,
   MAIN_MENU_OPTIONS,
   MAX_SLOTS_OFFERED_PER_DAY,
   asksAboutPrice,
+  asksAboutCoverage,
+  hasUnsupportedCoverageStatement,
+  needsCoverageChoice,
   depositProofReviewMessage,
   formatDepositAmountArs,
   isConversationAcknowledgement,
@@ -468,6 +473,7 @@ interface AutomationContext {
   slots?: AutomationSlot[];
   expectedProfileField?: PatientProfileField;
   contactPhoneConfirmed?: boolean;
+  coverageChoiceRequired?: boolean;
   continueAfterProfile?: "services" | "reschedule";
   depositHelpShown?: boolean;
   depositAcknowledged?: boolean;
@@ -750,6 +756,8 @@ Deno.serve(async (request) => {
       context: execution.session_context ?? {},
       expires_at: execution.session_expires_at,
     };
+    let coverageChoiceRequired =
+      session.context.coverageChoiceRequired === true;
     const metadata = (inbound.metadata ?? {}) as Record<string, unknown>;
     const replyId =
       typeof metadata.interactive_reply_id === "string"
@@ -796,7 +804,7 @@ Deno.serve(async (request) => {
         p_lease_token: lease.leaseToken,
         p_sequence: sequence,
         p_state: state,
-        p_context: context,
+        p_context: { ...context, coverageChoiceRequired },
         p_expires_at: expiresAt,
       });
       if (result.error) throw result.error;
@@ -1272,7 +1280,8 @@ Deno.serve(async (request) => {
           : null,
       contactPhoneConfirmed,
       coverage:
-        contact.coverage === "ioma" || contact.coverage === "particular"
+        !coverageChoiceRequired &&
+        (contact.coverage === "ioma" || contact.coverage === "particular")
           ? (contact.coverage as PatientCoverage)
           : null,
     });
@@ -1325,6 +1334,7 @@ Deno.serve(async (request) => {
         throw error ?? new Error("PATIENT_PROFILE_UPDATE_FAILED");
       }
       Object.assign(contact, updatedContact);
+      if (parsed.values.coverage) coverageChoiceRequired = false;
       return true;
     };
 
@@ -1371,14 +1381,7 @@ Deno.serve(async (request) => {
         );
       } else {
         const message = PATIENT_PROFILE_PROMPTS.coverage;
-        await send(
-          buttonsPayload(message, [
-            { id: "profile:coverage:ioma", title: "IOMA" },
-            { id: "profile:coverage:particular", title: "Particular" },
-            { id: "profile:coverage:other", title: "Otra cobertura" },
-          ]),
-          message,
-        );
+        await send(buttonsPayload(message, PATIENT_COVERAGE_OPTIONS), message);
       }
 
       await saveSession(
@@ -1387,6 +1390,7 @@ Deno.serve(async (request) => {
           ...continuationContext,
           expectedProfileField: field,
           contactPhoneConfirmed,
+          coverageChoiceRequired,
           continueAfterProfile,
           invalidAttempts,
         },
@@ -2082,6 +2086,9 @@ Deno.serve(async (request) => {
     const startNewAppointmentFlow = async (
       requestedService: { id: string; name: string } | null = null,
     ) => {
+      // An explicit selection in a new request replaces a stale saved coverage.
+      if (needsCoverageChoice(inputValue)) coverageChoiceRequired = true;
+      await persistProfileInput("coverage");
       const continuationContext = requestedService
         ? {
             serviceId: requestedService.id,
@@ -2907,6 +2914,49 @@ Deno.serve(async (request) => {
         reason: "MULTIPLE_APPOINTMENTS_REQUESTED",
       });
     }
+    if (asksAboutCoverage(inputValue)) {
+      if (
+        session.state === "collecting_patient_profile" &&
+        session.context.expectedProfileField === "coverage"
+      ) {
+        await askForMissingProfile(0, session.context.continueAfterProfile, {
+          serviceId: session.context.serviceId,
+          serviceName: session.context.serviceName,
+        });
+      } else {
+        const resumePrompt = informationFlowResumePrompt(
+          session.state,
+          session.context,
+        );
+        const message = resumePrompt
+          ? `${ACCEPTED_COVERAGE_MESSAGE}\n\n${resumePrompt}`
+          : ACCEPTED_COVERAGE_MESSAGE;
+        await send(textPayload(message), message);
+      }
+      return await finish({
+        processed: true,
+        state: session.state,
+        reason: "ACCEPTED_COVERAGE_INFO",
+      });
+    }
+    if (
+      !replyId &&
+      hasUnsupportedCoverageStatement(inboundBody) &&
+      !(
+        session.state === "collecting_patient_profile" &&
+        session.context.expectedProfileField === "coverage"
+      )
+    ) {
+      await handoff(
+        `${ACCEPTED_COVERAGE_MESSAGE} Para continuar, necesitamos confirmar con vos si querés atenderte de forma particular.`,
+        session.context,
+      );
+      return await finish({
+        processed: true,
+        state: "human_handoff",
+        reason: "UNSUPPORTED_COVERAGE",
+      });
+    }
     if (!replyId && asksAboutPrice(inboundBody)) {
       await handoff(
         "Para darte el valor correcto según la prestación y la cobertura, necesitamos revisar tu consulta.",
@@ -2956,19 +3006,29 @@ Deno.serve(async (request) => {
       return await finish({ processed: true, state: "idle" });
     }
 
+    if (
+      !replyId &&
+      needsCoverageChoice(inputValue) &&
+      (requestedIntent === "new" ||
+        session.state === "idle" ||
+        session.state === "collecting_patient_profile")
+    ) {
+      coverageChoiceRequired = true;
+    }
+
     if (session.state === "collecting_patient_profile") {
       if (
         session.context.expectedProfileField === "coverage" &&
         isOtherCoverageReply(inputValue)
       ) {
-        await handoff(
-          "Para confirmar cómo se gestiona otra cobertura, necesitamos revisarlo con vos.",
-          session.context,
-        );
+        await askForMissingProfile(0, session.context.continueAfterProfile, {
+          serviceId: session.context.serviceId,
+          serviceName: session.context.serviceName,
+        });
         return await finish({
           processed: true,
-          state: "human_handoff",
-          reason: "OTHER_COVERAGE",
+          state: "collecting_patient_profile",
+          reason: "UNSUPPORTED_COVERAGE",
         });
       }
       const parsed = await persistProfileInput(

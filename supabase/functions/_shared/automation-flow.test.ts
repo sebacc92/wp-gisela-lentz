@@ -3,6 +3,9 @@ import test from "node:test";
 
 import {
   APPOINTMENT_WELCOME_MESSAGE,
+  asksAboutCoverage,
+  hasUnsupportedCoverageStatement,
+  needsCoverageChoice,
   asksAboutPrice,
   depositProofReviewMessage,
   MAIN_MENU_OPTIONS,
@@ -429,21 +432,135 @@ test("confirma el teléfono de contacto actual o guarda uno distinto", () => {
   );
 });
 
-test("otra cobertura se deriva sin pedir que repitan su nombre", () => {
+test("reconoce coberturas no admitidas sin asignar IOMA ni Particular", () => {
   for (const reply of [
     "profile:coverage:other",
     "Otra cobertura",
     "OSDE",
     "Swiss Medical",
     "Tengo Federada Salud",
+    "Tengo PAMI",
+    "No tengo IOMA, tengo OSDE",
   ]) {
     assert.equal(isOtherCoverageReply(reply), true, reply);
+    assert.equal(parseCoverageReply(reply), null, reply);
+    assert.equal(
+      parsePatientProfileReply(reply, { expectedField: "coverage" }).values
+        .coverage,
+      undefined,
+      reply,
+    );
   }
   for (const supported of ["IOMA", "Particular", "Sin cobertura", "No sé"]) {
     assert.equal(isOtherCoverageReply(supported), false, supported);
   }
   assert.equal(parseCoverageReply("Sin cobertura"), "particular");
   assert.equal(parseCoverageReply("No tengo obra social"), "particular");
+});
+
+test("preguntar por una cobertura no equivale a elegirla", () => {
+  for (const input of [
+    "¿Qué obras sociales atienden?",
+    "¿Cuáles son las coberturas?",
+    "¿Atienden por IOMA?",
+    "¿Atienden por OSDE?",
+    "¿Trabaja con Federada Salud?",
+    "¿Aceptan Swiss Medical?",
+    "¿Aceptan otras prepagas?",
+    "¿Puedo atenderme particular?",
+    "¿Puedo ir con IOMA?",
+    "¿Sirve IOMA?",
+    "¿IOMA?",
+    "profile:coverage:other",
+  ]) {
+    assert.equal(asksAboutCoverage(input), true, input);
+    assert.equal(parseCoverageReply(input), null, input);
+  }
+  for (const input of [
+    "IOMA",
+    "Tengo IOMA",
+    "Particular",
+    "El turno es particular",
+    "¿Qué sale la consulta particular?",
+    "¿Cuánto cuesta una limpieza por IOMA?",
+    "¿Atienden por la tarde?",
+    "¿Trabajan por orden de llegada?",
+    "¿Aceptan tarjetas?",
+    "¿Qué horarios tienen?",
+    "¿Atienden con anestesia?",
+    "¿Trabajan con chicos?",
+    "¿Atienden con dolor?",
+    "Tengo IOMA, ¿puedo ir mañana?",
+    "Tengo IOMA, ¿puedo ir con dolor?",
+    "Tengo IOMA y puedo ir mañana",
+  ])
+    assert.equal(asksAboutCoverage(input), false, input);
+});
+
+test("una negación o alternativa con otra obra social no completa cobertura", () => {
+  for (const input of [
+    "No tengo IOMA",
+    "No soy particular",
+    "No quiero particular",
+    "Sin IOMA",
+    "IOMA no",
+    "Tengo OSDE, no IOMA",
+    "IOMA o OSDE",
+    "OSDE o IOMA",
+    "IOMA o Particular",
+    "No soy afiliado a IOMA",
+    "No es IOMA, es OSDE",
+    "No puedo pagar particular",
+    "No quiero ir particular",
+    "No sería particular",
+  ])
+    assert.equal(parseCoverageReply(input), null, input);
+  assert.equal(parseCoverageReply("profile:coverage:ioma"), "ioma");
+  assert.equal(parseCoverageReply("profile:coverage:particular"), "particular");
+  assert.equal(
+    parseCoverageReply("Tengo OSDE pero elijo particular"),
+    "particular",
+  );
+  assert.equal(parseCoverageReply("Quiero un turno particular"), "particular");
+  assert.equal(parseCoverageReply("Quiero un turno por IOMA"), "ioma");
+});
+
+test("una declaración de otra cobertura exige aclaración aunque el perfil ya esté completo", () => {
+  for (const input of [
+    "Quiero un turno, tengo OSDE",
+    "Tengo Swiss Medical",
+    "Mi obra social es Unión Personal",
+    "Tengo otra cobertura",
+    "Soy afiliado de OSDE",
+  ])
+    assert.equal(hasUnsupportedCoverageStatement(input), true, input);
+  for (const input of [
+    "Tengo IOMA",
+    "Tengo OSDE pero elijo particular",
+    "Quiero un turno particular, tengo OSDE",
+    "Tengo dolor",
+    "Quiero un turno",
+  ])
+    assert.equal(hasUnsupportedCoverageStatement(input), false, input);
+});
+
+test("una mención ambigua pide elegir antes de reutilizar la cobertura guardada", () => {
+  for (const input of [
+    "Quiero un turno particular para mañana",
+    "Necesito un turno particular",
+    "Ya no tengo IOMA, quiero sacar un turno",
+    "Soy afiliado de OSDE",
+    "Quiero un turno, tengo otra obra social",
+  ])
+    assert.equal(needsCoverageChoice(input), true, input);
+  for (const input of [
+    "Quiero un turno",
+    "Necesito una limpieza",
+    "Quiero un turno por IOMA",
+    "Quiero un turno particular",
+    "profile:coverage:particular",
+  ])
+    assert.equal(needsCoverageChoice(input), false, input);
 });
 
 test("no confunde un teléfono principal ni un texto libre con datos faltantes", () => {

@@ -14,7 +14,7 @@ test("precio y turnos para terceros interrumpen antes de cualquier reserva", () 
   );
   const priceGuard = automation.indexOf("asksAboutPrice(inboundBody)");
   const stateMachine = automation.indexOf(
-    'session.state === "collecting_patient_profile"',
+    'if (session.state === "collecting_patient_profile") {',
   );
   const appointmentCreation = automation.indexOf(
     '"create_whatsapp_automation_appointment"',
@@ -45,7 +45,7 @@ test("un saludo nuevo muestra opciones y no inicia el alta por defecto", () => {
 test("las consultas laterales de información preservan el paso en curso", () => {
   const infoGuard = automation.indexOf('requestedIntent === "info"');
   const stateMachine = automation.indexOf(
-    'session.state === "collecting_patient_profile"',
+    'if (session.state === "collecting_patient_profile") {',
   );
 
   assert.ok(infoGuard >= 0 && infoGuard < stateMachine);
@@ -162,6 +162,4 @@ test("el WhatsApp de origen se usa como contacto sin pedir confirmarlo", () => {
     automation,
     /typeof contact\.phone_e164 === "string"[\s\S]{0,160}\^\\\+\[1-9\]\[0-9\]\{7,14\}\$/,
   );
-  assert.match(automation, /profile:coverage:other/);
-  assert.match(automation, /reason: "OTHER_COVERAGE"/);
 });
