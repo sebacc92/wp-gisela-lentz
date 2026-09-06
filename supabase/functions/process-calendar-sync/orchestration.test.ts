@@ -307,7 +307,10 @@ function baseHandlers(
       data: true,
       error: null,
     }),
-    expire_booking_holds: () => ({ data: [], error: null }),
+    expire_google_calendar_automation_booking_holds: () => ({
+      data: [],
+      error: null,
+    }),
     claim_google_calendar_external_cleanup: () => ({ data: [], error: null }),
     release_google_calendar_inbound_lease: () => ({ data: true, error: null }),
     invalidate_google_calendar_sync_token: () => ({ data: true, error: null }),
@@ -2328,7 +2331,7 @@ Deno.test(
       rpcCalls.map((call) => call.name),
       [
         "get_google_calendar_automation_gate",
-        "expire_booking_holds",
+        "expire_google_calendar_automation_booking_holds",
         "purge_expired_google_calendar_connection_candidate",
         "get_google_calendar_windowed_connection_secret",
       ],
@@ -2342,7 +2345,7 @@ Deno.test(
   async () => {
     const { client, rpcCalls } = fakeSupabase(
       baseHandlers({
-        expire_booking_holds: () => ({
+        expire_google_calendar_automation_booking_holds: () => ({
           data: [
             { appointment_id: APPOINTMENT_ID },
             { appointment_id: "99999999-9999-4999-8999-999999999999" },
@@ -2370,15 +2373,27 @@ Deno.test(
     assert.equal(response.status, 200);
     assert.equal(body.mode, "automatic");
     assert.equal(body.expiredHolds, 2);
+    const expiration = rpcCalls.find(
+      (call) => call.name === "expire_google_calendar_automation_booking_holds",
+    );
+    assert.deepEqual(expiration?.args, {
+      p_automation_epoch: AUTOMATION_EPOCH,
+      p_expected_generation: 1,
+      p_expected_google_calendar_id: "cal-1",
+      p_now: new Date(TEST_NOW).toISOString(),
+    });
     assert.ok(calls.some((call) => call.url.includes("/events?")));
     const names = rpcCalls.map((call) => call.name);
     assert.equal(names[0], "get_google_calendar_automation_gate");
     assert.ok(
       indexOfCall(rpcCalls, "get_google_calendar_automation_gate") <
-        indexOfCall(rpcCalls, "expire_booking_holds"),
+        indexOfCall(
+          rpcCalls,
+          "expire_google_calendar_automation_booking_holds",
+        ),
     );
     assert.ok(
-      indexOfCall(rpcCalls, "expire_booking_holds") <
+      indexOfCall(rpcCalls, "expire_google_calendar_automation_booking_holds") <
         indexOfCall(
           rpcCalls,
           "purge_expired_google_calendar_connection_candidate",
@@ -2396,6 +2411,7 @@ Deno.test(
       names.includes("claim_google_calendar_external_cleanup"),
       false,
     );
+    assert.equal(names.includes("expire_booking_holds"), false);
   },
 );
 
@@ -2404,7 +2420,7 @@ Deno.test(
   async () => {
     const { client, rpcCalls } = fakeSupabase(
       baseHandlers({
-        expire_booking_holds: () => ({
+        expire_google_calendar_automation_booking_holds: () => ({
           data: [{ appointment_id: APPOINTMENT_ID }],
           error: null,
         }),
@@ -2430,7 +2446,10 @@ Deno.test(
     assert.equal(response.status, 503);
     assert.equal(body.expiredHolds, 1);
     assert.equal(
-      rpcCalls.some((call) => call.name === "expire_booking_holds"),
+      rpcCalls.some(
+        (call) =>
+          call.name === "expire_google_calendar_automation_booking_holds",
+      ),
       true,
     );
     assert.equal(

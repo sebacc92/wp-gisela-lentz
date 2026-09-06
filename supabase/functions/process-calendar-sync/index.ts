@@ -423,8 +423,13 @@ export async function handleCalendarSyncRequest(
       // disponibilidad de Google. No reclama avisos ni ejecuta WhatsApp; el
       // delete que pueda encolar seguirá bloqueado hasta un pull inbound seguro.
       const { data: expiredRows, error: expirationError } = await client.rpc(
-        "expire_booking_holds",
-        { p_now: now.toISOString() },
+        "expire_google_calendar_automation_booking_holds",
+        {
+          p_automation_epoch: automaticGate.automation_epoch,
+          p_expected_generation: Number(automaticGate.connection_generation),
+          p_expected_google_calendar_id: automaticGate.google_calendar_id,
+          p_now: now.toISOString(),
+        },
       );
       if (expirationError || !Array.isArray(expiredRows)) {
         throw calendarWorkerFailure("CALENDAR_HOLD_EXPIRATION_FAILED");
