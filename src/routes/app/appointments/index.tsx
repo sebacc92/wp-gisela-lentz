@@ -8,6 +8,7 @@ import {
 import { useLocation, type DocumentHead } from "@qwik.dev/router";
 import "./agenda-print.css";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { GoogleCalendarStatusBlock } from "~/components/app/GoogleCalendarStatusBlock";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { ConvertBlockDrawer } from "~/components/appointments/ConvertBlockDrawer";
 import { ManualAppointmentDrawer } from "~/components/appointments/ManualAppointmentDrawer";
@@ -620,6 +621,8 @@ export default component$(() => {
             </button>
           </div>
         </header>
+
+        <GoogleCalendarStatusBlock variant="agenda" />
 
         <div class="section-toolbar agenda-toolbar">
           <div class="agenda-date-nav" aria-label="Cambiar día">

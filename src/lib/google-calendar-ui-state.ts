@@ -1,5 +1,6 @@
 export type GoogleCalendarSyncStatus =
   | "synced"
+  | "inactive"
   | "pending"
   | "attention"
   | "reconnect"
@@ -10,7 +11,8 @@ export interface GoogleCalendarSyncStateInput {
   status: unknown;
   firstImportApproved: boolean;
   inboundSyncState: string;
-  lastCheckedAt: string;
+  lastSyncCompletedAt: string;
+  automationActive: boolean;
 }
 
 function hasValidReviewTimestamp(value: string): boolean {
@@ -26,7 +28,8 @@ export function googleCalendarSyncStatus({
   status,
   firstImportApproved,
   inboundSyncState,
-  lastCheckedAt,
+  lastSyncCompletedAt,
+  automationActive,
 }: GoogleCalendarSyncStateInput): GoogleCalendarSyncStatus {
   const normalizedStatus = String(status);
 
@@ -51,10 +54,11 @@ export function googleCalendarSyncStatus({
   if (inboundSyncState === "full_resync_required") return "attention";
   if (
     inboundSyncState !== "incremental" ||
-    !hasValidReviewTimestamp(lastCheckedAt)
+    !hasValidReviewTimestamp(lastSyncCompletedAt)
   ) {
     return "not_checked";
   }
+  if (!automationActive) return "inactive";
   if (["connected", "synced"].includes(normalizedStatus)) return "synced";
 
   return "attention";
@@ -63,6 +67,7 @@ export function googleCalendarSyncStatus({
 export function canRunManualGoogleCalendarSync(
   firstImportApproved: boolean,
   inboundSyncState: string,
+  connected: boolean,
 ): boolean {
-  return firstImportApproved && inboundSyncState === "incremental";
+  return connected && firstImportApproved && inboundSyncState === "incremental";
 }

@@ -9,7 +9,8 @@ const completedState = {
   status: "connected",
   firstImportApproved: true,
   inboundSyncState: "incremental",
-  lastCheckedAt: "2026-09-05T04:45:00.000Z",
+  lastSyncCompletedAt: "2026-09-05T04:45:00.000Z",
+  automationActive: true,
 };
 
 test("una conexión que espera aprobación no se presenta como al día", () => {
@@ -18,7 +19,7 @@ test("una conexión que espera aprobación no se presenta como al día", () => {
       ...completedState,
       firstImportApproved: false,
       inboundSyncState: "awaiting_first_import",
-      lastCheckedAt: "",
+      lastSyncCompletedAt: "",
     }),
     "first_import",
   );
@@ -29,7 +30,7 @@ test("después de aprobar, la primera corrida sigue figurando pendiente", () => 
     googleCalendarSyncStatus({
       ...completedState,
       inboundSyncState: "awaiting_first_import",
-      lastCheckedAt: "",
+      lastSyncCompletedAt: "",
     }),
     "not_checked",
   );
@@ -38,14 +39,14 @@ test("después de aprobar, la primera corrida sigue figurando pendiente", () => 
       ...completedState,
       status: "initial_sync_required",
       inboundSyncState: "full_resync_required",
-      lastCheckedAt: "",
+      lastSyncCompletedAt: "",
     }),
     "not_checked",
   );
   assert.equal(
     googleCalendarSyncStatus({
       ...completedState,
-      lastCheckedAt: "fecha inválida",
+      lastSyncCompletedAt: "fecha inválida",
     }),
     "not_checked",
   );
@@ -66,6 +67,16 @@ test("Todo al día exige aprobación, estado incremental y revisión válida", (
   );
 });
 
+test("una revisión manual no permite inferir automatización activa", () => {
+  assert.equal(
+    googleCalendarSyncStatus({
+      ...completedState,
+      automationActive: false,
+    }),
+    "inactive",
+  );
+});
+
 test("reconexión y sincronización en curso conservan prioridad", () => {
   assert.equal(
     googleCalendarSyncStatus({
@@ -79,7 +90,7 @@ test("reconexión y sincronización en curso conservan prioridad", () => {
     googleCalendarSyncStatus({
       ...completedState,
       status: "pending",
-      lastCheckedAt: "",
+      lastSyncCompletedAt: "",
     }),
     "pending",
   );
@@ -87,12 +98,16 @@ test("reconexión y sincronización en curso conservan prioridad", () => {
 
 test("la sincronización manual sólo se habilita al completar la importación", () => {
   assert.equal(
-    canRunManualGoogleCalendarSync(false, "awaiting_first_import"),
+    canRunManualGoogleCalendarSync(false, "awaiting_first_import", true),
     false,
   );
   assert.equal(
-    canRunManualGoogleCalendarSync(true, "awaiting_first_import"),
+    canRunManualGoogleCalendarSync(true, "awaiting_first_import", true),
     false,
   );
-  assert.equal(canRunManualGoogleCalendarSync(true, "incremental"), true);
+  assert.equal(canRunManualGoogleCalendarSync(true, "incremental", true), true);
+  assert.equal(
+    canRunManualGoogleCalendarSync(true, "incremental", false),
+    false,
+  );
 });

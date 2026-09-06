@@ -6,7 +6,7 @@ import {
   type CalendarSyncAppointment,
   classifyGoogleCalendarEvent,
   classifyGoogleCalendarEventAsExternal,
-  deleteGoogleCalendarEvent,
+  deleteManagedGoogleCalendarEvent,
   deterministicGoogleEventId,
   getGoogleCalendarEvent,
   getOwnedGoogleCalendar,
@@ -33,6 +33,13 @@ const appointment: CalendarSyncAppointment = {
   ends_at: "2026-08-20T13:45:00.000Z",
   patient_name: "  Ana   Pérez ",
   timezone: "America/Argentina/Buenos_Aires",
+};
+const AUTOMATION_EPOCH = "77777777-7777-4777-8777-777777777777";
+const association = {
+  eventId: "persisted-event-id",
+  automationEpoch: AUTOMATION_EPOCH,
+  projectionStage: "confirmed" as const,
+  projectedStage: "pre_reservation" as const,
 };
 
 function googleEventsPage(
@@ -132,49 +139,396 @@ test("el id del evento es determinista y compatible con Google", () => {
   assert.match(id, /^[0-9a-v]{5,1024}$/);
 });
 
-test("el evento excluye teléfono, notas internas y datos del servicio", () => {
-  const payload = googleCalendarEventPayload(appointment, true);
+test("el evento excluye teléfono, notas internas y datos del servicio", async () => {
+  const payload = await googleCalendarEventPayload(
+    appointment,
+    association,
+    true,
+  );
   const serialized = JSON.stringify(payload);
-  assert.equal(payload.summary, "Turno odontológico · Ana Pérez");
+  assert.equal(payload.summary, "Turno confirmado · Ana Pérez");
   assert.equal(payload.visibility, "private");
   assert.equal(payload.status, "confirmed");
   assert.equal(
     payload.extendedProperties.private.appointment_id,
     appointment.appointment_id,
   );
+  assert.equal(
+    payload.extendedProperties.private.automation_epoch,
+    AUTOMATION_EPOCH,
+  );
+  assert.equal(
+    payload.extendedProperties.private.projection_stage,
+    "confirmed",
+  );
+  assert.equal(payload.id, association.eventId);
   assert.equal(serialized.includes("phone"), false);
   assert.equal(serialized.includes("internal_note"), false);
   assert.equal(serialized.includes("service"), false);
+
+  const pendingPayload = await googleCalendarEventPayload(appointment, {
+    ...association,
+    projectionStage: "pre_reservation",
+  });
+  assert.equal(pendingPayload.summary, "Pendiente de seña · Ana Pérez");
+  assert.equal(
+    pendingPayload.extendedProperties.private.projection_stage,
+    "pre_reservation",
+  );
 });
 
-test("insert en conflicto continúa con PATCH y sendUpdates=none", async () => {
+test("insert en conflicto sólo parchea una asociación propia del mismo epoch", async () => {
   const requests: Array<{ url: string; method: string; body: string }> = [];
+  let authorizations = 0;
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
     requests.push({
       url: String(url),
       method: init?.method ?? "GET",
       body: String(init?.body ?? ""),
     });
-    return new Response(null, {
-      status: requests.length === 1 ? 409 : 200,
-    });
+    if (requests.length === 1) return new Response(null, { status: 409 });
+    if (requests.length === 2) {
+      return Response.json({
+        id: association.eventId,
+        etag: '"owned-etag"',
+        extendedProperties: {
+          private: {
+            managed_by: "gisela_lentz_agenda",
+            appointment_id: appointment.appointment_id,
+            automation_epoch: AUTOMATION_EPOCH,
+            projection_stage: "pre_reservation",
+          },
+        },
+      });
+    }
+    return new Response(null, { status: 200 });
   }) as typeof fetch;
 
   const result = await upsertGoogleCalendarEvent({
     accessToken: "not-a-real-token",
     calendarId: "private-calendar@example.com",
     appointment,
+    association,
+    beforeMutation: () => {
+      authorizations += 1;
+      return Promise.resolve();
+    },
+    etag: '"owned-etag"',
     fetcher,
   });
 
   assert.equal(result.operation, "patched");
   assert.deepEqual(
     requests.map(({ method }) => method),
-    ["POST", "PATCH"],
+    ["POST", "GET", "PATCH"],
   );
-  assert.ok(requests.every(({ url }) => url.endsWith("?sendUpdates=none")));
+  assert.equal(authorizations, 2);
+  assert.equal(requests[0].url.endsWith("?sendUpdates=none"), true);
+  assert.equal(requests[1].url.endsWith("?sendUpdates=none"), false);
+  assert.equal(requests[2].url.endsWith("?sendUpdates=none"), true);
   assert.equal(JSON.parse(requests[0].body).id, result.eventId);
-  assert.equal(JSON.parse(requests[1].body).id, undefined);
+  assert.equal(JSON.parse(requests[2].body).id, undefined);
+});
+
+test("un 409 ajeno nunca se convierte en PATCH", async () => {
+  const methods: string[] = [];
+  let authorizations = 0;
+  await assert.rejects(
+    upsertGoogleCalendarEvent({
+      accessToken: "not-a-real-token",
+      calendarId: "private-calendar@example.com",
+      appointment,
+      association,
+      beforeMutation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+      fetcher: (async (_input, init) => {
+        const method = init?.method ?? "GET";
+        methods.push(method);
+        if (method === "POST") return new Response(null, { status: 409 });
+        return Response.json({
+          id: association.eventId,
+          extendedProperties: {
+            private: {
+              managed_by: "otra_integracion",
+              appointment_id: appointment.appointment_id,
+            },
+          },
+        });
+      }) as typeof fetch,
+    }),
+    (error) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENT_OWNERSHIP_CONFLICT" &&
+      !googleErrorRetryable(error),
+  );
+  assert.deepEqual(methods, ["POST", "GET"]);
+  assert.equal(authorizations, 1);
+});
+
+test("un cambio humano de ETag entre pull y push nunca se sobreescribe", async () => {
+  const methods: string[] = [];
+  let authorizations = 0;
+  await assert.rejects(
+    upsertGoogleCalendarEvent({
+      accessToken: "not-a-real-token",
+      calendarId: "private-calendar@example.com",
+      appointment,
+      association,
+      etag: '"etag-del-pull"',
+      beforeMutation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+      fetcher: (async (_input, init) => {
+        const method = init?.method ?? "GET";
+        methods.push(method);
+        if (method === "POST") return new Response(null, { status: 409 });
+        return Response.json({
+          id: association.eventId,
+          etag: '"etag-editado-en-google"',
+          summary: "Turno confirmado · Ana Pérez",
+          extendedProperties: {
+            private: {
+              managed_by: "gisela_lentz_agenda",
+              appointment_id: appointment.appointment_id,
+              automation_epoch: AUTOMATION_EPOCH,
+              projection_stage: "confirmed",
+            },
+          },
+          start: { dateTime: appointment.starts_at },
+          end: { dateTime: appointment.ends_at },
+        });
+      }) as typeof fetch,
+    }),
+    (error) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENT_PRECONDITION_FAILED" &&
+      googleErrorRetryable(error),
+  );
+  assert.deepEqual(methods, ["POST", "GET"]);
+  assert.equal(authorizations, 1);
+});
+
+test("una respuesta de insert perdida sólo adopta un evento propio idéntico", async () => {
+  const methods: string[] = [];
+  let authorizations = 0;
+  const remotePayload = await googleCalendarEventPayload(
+    appointment,
+    association,
+    true,
+  );
+  const result = await upsertGoogleCalendarEvent({
+    accessToken: "not-a-real-token",
+    calendarId: "private-calendar@example.com",
+    appointment,
+    association: { ...association, projectedStage: null },
+    beforeMutation: () => {
+      authorizations += 1;
+      return Promise.resolve();
+    },
+    fetcher: (async (_input, init) => {
+      const method = init?.method ?? "GET";
+      methods.push(method);
+      if (method === "POST") return new Response(null, { status: 409 });
+      return Response.json({ ...remotePayload, etag: '"created-etag"' });
+    }) as typeof fetch,
+  });
+
+  assert.equal(result.operation, "adopted");
+  assert.equal(result.etag, '"created-etag"');
+  assert.deepEqual(methods, ["POST", "GET"]);
+  assert.equal(authorizations, 1);
+});
+
+test("una respuesta perdida no adopta payload con descripción o marker alterados", async () => {
+  const remotePayload = await googleCalendarEventPayload(
+    appointment,
+    association,
+    true,
+  );
+  for (const remoteDrift of [
+    { description: "Descripción editada manualmente" },
+    { location: "Consultorio agregado manualmente" },
+    { colorId: "11" },
+    { reminders: { useDefault: false, overrides: [] } },
+    {
+      extendedProperties: {
+        private: {
+          managed_by: "gisela_lentz_agenda",
+          appointment_id: appointment.appointment_id,
+          automation_epoch: AUTOMATION_EPOCH,
+          projection_stage: "confirmed",
+          marker_extra: "manual",
+        },
+      },
+    },
+  ]) {
+    const methods: string[] = [];
+    await assert.rejects(
+      upsertGoogleCalendarEvent({
+        accessToken: "not-a-real-token",
+        calendarId: "private-calendar@example.com",
+        appointment,
+        association: { ...association, projectedStage: null },
+        beforeMutation: () => Promise.resolve(),
+        fetcher: (async (_input, init) => {
+          const method = init?.method ?? "GET";
+          methods.push(method);
+          if (method === "POST") return new Response(null, { status: 409 });
+          return Response.json({
+            ...remotePayload,
+            etag: '"created-etag"',
+            ...remoteDrift,
+          });
+        }) as typeof fetch,
+      }),
+      (error) =>
+        error instanceof GoogleIntegrationError &&
+        error.code === "GOOGLE_EVENT_OWNERSHIP_CONFLICT",
+    );
+    assert.deepEqual(methods, ["POST", "GET"]);
+  }
+});
+
+test("un POST pendiente perdido se recupera con el mismo ID al confirmar o reprogramar", async () => {
+  const pendingAssociation = {
+    ...association,
+    projectionStage: "pre_reservation" as const,
+    projectedStage: null,
+  };
+  const pendingPayload = await googleCalendarEventPayload(
+    appointment,
+    pendingAssociation,
+    true,
+  );
+  const cases = [
+    {
+      name: "confirmación",
+      desiredAppointment: appointment,
+      desiredAssociation: { ...association, projectedStage: null },
+    },
+    {
+      name: "reprogramación",
+      desiredAppointment: {
+        ...appointment,
+        starts_at: "2026-09-09T15:00:00.000Z",
+        ends_at: "2026-09-09T15:30:00.000Z",
+      },
+      desiredAssociation: pendingAssociation,
+    },
+  ];
+
+  for (const recoveryCase of cases) {
+    const requests: Array<{
+      method: string;
+      url: string;
+      ifMatch: string | null;
+      body: string;
+    }> = [];
+    let authorizations = 0;
+    const result = await upsertGoogleCalendarEvent({
+      accessToken: "not-a-real-token",
+      calendarId: "private-calendar@example.com",
+      appointment: recoveryCase.desiredAppointment,
+      association: recoveryCase.desiredAssociation,
+      beforeMutation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+      fetcher: (async (input, init) => {
+        const method = init?.method ?? "GET";
+        requests.push({
+          method,
+          url: String(input),
+          ifMatch: new Headers(init?.headers).get("if-match"),
+          body: String(init?.body ?? ""),
+        });
+        if (method === "POST") return new Response(null, { status: 409 });
+        if (method === "GET") {
+          return Response.json({
+            ...pendingPayload,
+            etag: '"etag-post-pendiente-perdido"',
+          });
+        }
+        return new Response(null, {
+          status: 200,
+          headers: { ETag: '"etag-version-actual"' },
+        });
+      }) as typeof fetch,
+    });
+
+    assert.equal(result.eventId, association.eventId, recoveryCase.name);
+    assert.equal(result.operation, "patched", recoveryCase.name);
+    assert.deepEqual(
+      requests.map(({ method }) => method),
+      ["POST", "GET", "PATCH"],
+      recoveryCase.name,
+    );
+    assert.ok(
+      requests.every(
+        ({ url }) =>
+          !url.includes("/events/") || url.includes(association.eventId),
+      ),
+      recoveryCase.name,
+    );
+    assert.equal(
+      requests[2].ifMatch,
+      '"etag-post-pendiente-perdido"',
+      recoveryCase.name,
+    );
+    assert.equal(authorizations, 2, recoveryCase.name);
+    const patchedPayload = JSON.parse(requests[2].body);
+    assert.equal(
+      patchedPayload.extendedProperties.private.projection_stage,
+      recoveryCase.desiredAssociation.projectionStage,
+      recoveryCase.name,
+    );
+    assert.match(
+      patchedPayload.extendedProperties.private.payload_fingerprint,
+      /^[0-9a-f]{64}$/,
+      recoveryCase.name,
+    );
+  }
+});
+
+test("un PATCH aplicado cuya respuesta se perdió se adopta sin volver a escribir", async () => {
+  const remotePayload = await googleCalendarEventPayload(
+    appointment,
+    association,
+    true,
+  );
+  const methods: string[] = [];
+  let authorizations = 0;
+  const result = await upsertGoogleCalendarEvent({
+    accessToken: "not-a-real-token",
+    calendarId: "private-calendar@example.com",
+    appointment,
+    association,
+    etag: '"etag-anterior-al-patch"',
+    beforeMutation: () => {
+      authorizations += 1;
+      return Promise.resolve();
+    },
+    fetcher: (async (_input, init) => {
+      const method = init?.method ?? "GET";
+      methods.push(method);
+      if (method === "POST") return new Response(null, { status: 409 });
+      return Response.json({
+        ...remotePayload,
+        etag: '"etag-del-patch-aplicado"',
+      });
+    }) as typeof fetch,
+  });
+
+  assert.deepEqual(result, {
+    eventId: association.eventId,
+    operation: "adopted",
+    etag: '"etag-del-patch-aplicado"',
+  });
+  assert.deepEqual(methods, ["POST", "GET"]);
+  assert.equal(authorizations, 1);
 });
 
 test("un tombstone de Google se reintenta sin inventar otro event id", async () => {
@@ -184,6 +538,8 @@ test("un tombstone de Google se reintenta sin inventar otro event id", async () 
       accessToken: "not-a-real-token",
       calendarId: "private-calendar@example.com",
       appointment,
+      association,
+      beforeMutation: () => Promise.resolve(),
       fetcher: (async () => {
         calls += 1;
         return new Response(null, { status: calls === 1 ? 409 : 410 });
@@ -203,6 +559,8 @@ test("si el calendario seleccionado desapareció pide reconectar", async () => {
       accessToken: "not-a-real-token",
       calendarId: "deleted-calendar@example.com",
       appointment,
+      association,
+      beforeMutation: () => Promise.resolve(),
       fetcher: (async () =>
         new Response(null, { status: 404 })) as typeof fetch,
     }),
@@ -356,13 +714,236 @@ test("rechaza al confirmar un calendario writer aunque Google lo devuelva", asyn
 
 test("borrar un evento inexistente o ya eliminado es idempotente", async () => {
   for (const status of [404, 410]) {
-    await deleteGoogleCalendarEvent({
+    await deleteManagedGoogleCalendarEvent({
       accessToken: "not-a-real-token",
       calendarId: "private-calendar@example.com",
+      eventId: association.eventId,
       appointmentId: appointment.appointment_id,
+      automationEpoch: AUTOMATION_EPOCH,
+      beforeMutation: () => Promise.resolve(),
       fetcher: (async () => new Response(null, { status })) as typeof fetch,
     });
   }
+});
+
+test("delete usa asociación persistida y reautoriza después de verificar markers", async () => {
+  const calls: Array<{ method: string; url: string; ifMatch: string | null }> =
+    [];
+  let authorizations = 0;
+  await deleteManagedGoogleCalendarEvent({
+    accessToken: "not-a-real-token",
+    calendarId: "private-calendar@example.com",
+    eventId: association.eventId,
+    appointmentId: appointment.appointment_id,
+    automationEpoch: AUTOMATION_EPOCH,
+    beforeMutation: () => {
+      authorizations += 1;
+      return Promise.resolve();
+    },
+    etag: '"fresh-etag"',
+    fetcher: (async (input, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({
+        method,
+        url: String(input),
+        ifMatch: new Headers(init?.headers).get("if-match"),
+      });
+      if (method === "GET") {
+        return Response.json({
+          id: association.eventId,
+          etag: '"fresh-etag"',
+          extendedProperties: {
+            private: {
+              managed_by: "gisela_lentz_agenda",
+              appointment_id: appointment.appointment_id,
+              automation_epoch: AUTOMATION_EPOCH,
+            },
+          },
+        });
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof fetch,
+  });
+
+  assert.equal(authorizations, 1);
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["GET", "DELETE"],
+  );
+  assert.ok(calls.every((call) => call.url.includes(association.eventId)));
+  assert.equal(calls[1].ifMatch, '"fresh-etag"');
+});
+
+test("un POST pendiente perdido puede cancelarse sin duplicar ni perder ownership", async () => {
+  const pendingPayload = await googleCalendarEventPayload(
+    appointment,
+    {
+      ...association,
+      projectionStage: "pre_reservation",
+      projectedStage: null,
+    },
+    true,
+  );
+  const calls: Array<{ method: string; ifMatch: string | null }> = [];
+  let authorizations = 0;
+  await deleteManagedGoogleCalendarEvent({
+    accessToken: "not-a-real-token",
+    calendarId: "private-calendar@example.com",
+    eventId: association.eventId,
+    appointmentId: appointment.appointment_id,
+    automationEpoch: AUTOMATION_EPOCH,
+    beforeMutation: () => {
+      authorizations += 1;
+      return Promise.resolve();
+    },
+    etag: null,
+    fetcher: (async (_input, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({
+        method,
+        ifMatch: new Headers(init?.headers).get("if-match"),
+      });
+      if (method === "GET") {
+        return Response.json({
+          ...pendingPayload,
+          etag: '"etag-post-pendiente-perdido"',
+        });
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof fetch,
+  });
+
+  assert.deepEqual(
+    calls.map(({ method }) => method),
+    ["GET", "DELETE"],
+  );
+  assert.equal(calls[1].ifMatch, '"etag-post-pendiente-perdido"');
+  assert.equal(authorizations, 1);
+});
+
+test("un PATCH aplicado cuya respuesta se perdió puede cancelarse con su ETag observado", async () => {
+  const confirmedPayload = await googleCalendarEventPayload(
+    appointment,
+    association,
+    true,
+  );
+  const calls: Array<{ method: string; ifMatch: string | null }> = [];
+  let authorizations = 0;
+  await deleteManagedGoogleCalendarEvent({
+    accessToken: "not-a-real-token",
+    calendarId: "private-calendar@example.com",
+    eventId: association.eventId,
+    appointmentId: appointment.appointment_id,
+    automationEpoch: AUTOMATION_EPOCH,
+    beforeMutation: () => {
+      authorizations += 1;
+      return Promise.resolve();
+    },
+    etag: '"etag-anterior-al-patch"',
+    fetcher: (async (_input, init) => {
+      const method = init?.method ?? "GET";
+      calls.push({
+        method,
+        ifMatch: new Headers(init?.headers).get("if-match"),
+      });
+      if (method === "GET") {
+        return Response.json({
+          ...confirmedPayload,
+          etag: '"etag-del-patch-aplicado"',
+        });
+      }
+      return new Response(null, { status: 204 });
+    }) as typeof fetch,
+  });
+
+  assert.deepEqual(
+    calls.map(({ method }) => method),
+    ["GET", "DELETE"],
+  );
+  assert.equal(calls[1].ifMatch, '"etag-del-patch-aplicado"');
+  assert.equal(authorizations, 1);
+});
+
+test("delete sin ETag rechaza un evento propio cuya huella ya no coincide", async () => {
+  const pendingPayload = await googleCalendarEventPayload(
+    appointment,
+    {
+      ...association,
+      projectionStage: "pre_reservation",
+      projectedStage: null,
+    },
+    true,
+  );
+  const methods: string[] = [];
+  let authorizations = 0;
+  await assert.rejects(
+    deleteManagedGoogleCalendarEvent({
+      accessToken: "not-a-real-token",
+      calendarId: "private-calendar@example.com",
+      eventId: association.eventId,
+      appointmentId: appointment.appointment_id,
+      automationEpoch: AUTOMATION_EPOCH,
+      beforeMutation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+      etag: null,
+      fetcher: (async (_input, init) => {
+        methods.push(init?.method ?? "GET");
+        return Response.json({
+          ...pendingPayload,
+          etag: '"etag-humano"',
+          location: "Ubicación agregada manualmente",
+        });
+      }) as typeof fetch,
+    }),
+    (error) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENT_OWNERSHIP_CONFLICT" &&
+      !googleErrorRetryable(error),
+  );
+  assert.deepEqual(methods, ["GET"]);
+  assert.equal(authorizations, 0);
+});
+
+test("delete no adopta un ETag editado por una persona", async () => {
+  const methods: string[] = [];
+  let authorizations = 0;
+  await assert.rejects(
+    deleteManagedGoogleCalendarEvent({
+      accessToken: "not-a-real-token",
+      calendarId: "private-calendar@example.com",
+      eventId: association.eventId,
+      appointmentId: appointment.appointment_id,
+      automationEpoch: AUTOMATION_EPOCH,
+      beforeMutation: () => {
+        authorizations += 1;
+        return Promise.resolve();
+      },
+      etag: '"etag-del-pull"',
+      fetcher: (async (_input, init) => {
+        const method = init?.method ?? "GET";
+        methods.push(method);
+        return Response.json({
+          id: association.eventId,
+          etag: '"etag-editado-en-google"',
+          extendedProperties: {
+            private: {
+              managed_by: "gisela_lentz_agenda",
+              appointment_id: appointment.appointment_id,
+              automation_epoch: AUTOMATION_EPOCH,
+            },
+          },
+        });
+      }) as typeof fetch,
+    }),
+    (error) =>
+      error instanceof GoogleIntegrationError &&
+      error.code === "GOOGLE_EVENT_PRECONDITION_FAILED" &&
+      googleErrorRetryable(error),
+  );
+  assert.deepEqual(methods, ["GET"]);
+  assert.equal(authorizations, 0);
 });
 
 test("invalid_grant sólo expone el estado reconectar", async () => {
@@ -453,6 +1034,8 @@ test("un evento administrado por la app se reconoce por sus propiedades privadas
       private: {
         managed_by: "gisela_lentz_agenda",
         appointment_id: "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
+        automation_epoch: AUTOMATION_EPOCH,
+        projection_stage: "confirmed",
       },
     },
     start: { dateTime: "2026-09-04T14:00:00.000Z" },
@@ -466,6 +1049,14 @@ test("un evento administrado por la app se reconoce por sus propiedades privadas
   assert.equal(
     classified.kind === "managed" ? classified.cancelled : true,
     false,
+  );
+  assert.equal(
+    classified.kind === "managed" ? classified.automationEpoch : "",
+    AUTOMATION_EPOCH,
+  );
+  assert.equal(
+    classified.kind === "managed" ? classified.projectionStage : "",
+    "confirmed",
   );
 });
 
@@ -484,7 +1075,10 @@ test("un marcador managed legado puede reclasificarse sólo por su forma externa
     end: { dateTime: "2026-09-07T15:00:00.000Z" },
   };
 
-  assert.equal(classifyGoogleCalendarEvent(legacyManaged).kind, "managed");
+  assert.equal(
+    classifyGoogleCalendarEvent(legacyManaged).kind,
+    "managed_legacy",
+  );
   const fallback = classifyGoogleCalendarEventAsExternal(legacyManaged);
   assert.equal(fallback.kind, "external_block");
   if (fallback.kind !== "external_block") return;
@@ -512,19 +1106,22 @@ test("un marcador managed legado puede reclasificarse sólo por su forma externa
   );
 });
 
-test("el id determinista alcanza si alguien borró las propiedades privadas", () => {
+test("un id determinista sin marker de epoch queda como legado externo", () => {
   const classified = classifyGoogleCalendarEvent({
     id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
     status: "cancelled",
   });
-  assert.equal(classified.kind, "managed");
+  assert.equal(classified.kind, "managed_legacy");
   assert.equal(
-    classified.kind === "managed" ? classified.appointmentId : "",
+    classified.kind === "managed_legacy" ? classified.appointmentId : "",
     "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
   );
   assert.equal(
-    classified.kind === "managed" ? classified.cancelled : false,
-    true,
+    classifyGoogleCalendarEventAsExternal({
+      id: "gl8c4b7679f3b84bd898cba5a57a49b9e1",
+      status: "cancelled",
+    }).kind,
+    "external_removed",
   );
 });
 
@@ -536,6 +1133,8 @@ test("un id determinista que contradice las propiedades managed falla cerrado", 
       private: {
         managed_by: "gisela_lentz_agenda",
         appointment_id: "9d5c878a-a4c9-4ce9-89dc-b6b68b50caf2",
+        automation_epoch: AUTOMATION_EPOCH,
+        projection_stage: "confirmed",
       },
     },
     start: { dateTime: "2026-09-04T14:00:00.000Z" },

@@ -98,7 +98,7 @@ insert into public.appointments (
 
 create temporary table selection_availability_fixture as
 select (
-  ((current_date + 75)::text || ' 15:00')::timestamp
+  ((current_date + 15)::text || ' 15:00')::timestamp
   at time zone 'America/Argentina/Buenos_Aires'
 ) as starts_at;
 
@@ -107,7 +107,7 @@ select bounds.starts_at,
        bounds.starts_at + interval '21 days' as ends_at
 from (
   select (
-    ((current_date + 65)::text || ' 00:00')::timestamp
+    ((current_date - 1)::text || ' 00:00')::timestamp
       at time zone 'America/Argentina/Buenos_Aires'
   ) as starts_at
 ) bounds;
@@ -265,6 +265,11 @@ select ok(
       and job.operation = 'upsert'
       and job.status = 'pending'
       and job.connection_generation = connection_a.generation
+      and job.automation_epoch is null
+      and job.authorized_google_account_id is null
+      and job.authorized_google_calendar_id is null
+      and job.authorized_connection_generation is null
+      and job.projection_stage is null
   )
   and not exists (
     select 1 from public.google_calendar_sync_jobs job
@@ -272,7 +277,7 @@ select ok(
     where job.status in ('pending', 'processing')
       and appointment.status <> 'confirmed'
   ),
-  'una selección encola únicamente turnos confirmados futuros'
+  'finalize conserva el backlog histórico sin asociarlo al epoch futuro'
 );
 
 select ok(
@@ -336,6 +341,12 @@ select ok(
   'la disponibilidad se abre recién con aprobación y sync incremental completo'
 );
 
+create temporary table selection_automation as
+select public.activate_google_calendar_automation(
+  connection_a.generation
+) as epoch
+from connection_a;
+
 insert into public.google_calendar_external_events (
   google_calendar_id, google_event_id, connection_generation, kind, status,
   summary, starts_at, ends_at, all_day, recurring, unsupported_reason,
@@ -382,24 +393,24 @@ select throws_ok(
 
 -- El primer pull puede importar un bloqueo antes de que el mismo request
 -- reclame los upserts. La cola no debe duplicar ese horario en Google. Un
--- bloqueo convertido por el propio turno sí permite crear su sustituto.
+-- bloqueo convertido conserva el evento manual y no crea un sustituto.
 create temporary table selection_claim_fixture as
 select
-  (((current_date + 76)::text || ' 10:00')::timestamp
+  (((current_date + 10)::text || ' 10:00')::timestamp
     at time zone 'America/Argentina/Buenos_Aires') as blocked_slot,
-  (((current_date + 77)::text || ' 11:00')::timestamp
+  (((current_date + 11)::text || ' 11:00')::timestamp
     at time zone 'America/Argentina/Buenos_Aires') as free_slot,
-  (((current_date + 78)::text || ' 12:00')::timestamp
+  (((current_date + 12)::text || ' 12:00')::timestamp
     at time zone 'America/Argentina/Buenos_Aires') as converted_slot;
 
 insert into public.appointments (
   id, contact_id, professional_id, starts_at, ends_at, status, source,
-  coverage, duration_minutes, deposit_status
+  coverage, duration_minutes, deposit_status, created_at
 )
 select appointment_id, '9a000000-0000-4000-8000-000000000003',
        '9a000000-0000-4000-8000-000000000002', starts_at,
        starts_at + interval '30 minutes', 'confirmed', 'manual',
-       'particular', 30, 'confirmed'
+       'particular', 30, 'confirmed', clock_timestamp()
 from (
   select '9a000000-0000-4000-8000-000000000006'::uuid,
          blocked_slot from selection_claim_fixture
@@ -438,7 +449,7 @@ from connection_a, selection_claim_fixture fixture;
 create temporary table selection_claimed_after_pull as
 select claimed.*
 from connection_a, lateral public.claim_google_calendar_sync_jobs(
-  20, connection_a.generation
+  20, connection_a.generation, 2
 ) claimed;
 
 select ok(
@@ -458,19 +469,19 @@ select ok(
 );
 
 select ok(
-  exists (
+  not exists (
     select 1 from selection_claimed_after_pull
     where appointment_id = '9a000000-0000-4000-8000-000000000008'
   ),
-  'el bloqueo convertido por el propio turno permite crear su evento sustituto'
+  'el bloqueo convertido por el propio turno conserva el evento manual'
 );
 
 update public.google_calendar_sync_jobs
 set status = 'succeeded', processing_started_at = null
 where appointment_id in (
-  '9a000000-0000-4000-8000-000000000007',
-  '9a000000-0000-4000-8000-000000000008'
+  '9a000000-0000-4000-8000-000000000007'
 );
+select * from public.reconcile_google_calendar_sync();
 
 -- ---------------------------------------------------------------------------
 -- Sólo turnos confirmados se proyectan hacia Google
@@ -478,23 +489,26 @@ where appointment_id in (
 
 insert into public.appointments (
   id, contact_id, professional_id, starts_at, ends_at, status, source,
-  coverage, duration_minutes, deposit_status, hold_expires_at
+  coverage, duration_minutes, deposit_status, hold_expires_at, created_at
 ) values (
   '9a000000-0000-4000-8000-000000000005',
   '9a000000-0000-4000-8000-000000000003',
   '9a000000-0000-4000-8000-000000000002',
-  clock_timestamp() + interval '65 days',
-  clock_timestamp() + interval '65 days 30 minutes',
+  clock_timestamp() + interval '13 days',
+  clock_timestamp() + interval '13 days 30 minutes',
   'scheduled', 'manual', 'particular', 30, 'pending',
-  clock_timestamp() + interval '1 hour'
+  clock_timestamp() + interval '1 hour', clock_timestamp()
 );
 
 select ok(
-  not exists (
+  exists (
     select 1 from public.google_calendar_sync_jobs
     where appointment_id = '9a000000-0000-4000-8000-000000000005'
+      and operation = 'upsert'
+      and projection_stage = 'pre_reservation'
+      and automation_epoch = (select epoch from selection_automation)
   ),
-  'un scheduled nuevo no crea ningún job saliente'
+  'una pre-reserva nueva crea un único upsert ligado al epoch'
 );
 
 update public.appointments
@@ -506,13 +520,13 @@ select ok(
     select 1 from public.google_calendar_sync_jobs
     where appointment_id = '9a000000-0000-4000-8000-000000000005'
       and operation = 'upsert' and status = 'pending'
+      and projection_stage = 'confirmed'
   ),
-  'al confirmar el turno se crea un único upsert'
+  'al confirmar el turno avanza el mismo upsert a confirmed'
 );
 
 update public.google_calendar_sync_jobs
 set status = 'succeeded',
-    google_event_id = 'managed-event-confirmed-only',
     google_etag = 'etag-confirmed-only',
     projected_operation = 'upsert',
     projected_starts_at = (
@@ -522,7 +536,8 @@ set status = 'succeeded',
     projected_ends_at = (
       select ends_at from public.appointments
       where id = '9a000000-0000-4000-8000-000000000005'
-    )
+    ),
+    projected_stage = 'confirmed'
 where appointment_id = '9a000000-0000-4000-8000-000000000005';
 update public.contacts
 set name = 'Paciente Ficticio Calendar Selection Renombrado'
@@ -548,7 +563,8 @@ select ok(
     select 1 from public.google_calendar_sync_jobs
     where appointment_id = '9a000000-0000-4000-8000-000000000005'
       and operation = 'delete' and status = 'pending'
-      and google_event_id = 'managed-event-confirmed-only'
+      and google_event_id = 'gl9a000000000040008000000000000005'
+      and projection_stage = 'absent'
   ),
   'confirmed a scheduled retira el evento que ya estaba proyectado'
 );
@@ -565,7 +581,8 @@ select ok(
     select 1 from public.google_calendar_sync_jobs
     where appointment_id = '9a000000-0000-4000-8000-000000000005'
       and operation = 'delete' and status = 'pending'
-      and google_event_id = 'managed-event-confirmed-only'
+      and google_event_id = 'gl9a000000000040008000000000000005'
+      and projection_stage = 'absent'
   ),
   'confirmed a cancelled conserva un único delete determinístico'
 );
@@ -782,6 +799,35 @@ select throws_ok(
   'GOOGLE_CALENDAR_DISCONNECT_REQUIRED',
   'cambiar de cuenta exige desconectar para poder revocar el grant anterior'
 );
+
+-- Cierra las proyecciones ficticias del bloque anterior antes de probar el
+-- cambio de cuenta. El contrato actual prohíbe desconectar mientras exista una
+-- asociación que podría seguir presente en Google.
+update public.appointments
+set status = 'cancelled'
+where id in (
+  '9a000000-0000-4000-8000-000000000005',
+  '9a000000-0000-4000-8000-000000000006',
+  '9a000000-0000-4000-8000-000000000007'
+)
+  and status <> 'cancelled';
+update public.google_calendar_sync_jobs
+set status = 'succeeded',
+    operation = 'delete',
+    processing_started_at = null,
+    google_etag = null,
+    projected_operation = 'delete',
+    projected_starts_at = null,
+    projected_ends_at = null,
+    projection_stage = 'absent',
+    projected_stage = 'absent',
+    last_error = null
+where automation_epoch = (select epoch from selection_automation)
+  and appointment_id in (
+    '9a000000-0000-4000-8000-000000000005',
+    '9a000000-0000-4000-8000-000000000006',
+    '9a000000-0000-4000-8000-000000000007'
+  );
 
 create temporary table account_a_disconnect_tokens as
 select * from public.disconnect_google_calendar_with_secrets(

@@ -55,6 +55,15 @@ export interface CalendarSyncAppointment {
   timezone: string;
 }
 
+export type GoogleCalendarProjectionStage = "pre_reservation" | "confirmed";
+
+export interface GoogleCalendarManagedAssociation {
+  eventId: string;
+  automationEpoch: string;
+  projectionStage: GoogleCalendarProjectionStage;
+  projectedStage?: GoogleCalendarProjectionStage | "absent" | null;
+}
+
 export interface GoogleCalendarEventPayload {
   id?: string;
   summary: string;
@@ -64,7 +73,13 @@ export interface GoogleCalendarEventPayload {
   start: { dateTime: string; timeZone: string };
   end: { dateTime: string; timeZone: string };
   extendedProperties: {
-    private: { appointment_id: string; managed_by: string };
+    private: {
+      appointment_id: string;
+      managed_by: string;
+      automation_epoch: string;
+      projection_stage: GoogleCalendarProjectionStage;
+      payload_fingerprint: string;
+    };
   };
 }
 
@@ -235,10 +250,70 @@ export function deterministicGoogleEventId(appointmentId: string): string {
   return `gl${hex}`;
 }
 
-export function googleCalendarEventPayload(
+function managedGoogleCalendarFingerprintSource(input: {
+  eventId: string;
+  summary: string;
+  description: string;
+  visibility: string;
+  status: string;
+  startsAt: string;
+  startTimeZone: string;
+  endsAt: string;
+  endTimeZone: string;
+  appointmentId: string;
+  managedBy: string;
+  automationEpoch: string;
+  projectionStage: string;
+}): string | null {
+  const start = new Date(input.startsAt);
+  const end = new Date(input.endsAt);
+  if (
+    !input.eventId ||
+    !input.summary ||
+    !input.description ||
+    !input.visibility ||
+    !input.status ||
+    !input.startTimeZone ||
+    !input.endTimeZone ||
+    Number.isNaN(start.getTime()) ||
+    Number.isNaN(end.getTime()) ||
+    end <= start ||
+    !APPOINTMENT_UUID_PATTERN.test(input.appointmentId) ||
+    !APPOINTMENT_UUID_PATTERN.test(input.automationEpoch) ||
+    !input.managedBy ||
+    !["pre_reservation", "confirmed"].includes(input.projectionStage)
+  ) {
+    return null;
+  }
+  return JSON.stringify({
+    version: 1,
+    eventId: input.eventId,
+    summary: input.summary,
+    description: input.description,
+    visibility: input.visibility,
+    status: input.status,
+    start: {
+      dateTime: start.toISOString(),
+      timeZone: input.startTimeZone,
+    },
+    end: {
+      dateTime: end.toISOString(),
+      timeZone: input.endTimeZone,
+    },
+    private: {
+      appointment_id: input.appointmentId.toLowerCase(),
+      managed_by: input.managedBy,
+      automation_epoch: input.automationEpoch.toLowerCase(),
+      projection_stage: input.projectionStage,
+    },
+  });
+}
+
+export async function googleCalendarEventPayload(
   appointment: CalendarSyncAppointment,
+  association: GoogleCalendarManagedAssociation,
   includeId = false,
-): GoogleCalendarEventPayload {
+): Promise<GoogleCalendarEventPayload> {
   const start = new Date(appointment.starts_at);
   const end = new Date(appointment.ends_at);
   if (
@@ -254,15 +329,45 @@ export function googleCalendarEventPayload(
   if (!patientName || patientName.length > 160) {
     throw new GoogleIntegrationError("INVALID_PATIENT_NAME", { status: 400 });
   }
+  const eventId = boundedGoogleString(association.eventId, 1024);
+  const automationEpoch = association.automationEpoch.trim().toLowerCase();
+  if (!eventId) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_ID_INVALID", {
+      status: 400,
+    });
+  }
+  if (!APPOINTMENT_UUID_PATTERN.test(automationEpoch)) {
+    throw new GoogleIntegrationError("GOOGLE_AUTOMATION_EPOCH_INVALID", {
+      status: 400,
+    });
+  }
+  if (
+    association.projectionStage !== "pre_reservation" &&
+    association.projectionStage !== "confirmed"
+  ) {
+    throw new GoogleIntegrationError("GOOGLE_PROJECTION_STAGE_INVALID", {
+      status: 400,
+    });
+  }
 
-  return {
-    ...(includeId
-      ? { id: deterministicGoogleEventId(appointment.appointment_id) }
-      : {}),
-    summary: `Turno odontológico · ${patientName}`,
-    description: "Turno administrado desde la agenda de Gisela Lentz.",
-    visibility: "private",
-    status: "confirmed",
+  const pending = association.projectionStage === "pre_reservation";
+
+  const privateProperties = {
+    appointment_id: appointment.appointment_id.toLowerCase(),
+    managed_by: "gisela_lentz_agenda",
+    automation_epoch: automationEpoch,
+    projection_stage: association.projectionStage,
+  };
+  const payloadWithoutFingerprint = {
+    ...(includeId ? { id: eventId } : {}),
+    summary: pending
+      ? `Pendiente de seña · ${patientName}`
+      : `Turno confirmado · ${patientName}`,
+    description: pending
+      ? "Reserva pendiente administrada desde la agenda de Gisela Lentz."
+      : "Turno confirmado administrado desde la agenda de Gisela Lentz.",
+    visibility: "private" as const,
+    status: "confirmed" as const,
     start: {
       dateTime: start.toISOString(),
       timeZone: appointment.timezone,
@@ -272,9 +377,35 @@ export function googleCalendarEventPayload(
       timeZone: appointment.timezone,
     },
     extendedProperties: {
+      private: privateProperties,
+    },
+  };
+  const fingerprintSource = managedGoogleCalendarFingerprintSource({
+    eventId,
+    summary: payloadWithoutFingerprint.summary,
+    description: payloadWithoutFingerprint.description,
+    visibility: payloadWithoutFingerprint.visibility,
+    status: payloadWithoutFingerprint.status,
+    startsAt: payloadWithoutFingerprint.start.dateTime,
+    startTimeZone: payloadWithoutFingerprint.start.timeZone,
+    endsAt: payloadWithoutFingerprint.end.dateTime,
+    endTimeZone: payloadWithoutFingerprint.end.timeZone,
+    appointmentId: privateProperties.appointment_id,
+    managedBy: privateProperties.managed_by,
+    automationEpoch: privateProperties.automation_epoch,
+    projectionStage: privateProperties.projection_stage,
+  });
+  if (!fingerprintSource) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_FINGERPRINT_INVALID", {
+      status: 400,
+    });
+  }
+  return {
+    ...payloadWithoutFingerprint,
+    extendedProperties: {
       private: {
-        appointment_id: appointment.appointment_id,
-        managed_by: "gisela_lentz_agenda",
+        ...privateProperties,
+        payload_fingerprint: await sha256Hex(fingerprintSource),
       },
     },
   };
@@ -648,15 +779,23 @@ export async function upsertGoogleCalendarEvent(input: {
   accessToken: string;
   calendarId: string;
   appointment: CalendarSyncAppointment;
+  association: GoogleCalendarManagedAssociation;
+  beforeMutation: () => Promise<void>;
   etag?: string | null;
   fetcher?: typeof fetch;
 }): Promise<{
   eventId: string;
-  operation: "inserted" | "patched";
+  operation: "inserted" | "patched" | "adopted";
   etag: string | null;
 }> {
   const fetcher = input.fetcher ?? fetch;
-  const eventId = deterministicGoogleEventId(input.appointment.appointment_id);
+  const payload = await googleCalendarEventPayload(
+    input.appointment,
+    input.association,
+    true,
+  );
+  const eventId = payload.id!;
+  await input.beforeMutation();
   const insertResponse = await googleFetch(
     fetcher,
     googleEventUrl(input.calendarId),
@@ -666,7 +805,7 @@ export async function upsertGoogleCalendarEvent(input: {
         Authorization: `Bearer ${input.accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(googleCalendarEventPayload(input.appointment, true)),
+      body: JSON.stringify(payload),
     },
   );
 
@@ -678,7 +817,72 @@ export async function upsertGoogleCalendarEvent(input: {
   }
 
   if (insertResponse.status === 409) {
-    const conditionalEtag = input.etag?.trim();
+    const lookup = await getGoogleCalendarEvent({
+      accessToken: input.accessToken,
+      calendarId: input.calendarId,
+      eventId,
+      fetcher,
+    });
+    if (lookup.kind !== "found" || lookup.event.status === "cancelled") {
+      throw new GoogleIntegrationError("GOOGLE_EVENT_TOMBSTONED", {
+        status: lookup.kind === "missing" ? 404 : 410,
+        retryable: true,
+      });
+    }
+    assertManagedGoogleCalendarEventAssociation(
+      lookup.event,
+      input.appointment.appointment_id,
+      input.association.automationEpoch,
+    );
+    const persistedEtag = input.etag?.trim() || null;
+    const observedEtag = boundedGoogleString(lookup.event.etag, 255);
+    const hasCompletedProjection =
+      input.association.projectedStage === "pre_reservation" ||
+      input.association.projectedStage === "confirmed";
+    let patchEtag = persistedEtag;
+    if (!persistedEtag || !hasCompletedProjection) {
+      if (!(await managedGoogleCalendarEventFingerprintIsValid(lookup.event))) {
+        throw new GoogleIntegrationError("GOOGLE_EVENT_OWNERSHIP_CONFLICT", {
+          status: 409,
+        });
+      }
+      if (await googleCalendarEventMatchesPayload(lookup.event, payload)) {
+        return { eventId, operation: "adopted", etag: observedEtag };
+      }
+      if (!observedEtag) {
+        throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+          status: 412,
+          retryable: true,
+        });
+      }
+      // Un POST anterior pudo llegar a Google aunque su respuesta se perdiera.
+      // La huella demuestra que el remoto sigue exactamente como lo emitimos;
+      // se adopta su ETag sólo para aplicar la versión actual reautorizada.
+      patchEtag = observedEtag;
+    } else if (!observedEtag || observedEtag !== persistedEtag) {
+      // Un PATCH anterior pudo haberse aplicado aunque se perdiera su
+      // respuesta. Sólo adoptamos el ETag nuevo cuando Google conserva
+      // exactamente el payload deseado y su huella propia es válida; cualquier
+      // edición humana o una versión administrada distinta sigue fallando por
+      // precondición.
+      if (
+        observedEtag &&
+        (await googleCalendarEventMatchesPayload(lookup.event, payload))
+      ) {
+        return { eventId, operation: "adopted", etag: observedEtag };
+      }
+      throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+        status: 412,
+        retryable: true,
+      });
+    }
+    if (!patchEtag) {
+      throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+        status: 412,
+        retryable: true,
+      });
+    }
+    await input.beforeMutation();
     const patchResponse = await googleFetch(
       fetcher,
       googleEventUrl(input.calendarId, eventId),
@@ -687,9 +891,14 @@ export async function upsertGoogleCalendarEvent(input: {
         headers: {
           Authorization: `Bearer ${input.accessToken}`,
           "Content-Type": "application/json",
-          ...(conditionalEtag ? { "If-Match": conditionalEtag } : {}),
+          "If-Match": patchEtag,
         },
-        body: JSON.stringify(googleCalendarEventPayload(input.appointment)),
+        body: JSON.stringify(
+          await googleCalendarEventPayload(
+            input.appointment,
+            input.association,
+          ),
+        ),
       },
     );
     assertPreconditionHeld(patchResponse);
@@ -718,6 +927,133 @@ export async function upsertGoogleCalendarEvent(input: {
   };
 }
 
+export async function managedGoogleCalendarEventFingerprintIsValid(
+  event: GoogleCalendarEvent,
+): Promise<boolean> {
+  const privateProperties = event.extendedProperties?.private ?? {};
+  const sharedProperties = event.extendedProperties?.shared ?? {};
+  const privateKeys = Object.keys(privateProperties).sort();
+  const expectedKeys = [
+    "appointment_id",
+    "automation_epoch",
+    "managed_by",
+    "payload_fingerprint",
+    "projection_stage",
+  ];
+  const reminderKeys = event.reminders
+    ? Object.keys(event.reminders).sort()
+    : [];
+  const remindersAreDefault =
+    event.reminders === undefined ||
+    (event.reminders !== null &&
+      !Array.isArray(event.reminders) &&
+      event.reminders.useDefault === true &&
+      (event.reminders.overrides?.length ?? 0) === 0 &&
+      reminderKeys.every((key) => key === "overrides" || key === "useDefault"));
+  if (
+    privateKeys.length !== expectedKeys.length ||
+    !privateKeys.every((key, index) => key === expectedKeys[index]) ||
+    !/^[0-9a-f]{64}$/.test(privateProperties.payload_fingerprint ?? "") ||
+    (event.transparency !== undefined && event.transparency !== "opaque") ||
+    (event.attendees?.length ?? 0) !== 0 ||
+    (event.recurrence?.length ?? 0) !== 0 ||
+    Object.keys(sharedProperties).length !== 0 ||
+    event.location !== undefined ||
+    event.colorId !== undefined ||
+    event.conferenceData !== undefined ||
+    (event.attachments?.length ?? 0) !== 0 ||
+    event.source !== undefined ||
+    event.hangoutLink !== undefined ||
+    (event.eventType !== undefined && event.eventType !== "default") ||
+    !remindersAreDefault
+  ) {
+    return false;
+  }
+  const source = managedGoogleCalendarFingerprintSource({
+    eventId: event.id ?? "",
+    summary: event.summary ?? "",
+    description: event.description ?? "",
+    visibility: event.visibility ?? "",
+    status: event.status ?? "",
+    startsAt: event.start?.dateTime ?? "",
+    startTimeZone: event.start?.timeZone ?? "",
+    endsAt: event.end?.dateTime ?? "",
+    endTimeZone: event.end?.timeZone ?? "",
+    appointmentId: privateProperties.appointment_id ?? "",
+    managedBy: privateProperties.managed_by ?? "",
+    automationEpoch: privateProperties.automation_epoch ?? "",
+    projectionStage: privateProperties.projection_stage ?? "",
+  });
+  return (
+    source !== null &&
+    (await sha256Hex(source)) === privateProperties.payload_fingerprint
+  );
+}
+
+async function googleCalendarEventMatchesPayload(
+  event: GoogleCalendarEvent,
+  payload: GoogleCalendarEventPayload,
+): Promise<boolean> {
+  const remoteStart = event.start?.dateTime
+    ? Date.parse(event.start.dateTime)
+    : Number.NaN;
+  const remoteEnd = event.end?.dateTime
+    ? Date.parse(event.end.dateTime)
+    : Number.NaN;
+  const expectedStart = Date.parse(payload.start.dateTime);
+  const expectedEnd = Date.parse(payload.end.dateTime);
+  const remotePrivate = event.extendedProperties?.private ?? {};
+  const expectedPrivate = payload.extendedProperties.private;
+  const remotePrivateKeys = Object.keys(remotePrivate).sort();
+  const expectedPrivateKeys = Object.keys(expectedPrivate).sort();
+  // Sólo se omiten campos generados por Google (created, updated, htmlLink,
+  // organizer, etc.). Todo el payload administrado debe volver idéntico;
+  // invitados o recurrencia agregados manualmente impiden adoptar el evento.
+  return (
+    (await managedGoogleCalendarEventFingerprintIsValid(event)) &&
+    event.id === payload.id &&
+    event.summary === payload.summary &&
+    event.description === payload.description &&
+    event.visibility === payload.visibility &&
+    event.status === payload.status &&
+    Number.isFinite(remoteStart) &&
+    Number.isFinite(remoteEnd) &&
+    remoteStart === expectedStart &&
+    remoteEnd === expectedEnd &&
+    event.start?.timeZone === payload.start.timeZone &&
+    event.end?.timeZone === payload.end.timeZone &&
+    (event.transparency === undefined || event.transparency === "opaque") &&
+    (!event.attendees || event.attendees.length === 0) &&
+    (!event.recurrence || event.recurrence.length === 0) &&
+    remotePrivateKeys.length === expectedPrivateKeys.length &&
+    remotePrivateKeys.every(
+      (key, index) =>
+        key === expectedPrivateKeys[index] &&
+        remotePrivate[key] ===
+          expectedPrivate[key as keyof typeof expectedPrivate],
+    )
+  );
+}
+
+function assertManagedGoogleCalendarEventAssociation(
+  event: GoogleCalendarEvent,
+  appointmentId: string,
+  automationEpoch: string,
+): void {
+  const properties = event.extendedProperties?.private ?? {};
+  if (
+    properties.managed_by !== GOOGLE_MANAGED_BY ||
+    properties.appointment_id?.trim().toLowerCase() !==
+      appointmentId.trim().toLowerCase() ||
+    properties.automation_epoch?.trim().toLowerCase() !==
+      automationEpoch.trim().toLowerCase()
+  ) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_OWNERSHIP_CONFLICT", {
+      status: 409,
+    });
+  }
+}
+
 export async function deleteGoogleCalendarEventById(input: {
   accessToken: string;
   calendarId: string;
@@ -743,19 +1079,67 @@ export async function deleteGoogleCalendarEventById(input: {
   await assertGoogleResponse(response, "GOOGLE_EVENT_DELETE_FAILED");
 }
 
-export async function deleteGoogleCalendarEvent(input: {
+export async function deleteManagedGoogleCalendarEvent(input: {
   accessToken: string;
   calendarId: string;
+  eventId: string;
   appointmentId: string;
+  automationEpoch: string;
+  beforeMutation: () => Promise<void>;
   etag?: string | null;
   fetcher?: typeof fetch;
 }): Promise<void> {
+  const fetcher = input.fetcher ?? fetch;
+  const lookup = await getGoogleCalendarEvent({
+    accessToken: input.accessToken,
+    calendarId: input.calendarId,
+    eventId: input.eventId,
+    fetcher,
+  });
+  if (lookup.kind !== "found" || lookup.event.status === "cancelled") return;
+  assertManagedGoogleCalendarEventAssociation(
+    lookup.event,
+    input.appointmentId,
+    input.automationEpoch,
+  );
+  const persistedEtag = input.etag?.trim() || null;
+  const observedEtag = boundedGoogleString(lookup.event.etag, 255);
+  let deleteEtag = persistedEtag;
+  if (!observedEtag) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+      status: 412,
+      retryable: true,
+    });
+  }
+  if (!persistedEtag || persistedEtag !== observedEtag) {
+    if (!(await managedGoogleCalendarEventFingerprintIsValid(lookup.event))) {
+      if (persistedEtag) {
+        throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+          status: 412,
+          retryable: true,
+        });
+      }
+      throw new GoogleIntegrationError("GOOGLE_EVENT_OWNERSHIP_CONFLICT", {
+        status: 409,
+      });
+    }
+    // Recuperación de un POST/PATCH confirmado por Google cuya respuesta local
+    // se perdió. Sólo un payload propio autoconsistente permite adoptar el ETag.
+    deleteEtag = observedEtag;
+  }
+  if (!deleteEtag) {
+    throw new GoogleIntegrationError("GOOGLE_EVENT_PRECONDITION_FAILED", {
+      status: 412,
+      retryable: true,
+    });
+  }
+  await input.beforeMutation();
   await deleteGoogleCalendarEventById({
     accessToken: input.accessToken,
     calendarId: input.calendarId,
-    eventId: deterministicGoogleEventId(input.appointmentId),
-    etag: input.etag,
-    fetcher: input.fetcher,
+    eventId: input.eventId,
+    etag: deleteEtag,
+    fetcher,
   });
 }
 
@@ -804,16 +1188,30 @@ export interface GoogleCalendarEvent {
   id?: string;
   status?: string;
   summary?: string;
+  description?: string;
+  visibility?: string;
   etag?: string;
   updated?: string;
   transparency?: string;
+  attendees?: unknown[];
+  location?: unknown;
+  colorId?: unknown;
+  conferenceData?: unknown;
+  attachments?: unknown[];
+  reminders?: { useDefault?: unknown; overrides?: unknown[] };
+  source?: unknown;
+  hangoutLink?: unknown;
+  eventType?: unknown;
   recurrence?: string[];
   recurringEventId?: string;
   originalStartTime?: GoogleCalendarEventTime;
   endTimeUnspecified?: boolean;
   start?: GoogleCalendarEventTime;
   end?: GoogleCalendarEventTime;
-  extendedProperties?: { private?: Record<string, string> };
+  extendedProperties?: {
+    private?: Record<string, string>;
+    shared?: Record<string, string>;
+  };
 }
 
 export interface GoogleCalendarEventsPage {
@@ -1234,6 +1632,8 @@ export type ClassifiedGoogleEvent =
       kind: "managed";
       eventId: string;
       appointmentId: string;
+      automationEpoch: string;
+      projectionStage: GoogleCalendarProjectionStage;
       cancelled: boolean;
       startsAt: string | null;
       endsAt: string | null;
@@ -1244,6 +1644,12 @@ export type ClassifiedGoogleEvent =
       kind: "managed_mismatch";
       eventId: string;
       reason: "APPOINTMENT_ID_MISMATCH";
+    }
+  | {
+      kind: "managed_legacy";
+      eventId: string;
+      appointmentId: string;
+      reason: "MISSING_CURRENT_AUTOMATION_MARKER";
     }
   | {
       kind: "external_block";
@@ -1276,7 +1682,9 @@ export type ClassifiedGoogleEvent =
 
 export type ClassifiedExternalGoogleEvent = Exclude<
   ClassifiedGoogleEvent,
-  { kind: "managed" } | { kind: "managed_mismatch" }
+  | { kind: "managed" }
+  | { kind: "managed_mismatch" }
+  | { kind: "managed_legacy" }
 >;
 
 const APPOINTMENT_UUID_PATTERN =
@@ -1297,9 +1705,9 @@ function isoOrNull(
 }
 
 /**
- * Distingue lo que administra la aplicación de lo que alguien creó a mano.
- * `extendedProperties.private` es la señal primaria; el id determinista actúa
- * de respaldo por si alguien editó las propiedades en Google.
+ * Sólo el marker completo del epoch actual puede proponerse como administrado.
+ * Un prefijo determinista o marker legado se conserva como evento externo de
+ * sólo lectura; el worker valida además su asociación exacta en la base.
  */
 export function classifyGoogleCalendarEvent(
   event: GoogleCalendarEvent,
@@ -1315,6 +1723,16 @@ export function classifyGoogleCalendarEvent(
     APPOINTMENT_UUID_PATTERN.test(properties.appointment_id.trim())
       ? properties.appointment_id.trim().toLowerCase()
       : null;
+  const automationEpoch =
+    typeof properties.automation_epoch === "string" &&
+    APPOINTMENT_UUID_PATTERN.test(properties.automation_epoch.trim())
+      ? properties.automation_epoch.trim().toLowerCase()
+      : null;
+  const projectionStage =
+    properties.projection_stage === "pre_reservation" ||
+    properties.projection_stage === "confirmed"
+      ? properties.projection_stage
+      : null;
   const deterministicMatch = /^gl([0-9a-f]{32})$/.exec(eventId);
   const derivedAppointmentId = deterministicMatch
     ? [
@@ -1325,13 +1743,14 @@ export function classifyGoogleCalendarEvent(
         deterministicMatch[1].slice(20),
       ].join("-")
     : null;
-  const appointmentId = declaredAppointmentId ?? derivedAppointmentId;
   const cancelled = event.status === "cancelled";
   const updatedAt = isoOrNull(event.updated);
   const etag = boundedGoogleString(event.etag, 255);
 
   if (
     declaredAppointmentId &&
+    automationEpoch &&
+    projectionStage &&
     derivedAppointmentId &&
     declaredAppointmentId.toLowerCase() !== derivedAppointmentId
   ) {
@@ -1342,11 +1761,13 @@ export function classifyGoogleCalendarEvent(
     };
   }
 
-  if (appointmentId) {
+  if (declaredAppointmentId && automationEpoch && projectionStage) {
     return {
       kind: "managed",
       eventId,
-      appointmentId,
+      appointmentId: declaredAppointmentId,
+      automationEpoch,
+      projectionStage,
       cancelled,
       startsAt: isoOrNull(event.start?.dateTime, event.start?.timeZone),
       endsAt:
@@ -1356,6 +1777,16 @@ export function classifyGoogleCalendarEvent(
           : isoOrNull(event.end?.dateTime, event.end?.timeZone),
       updatedAt,
       etag,
+    };
+  }
+
+  const legacyAppointmentId = declaredAppointmentId ?? derivedAppointmentId;
+  if (legacyAppointmentId) {
+    return {
+      kind: "managed_legacy",
+      eventId,
+      appointmentId: legacyAppointmentId,
+      reason: "MISSING_CURRENT_AUTOMATION_MARKER",
     };
   }
 

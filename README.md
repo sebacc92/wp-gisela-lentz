@@ -343,15 +343,13 @@ switch también bloquea recordatorios automáticos.
 
 ### 9. Google Calendar
 
-La implementación local permite que Gisela conecte su propia cuenta desde
-**Configuración → Google Calendar** y mantiene el calendario privado **Gisela
-Lentz · Turnos** como espejo de la agenda. Sin embargo, en la producción actual
-de Gisela las Functions, secretos y cron de Calendar todavía no están
-desplegados/configurados: **no intentar conectarlo todavía**. Cuando se prepare
-en una fase técnica separada, la agenda seguirá siendo la fuente de verdad y no
-se importarán cambios manuales de Google. Configuración de OAuth, permisos
-mínimos, secretos, cron y prueba controlada en
-[docs/google-calendar-setup.md](docs/google-calendar-setup.md).
+La integración permite conectar una cuenta desde **Configuración → Google
+Calendar**, elegir explícitamente un calendario propio e importar su ocupación
+como bloqueos de sólo lectura. Las pre-reservas y los turnos nuevos sólo pueden
+proyectarse después de una activación técnica separada: desplegar, conectar o
+importar no habilita por sí solo el scheduler ni las escrituras en Google.
+Configuración de OAuth, permisos mínimos, activación, rollback y prueba
+controlada en [docs/google-calendar-setup.md](docs/google-calendar-setup.md).
 
 ## WhatsApp Business App Coexistence
 

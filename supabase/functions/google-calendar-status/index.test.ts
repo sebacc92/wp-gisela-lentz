@@ -50,6 +50,7 @@ Deno.test(
               google_account_email: "private-calendar@example.com",
               google_calendar_name: "Agenda privada de Gisela",
               last_synced_at: "2026-08-26T12:00:00Z",
+              automation_enabled: true,
               pending_count: 0,
               failed_count: 0,
             },
@@ -72,6 +73,7 @@ Deno.test(
       configured: true,
       connected: true,
       status: "connected",
+      automationActive: true,
       pendingCount: 0,
       failedCount: 0,
     });
@@ -134,6 +136,7 @@ Deno.test(
       configured: true,
       connected: true,
       status: null,
+      automationActive: false,
       pendingCount: null,
       failedCount: null,
     });
@@ -166,6 +169,8 @@ Deno.test(
               last_sync_error: null,
               inbound_sync_state: "incremental",
               inbound_first_import_approved: true,
+              automation_enabled: true,
+              automation_activated_at: "2026-09-02T21:40:00Z",
               selection_pending: true,
               pending_count: 0,
               failed_count: 0,
@@ -203,6 +208,8 @@ Deno.test(
       "Google ya autorizó la cuenta. Falta elegir el calendario.",
     );
     assert.equal(body.inboundSyncState, "incremental");
+    assert.equal(body.automationActive, true);
+    assert.equal(body.automationActivatedAt, "2026-09-02T21:40:00Z");
     // Un conflicto pendiente pide revisión aunque la cola saliente esté al día.
     assert.equal(body.status, "attention");
     // El título y la clave inválida se descartan por completo.
@@ -210,6 +217,50 @@ Deno.test(
       blocksImported: 1,
       fullResync: true,
     });
+  },
+);
+
+Deno.test(
+  "el estado nunca infiere automatización por conexión o revisión",
+  async () => {
+    const client = {
+      rpc: () =>
+        Promise.resolve({
+          data: [
+            {
+              connected: true,
+              status: "connected",
+              last_checked_at: "2026-09-02T21:42:00Z",
+              last_sync_completed_at: "2026-09-02T21:42:00Z",
+              inbound_sync_state: "incremental",
+              inbound_first_import_approved: true,
+              pending_count: 0,
+              failed_count: 0,
+              active_block_count: 0,
+              unsupported_event_count: 0,
+              pending_conflict_count: 0,
+            },
+          ],
+          error: null,
+        }),
+    } as unknown as SupabaseClient;
+
+    const response = await handleGoogleCalendarStatusRequest(
+      new Request("http://127.0.0.1/functions/v1/google-calendar-status"),
+      {
+        createClient: () => client,
+        authorize: authorization("ADMIN"),
+        environment: (name) => CALENDAR_ENVIRONMENT[name],
+      },
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(body.automationActive, false);
+    assert.equal(body.automationActivatedAt, null);
+    assert.equal(
+      body.message,
+      "Google Calendar está conectado. La automatización todavía no está activa.",
+    );
   },
 );
 

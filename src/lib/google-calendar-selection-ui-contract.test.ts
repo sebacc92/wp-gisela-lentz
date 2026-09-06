@@ -73,11 +73,12 @@ test("Settings traduce fallas de selección sin mostrar detalles arbitrarios", (
   assert.match(page, /failureCode \|\|/);
 });
 
-test("Settings refleja el alcance confirmed y una revocación no confirmada", () => {
+test("Settings refleja el alcance sincronizado y una revocación no confirmada", () => {
   const page = source("src/routes/app/settings/index.tsx");
 
+  assert.match(page, /pre-reservas vigentes/i);
   assert.match(page, /turnos confirmados y sus cambios/i);
-  assert.match(page, /Los turnos aún\s+programados no se envían/);
+  assert.match(page, /todavía no se hacen escrituras automáticas/i);
   assert.match(page, /data\?\.disconnected !== true/);
   assert.match(page, /data\.remoteRevocationConfirmed === true/);
   assert.match(page, /Google no confirmó la revocación/);
@@ -204,6 +205,7 @@ test("Sincronizar ahora queda bloqueado hasta completar la primera importación"
   assert.match(syncButton, /canRunManualGoogleCalendarSync/);
   assert.match(syncButton, /googleCalendar\.firstImportApproved/);
   assert.match(syncButton, /googleCalendar\.inboundSyncState/);
+  assert.match(syncButton, /googleCalendar\.connected/);
   assert.match(syncButton, /Completá la importación primero/);
 });
 

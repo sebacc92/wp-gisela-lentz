@@ -17,6 +17,8 @@ interface CalendarStatus {
   inbound_sync_state?: string | null;
   inbound_first_import_approved?: boolean | null;
   selection_pending?: boolean | null;
+  automation_enabled?: boolean | null;
+  automation_activated_at?: string | null;
   pending_count?: number | string | null;
   failed_count?: number | string | null;
   active_block_count?: number | string | null;
@@ -148,6 +150,9 @@ export async function handleGoogleCalendarStatusRequest(
         configured,
         connected: configured ? rawConnected : false,
         status: manualState,
+        // La ausencia del campo SQL durante un rollout nunca se interpreta
+        // como automatización activa.
+        automationActive: configured && status?.automation_enabled === true,
         pendingCount: rawPendingCount,
         failedCount: rawFailedCount,
       });
@@ -159,6 +164,7 @@ export async function handleGoogleCalendarStatusRequest(
     const pendingCount = Number(status?.pending_count ?? 0);
     const failedCount = Number(status?.failed_count ?? 0);
     const selectionPending = status?.selection_pending === true;
+    const automationActive = status?.automation_enabled === true;
     const canSeeConnectionIdentity = authorization.profile.role === "ADMIN";
     const connectionState = !configured
       ? "incomplete"
@@ -192,10 +198,17 @@ export async function handleGoogleCalendarStatusRequest(
         ? (status?.google_calendar_name ?? null)
         : null,
       lastSyncedAt: status?.last_synced_at ?? null,
-      // «Última revisión» es lo que el panel muestra: avanza en cada corrida
-      // correcta aunque no haya habido un solo cambio para procesar.
+      // `lastCheckedAt` incluye intentos fallidos u omitidos. La UI operativa
+      // usa `lastSyncCompletedAt` para «Última revisión exitosa».
       lastCheckedAt: status?.last_checked_at ?? null,
       lastSyncCompletedAt: status?.last_sync_completed_at ?? null,
+      // Sólo el backend puede afirmar que el scheduler fue activado. Ni una
+      // conexión válida ni una revisión manual alcanzan para inferirlo.
+      automationActive,
+      automationActivatedAt:
+        automationActive && typeof status?.automation_activated_at === "string"
+          ? status.automation_activated_at
+          : null,
       lastSyncSummary: sanitizedSummary(status?.last_sync_summary),
       lastSyncError: sanitizedErrorCode(status?.last_sync_error),
       inboundSyncState:
@@ -221,9 +234,11 @@ export async function handleGoogleCalendarStatusRequest(
                   (status?.inbound_sync_state !== "incremental" ||
                     !status?.last_sync_completed_at)
                 ? "La primera sincronización todavía no terminó."
-                : connected
-                  ? "Los turnos se sincronizan automáticamente."
-                  : "Google Calendar todavía no está conectado.",
+                : connected && automationActive
+                  ? "La sincronización automática de Calendar está activa."
+                  : connected
+                    ? "Google Calendar está conectado. La automatización todavía no está activa."
+                    : "Google Calendar todavía no está conectado.",
     });
   } catch (error) {
     if (error instanceof Error && error.message === "UNAUTHORIZED") {

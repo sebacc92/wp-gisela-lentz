@@ -4,24 +4,22 @@ import {
   type ClassifiedGoogleEvent,
   classifyGoogleCalendarEvent,
   classifyGoogleCalendarEventAsExternal,
-  deleteGoogleCalendarEvent,
-  deleteGoogleCalendarEventById,
+  deleteManagedGoogleCalendarEvent,
   deterministicGoogleEventId,
   getGoogleCalendarEvent,
   GoogleIntegrationError,
   googleOAuthConfiguration,
   listGoogleCalendarEvents,
+  managedGoogleCalendarEventFingerprintIsValid,
   refreshGoogleAccessToken,
   safeGoogleErrorCode,
   upsertGoogleCalendarEvent,
 } from "../_shared/google-calendar.ts";
 import { jsonResponse, optionsResponse } from "../_shared/http.ts";
+import { secretMatches } from "../_shared/recovery-auth.ts";
 import { authorizeUser, createServiceClient } from "../_shared/supabase.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
-import {
-  calendarJobFailureDecision,
-  shouldCleanupInsertedCalendarEvent,
-} from "./sync-policy.ts";
+import { calendarJobFailureDecision } from "./sync-policy.ts";
 import {
   applyExternalEventOutcome,
   applyManagedEventOutcome,
@@ -54,6 +52,11 @@ interface CalendarSyncJob extends CalendarSyncAppointment {
   desired_version: number | string;
   attempts: number | string;
   connection_generation: number | string;
+  google_event_id: string;
+  automation_epoch: string;
+  projection_stage: "pre_reservation" | "confirmed" | "absent";
+  projected_stage?: "pre_reservation" | "confirmed" | "absent" | null;
+  authorized_google_calendar_id: string;
   google_etag?: string | null;
 }
 
@@ -62,8 +65,19 @@ interface ReconcileResult {
   already_queued?: number | string;
 }
 
-interface CalendarConnectionState {
-  status?: string;
+interface CalendarAutomationGate {
+  automation_enabled?: boolean;
+  automation_epoch?: string;
+  google_calendar_id?: string;
+  connection_generation?: number | string;
+}
+
+interface AuthorizedCalendarSyncJob {
+  authorized?: boolean;
+  google_calendar_id?: string;
+  google_event_id?: string;
+  operation?: string;
+  projection_stage?: string;
   connection_generation?: number | string;
 }
 
@@ -94,8 +108,10 @@ const MAX_INBOUND_PAGES = 12;
 const PREVIEW_APPOINTMENT_BATCH_SIZE = 100;
 const FULL_RESYNC_MANAGED_PAGE_SIZE = 100;
 const MAX_FULL_RESYNC_MANAGED_PAGES = 100;
+const GOOGLE_CALENDAR_PROJECTION_CONTRACT_VERSION = 2;
 const APPOINTMENT_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const GOOGLE_CALENDAR_CRON_HEADER = "x-google-calendar-cron-secret";
 
 function recurringOccurrenceKey(
   event: Parameters<typeof classifyGoogleCalendarEvent>[0],
@@ -142,6 +158,92 @@ function assertUniqueEventObservation(
 
 function firstRow<T>(data: unknown): T | null {
   return (Array.isArray(data) ? data[0] : data) as T | null;
+}
+
+function validAutomaticGate(
+  gate: CalendarAutomationGate | null,
+): gate is CalendarAutomationGate & {
+  automation_enabled: true;
+  automation_epoch: string;
+  google_calendar_id: string;
+  connection_generation: number | string;
+} {
+  return Boolean(
+    gate?.automation_enabled === true &&
+    typeof gate.automation_epoch === "string" &&
+    APPOINTMENT_UUID_PATTERN.test(gate.automation_epoch) &&
+    typeof gate.google_calendar_id === "string" &&
+    gate.google_calendar_id.trim() &&
+    Number.isSafeInteger(Number(gate.connection_generation)),
+  );
+}
+
+function assertClaimedJobAssociation(
+  job: CalendarSyncJob,
+  calendarId: string,
+  generation: number,
+  automaticEpoch: string | null,
+): void {
+  const upsertStage =
+    job.projection_stage === "pre_reservation" ||
+    job.projection_stage === "confirmed";
+  if (
+    !APPOINTMENT_UUID_PATTERN.test(job.job_id) ||
+    !APPOINTMENT_UUID_PATTERN.test(job.appointment_id) ||
+    !APPOINTMENT_UUID_PATTERN.test(job.automation_epoch) ||
+    typeof job.google_event_id !== "string" ||
+    !job.google_event_id.trim() ||
+    job.google_event_id !== job.google_event_id.trim() ||
+    job.google_event_id.length > 1024 ||
+    job.authorized_google_calendar_id !== calendarId ||
+    Number(job.connection_generation) !== generation ||
+    !Number.isSafeInteger(Number(job.desired_version)) ||
+    Number(job.desired_version) <= 0 ||
+    (job.operation === "upsert" && !upsertStage) ||
+    (job.operation === "delete" && job.projection_stage !== "absent") ||
+    (job.projected_stage === "confirmed" &&
+      job.projection_stage === "pre_reservation") ||
+    (job.projected_stage !== undefined &&
+      job.projected_stage !== null &&
+      job.projected_stage !== "pre_reservation" &&
+      job.projected_stage !== "confirmed" &&
+      job.projected_stage !== "absent") ||
+    (job.operation !== "upsert" && job.operation !== "delete") ||
+    (automaticEpoch !== null && job.automation_epoch !== automaticEpoch)
+  ) {
+    throw calendarWorkerFailure("CALENDAR_JOB_ASSOCIATION_INVALID");
+  }
+}
+
+async function assertCalendarJobStillAuthorized(input: {
+  client: SupabaseClient;
+  job: CalendarSyncJob;
+  calendarId: string;
+  generation: number;
+}): Promise<void> {
+  const { data, error } = await input.client.rpc(
+    "authorize_google_calendar_sync_job",
+    {
+      p_job_id: input.job.job_id,
+      p_claimed_version: input.job.desired_version,
+      p_automation_epoch: input.job.automation_epoch,
+      p_expected_stage: input.job.projection_stage,
+    },
+  );
+  const authorization = firstRow<AuthorizedCalendarSyncJob>(data);
+  if (
+    error ||
+    authorization?.authorized !== true ||
+    authorization.google_calendar_id !== input.calendarId ||
+    authorization.google_calendar_id !==
+      input.job.authorized_google_calendar_id ||
+    authorization.google_event_id !== input.job.google_event_id ||
+    authorization.operation !== input.job.operation ||
+    authorization.projection_stage !== input.job.projection_stage ||
+    Number(authorization.connection_generation) !== input.generation
+  ) {
+    throw calendarWorkerFailure("CALENDAR_JOB_REAUTHORIZATION_FAILED");
+  }
 }
 
 function inboundFailureRequiresReconnect(
@@ -217,17 +319,12 @@ async function isAuthorizedInvocation(
 ): Promise<{ authorized: boolean; manual: boolean; userId: string | null }> {
   const environment =
     dependencies.environment ?? ((name: string) => Deno.env.get(name));
-  const providedCronSecret = request.headers
-    .get("x-google-calendar-cron-secret")
-    ?.trim();
-  if (providedCronSecret) {
-    const expectedCronSecret = environment(
-      "GOOGLE_CALENDAR_CRON_SECRET",
-    )?.trim();
+  if (request.headers.has(GOOGLE_CALENDAR_CRON_HEADER)) {
+    const providedCronSecret =
+      request.headers.get(GOOGLE_CALENDAR_CRON_HEADER) ?? "";
+    const expectedCronSecret = environment("GOOGLE_CALENDAR_CRON_SECRET") ?? "";
     return {
-      authorized: Boolean(
-        expectedCronSecret && providedCronSecret === expectedCronSecret,
-      ),
+      authorized: await secretMatches(providedCronSecret, expectedCronSecret),
       manual: false,
       userId: null,
     };
@@ -286,6 +383,55 @@ export async function handleCalendarSyncRequest(
   const automatic = !invocation.manual;
 
   try {
+    const now = new Date((dependencies.now ?? Date.now)());
+    let expiredHolds = 0;
+    // El scheduler y el trigger inmediato comparten este gate SQL. Se consulta
+    // antes de purgar candidatos, reconciliar cola, refrescar OAuth o tocar
+    // Google; desplegar la infraestructura nunca activa la automatización.
+    let automaticGate:
+      | (CalendarAutomationGate & {
+          automation_enabled: true;
+          automation_epoch: string;
+          google_calendar_id: string;
+          connection_generation: number | string;
+        })
+      | null = null;
+    if (automatic) {
+      const { data: gateData, error: gateError } = await client.rpc(
+        "get_google_calendar_automation_gate",
+        {},
+      );
+      if (gateError) {
+        throw calendarWorkerFailure("CALENDAR_AUTOMATION_GATE_FAILED");
+      }
+      const gate = firstRow<CalendarAutomationGate>(gateData);
+      if (gate?.automation_enabled !== true) {
+        return jsonResponse(request, {
+          processed: false,
+          ignored: true,
+          outcome: "skipped",
+          mode: "automatic",
+          reason: "AUTOMATION_DISABLED",
+        });
+      }
+      if (!validAutomaticGate(gate)) {
+        throw calendarWorkerFailure("CALENDAR_AUTOMATION_GATE_INVALID");
+      }
+      automaticGate = gate;
+
+      // El vencimiento es una transición interna existente y no depende de la
+      // disponibilidad de Google. No reclama avisos ni ejecuta WhatsApp; el
+      // delete que pueda encolar seguirá bloqueado hasta un pull inbound seguro.
+      const { data: expiredRows, error: expirationError } = await client.rpc(
+        "expire_booking_holds",
+        { p_now: now.toISOString() },
+      );
+      if (expirationError || !Array.isArray(expiredRows)) {
+        throw calendarWorkerFailure("CALENDAR_HOLD_EXPIRATION_FAILED");
+      }
+      expiredHolds = expiredRows.length;
+    }
+
     // El candidato OAuth vive en Vault y no debe depender de que alguien vuelva
     // a abrir Configuración para expirar. Cada invocación autenticada mantiene
     // ese TTL, y una respuesta inesperada nunca se interpreta como éxito.
@@ -322,16 +468,9 @@ export async function handleCalendarSyncRequest(
     const inboundOnly = mode === "initial_import";
 
     // El preview no toca estado de sincronización: ni credenciales, ni cola
-    // saliente, ni lease, ni bitácora.
+    // saliente, ni lease, ni bitácora. La reconciliación normal se difiere hasta
+    // completar y revalidar el pull inbound exclusivo.
     let reconciliation: ReconcileResult | null = null;
-    if (!preview && !inboundOnly) {
-      const { data: reconcileData, error: reconcileError } = await client.rpc(
-        "reconcile_google_calendar_sync",
-        {},
-      );
-      if (reconcileError) throw new Error("CALENDAR_RECONCILIATION_FAILED");
-      reconciliation = firstRow<ReconcileResult>(reconcileData);
-    }
 
     const { data: connectionData, error: connectionError } = await client.rpc(
       "get_google_calendar_windowed_connection_secret",
@@ -360,7 +499,40 @@ export async function handleCalendarSyncRequest(
     const generation = Number(connection.connection_generation);
     const calendarId = connection.google_calendar_id;
     const calendarTimeZone = connection.google_calendar_timezone.trim();
-    const now = new Date((dependencies.now ?? Date.now)());
+    if (
+      automaticGate &&
+      (automaticGate.google_calendar_id !== calendarId ||
+        Number(automaticGate.connection_generation) !== generation)
+    ) {
+      return jsonResponse(request, {
+        processed: false,
+        ignored: true,
+        outcome: "skipped",
+        mode: "automatic",
+        reason: "AUTOMATION_SCOPE_CHANGED",
+      });
+    }
+    let currentAutomationEpoch = automaticGate?.automation_epoch ?? null;
+    if (!automatic && !preview) {
+      const { data: gateData, error: gateError } = await client.rpc(
+        "get_google_calendar_automation_gate",
+        {},
+      );
+      if (gateError) {
+        throw calendarWorkerFailure("CALENDAR_AUTOMATION_GATE_FAILED");
+      }
+      const gate = firstRow<CalendarAutomationGate>(gateData);
+      if (gate?.automation_enabled === true) {
+        if (
+          !validAutomaticGate(gate) ||
+          gate.google_calendar_id !== calendarId ||
+          Number(gate.connection_generation) !== generation
+        ) {
+          throw calendarWorkerFailure("CALENDAR_AUTOMATION_GATE_INVALID");
+        }
+        currentAutomationEpoch = gate.automation_epoch;
+      }
+    }
     const coverage = googleCalendarCoverageWindow(now, calendarTimeZone);
     if (!coverage) {
       throw calendarWorkerFailure("CALENDAR_COVERAGE_WINDOW_INVALID");
@@ -405,6 +577,7 @@ export async function handleCalendarSyncRequest(
       const previewEventIds = new Map<string, string>();
       const previewOccurrenceIds = new Map<string, string>();
       const knownAppointments = new Map<string, boolean>();
+      const currentManagedAssociations = new Map<string, boolean>();
       let pageToken: string | null = null;
       let pages = 0;
 
@@ -503,13 +676,42 @@ export async function handleCalendarSyncRequest(
             existingAppointments.has(appointmentId),
           );
         }
+        for (const { classified } of classifiedItems) {
+          if (classified.kind !== "managed") continue;
+          const { data: associationCurrent, error: associationError } =
+            await client.rpc("google_calendar_managed_event_is_current", {
+              p_google_event_id: classified.eventId,
+              p_appointment_id: classified.appointmentId,
+              p_automation_epoch: classified.automationEpoch,
+            });
+          if (associationError || typeof associationCurrent !== "boolean") {
+            throw calendarWorkerFailure(
+              "CALENDAR_PREVIEW_MANAGED_ASSOCIATION_FAILED",
+            );
+          }
+          currentManagedAssociations.set(
+            classified.eventId,
+            associationCurrent,
+          );
+        }
 
         for (const { item, classified } of classifiedItems) {
           if (
             classified.kind === "managed" &&
-            knownAppointments.get(classified.appointmentId.toLowerCase()) ===
-              false
+            (knownAppointments.get(classified.appointmentId.toLowerCase()) ===
+              false ||
+              currentManagedAssociations.get(classified.eventId) !== true)
           ) {
+            legacyManagedEvents += 1;
+            const external = classifyGoogleCalendarEventAsExternal(
+              item,
+              calendarTimeZone,
+            );
+            countExternalShape(item, external);
+            counts = countClassifiedEvent(counts, external, now);
+            continue;
+          }
+          if (classified.kind === "managed_legacy") {
             legacyManagedEvents += 1;
             const external = classifyGoogleCalendarEventAsExternal(
               item,
@@ -628,6 +830,7 @@ export async function handleCalendarSyncRequest(
           calendarTimeZone,
           coverageStartsAt: coverage.startsAt,
           coverageEndsAt: coverage.endsAt,
+          automationEpoch: currentAutomationEpoch,
           now,
           fetcher,
         });
@@ -680,9 +883,23 @@ export async function handleCalendarSyncRequest(
     // -----------------------------------------------------------------------
     let jobs: CalendarSyncJob[] = [];
     if (inboundObservationSafe && !inboundOnly) {
+      const { data: reconcileData, error: reconcileError } = await client.rpc(
+        "reconcile_google_calendar_sync",
+        {},
+      );
+      if (reconcileError) {
+        throw calendarWorkerFailure("CALENDAR_RECONCILIATION_FAILED");
+      }
+      reconciliation = firstRow<ReconcileResult>(reconcileData);
+
       const { data: claimedData, error: claimError } = await client.rpc(
         "claim_google_calendar_sync_jobs",
-        { p_limit: 3, p_expected_generation: generation },
+        {
+          p_limit: 3,
+          p_expected_generation: generation,
+          p_projection_contract_version:
+            GOOGLE_CALENDAR_PROJECTION_CONTRACT_VERSION,
+        },
       );
       if (claimError) throw calendarWorkerFailure("CALENDAR_CLAIM_FAILED");
       jobs = (claimedData ?? []) as CalendarSyncJob[];
@@ -691,28 +908,56 @@ export async function handleCalendarSyncRequest(
     let synced = 0;
     let inserted = 0;
     let patched = 0;
+    let adopted = 0;
     let deleted = 0;
     let retried = 0;
     let failed = 0;
 
     for (const job of jobs) {
       try {
-        const eventId = deterministicGoogleEventId(job.appointment_id);
-        let externalUpsertOperation: "inserted" | "patched" | null = null;
+        assertClaimedJobAssociation(
+          job,
+          calendarId,
+          generation,
+          automaticGate?.automation_epoch ?? null,
+        );
+        const eventId = job.google_event_id;
+        const beforeMutation = () =>
+          assertCalendarJobStillAuthorized({
+            client,
+            job,
+            calendarId,
+            generation,
+          });
+        let externalUpsertOperation: "inserted" | "patched" | "adopted" | null =
+          null;
         let projectedEtag: string | null = null;
         if (job.operation === "delete") {
-          await deleteGoogleCalendarEvent({
+          await deleteManagedGoogleCalendarEvent({
             accessToken,
-            calendarId,
+            calendarId: job.authorized_google_calendar_id,
+            eventId,
             appointmentId: job.appointment_id,
+            automationEpoch: job.automation_epoch,
+            beforeMutation,
             etag: job.google_etag ?? null,
             fetcher,
           });
         } else if (job.operation === "upsert") {
+          if (job.projection_stage === "absent") {
+            throw calendarWorkerFailure("CALENDAR_JOB_ASSOCIATION_INVALID");
+          }
           const upsertResult = await upsertGoogleCalendarEvent({
             accessToken,
-            calendarId,
+            calendarId: job.authorized_google_calendar_id,
             appointment: job,
+            association: {
+              eventId,
+              automationEpoch: job.automation_epoch,
+              projectionStage: job.projection_stage,
+              projectedStage: job.projected_stage,
+            },
+            beforeMutation,
             etag: job.google_etag ?? null,
             fetcher,
           });
@@ -732,6 +977,8 @@ export async function handleCalendarSyncRequest(
             p_google_etag: projectedEtag,
             p_projected_starts_at: job.starts_at,
             p_projected_ends_at: job.ends_at,
+            p_automation_epoch: job.automation_epoch,
+            p_projection_stage: job.projection_stage,
           },
         );
         if (completeError) {
@@ -741,53 +988,17 @@ export async function handleCalendarSyncRequest(
           });
         }
         if (completed !== true) {
-          // El turno o la conexión cambió mientras Google respondía. La cola
-          // conserva la versión nueva. Una cancelación libera un delete
-          // determinístico; una desconexión/generación nueva limpia sólo una
-          // inserción recién creada, nunca un evento preexistente parcheado.
-          if (externalUpsertOperation === "inserted") {
-            const { data: currentConnection, error: currentConnectionError } =
-              await client
-                .from("google_calendar_connections")
-                .select("status,connection_generation")
-                .eq("id", true)
-                .maybeSingle();
-            if (
-              !currentConnectionError &&
-              shouldCleanupInsertedCalendarEvent({
-                externalOperation: externalUpsertOperation,
-                completed: false,
-                claimedGeneration: job.connection_generation,
-                currentConnectionStatus: (
-                  currentConnection as CalendarConnectionState | null
-                )?.status,
-                currentConnectionGeneration: (
-                  currentConnection as CalendarConnectionState | null
-                )?.connection_generation,
-              })
-            ) {
-              try {
-                await deleteGoogleCalendarEvent({
-                  accessToken,
-                  calendarId,
-                  appointmentId: job.appointment_id,
-                  fetcher,
-                });
-              } catch {
-                console.warn(
-                  "process-calendar-sync",
-                  "STALE_INSERT_CLEANUP_FAILED",
-                );
-              }
-            }
-          }
+          // El turno, stage o epoch cambió mientras Google respondía. La
+          // asociación persistida conserva el evento para la nueva versión;
+          // nunca se intenta un borrado compensatorio sin reautorización.
           continue;
         }
         if (job.operation === "delete") deleted += 1;
         else {
           synced += 1;
           if (externalUpsertOperation === "inserted") inserted += 1;
-          else patched += 1;
+          else if (externalUpsertOperation === "patched") patched += 1;
+          else adopted += 1;
         }
       } catch (error) {
         const decision = calendarJobFailureDecision(error, job.attempts);
@@ -808,6 +1019,8 @@ export async function handleCalendarSyncRequest(
             p_error_code: decision.errorCode,
             p_retry_at: decision.retryAt,
             p_terminal: decision.terminal,
+            p_automation_epoch: job.automation_epoch,
+            p_projection_stage: job.projection_stage,
           },
         );
         if (failError) {
@@ -818,67 +1031,15 @@ export async function handleCalendarSyncRequest(
       }
     }
 
-    // -----------------------------------------------------------------------
-    // Limpieza de eventos convertidos: el evento manual original se retira de
-    // Google recién cuando el turno ya tiene el suyo.
-    // -----------------------------------------------------------------------
-    let cleanupDone = 0;
-    let cleanupFailed = 0;
-    if (inboundObservationSafe && leaseToken && !inboundOnly) {
-      const { data: cleanupData, error: cleanupClaimError } = await client.rpc(
-        "claim_google_calendar_external_cleanup",
-        {
-          p_expected_generation: generation,
-          p_lease_token: leaseToken,
-          p_limit: 3,
-        },
-      );
-      if (cleanupClaimError) {
-        inboundFailure = calendarWorkerFailure(
-          "CALENDAR_EXTERNAL_CLEANUP_CLAIM_FAILED",
-        );
-        inboundError = safeGoogleErrorCode(inboundFailure);
-        inboundObservationSafe = false;
-      }
-      for (const row of (cleanupData ?? []) as { google_event_id: string }[]) {
-        if (!inboundObservationSafe) break;
-        let succeeded = true;
-        let errorCode: string | null = null;
-        try {
-          await deleteGoogleCalendarEventById({
-            accessToken,
-            calendarId,
-            eventId: row.google_event_id,
-            fetcher,
-          });
-        } catch (error) {
-          succeeded = false;
-          errorCode = safeGoogleErrorCode(error);
-        }
-        const { data: cleanupCompleted, error: cleanupCompleteError } =
-          await client.rpc("complete_google_calendar_external_cleanup", {
-            p_expected_generation: generation,
-            p_lease_token: leaseToken,
-            p_google_event_id: row.google_event_id,
-            p_succeeded: succeeded,
-            p_error_code: errorCode,
-          });
-        if (cleanupCompleteError || cleanupCompleted !== true) {
-          inboundFailure = calendarWorkerFailure(
-            "CALENDAR_EXTERNAL_CLEANUP_COMPLETE_FAILED",
-          );
-          inboundError = safeGoogleErrorCode(inboundFailure);
-          inboundObservationSafe = false;
-          break;
-        }
-        if (succeeded) cleanupDone += 1;
-        else cleanupFailed += 1;
-      }
-    }
+    // Los eventos externos son sólo lectura en esta versión. Una conversión
+    // conserva el bloqueo original y nunca dispara cleanup/delete en Google.
+    const cleanupDone = 0;
+    const cleanupFailed = 0;
 
     const summary = {
       pushed: inserted,
       updatedInGoogle: patched,
+      adoptedInGoogle: adopted,
       deletedInGoogle: deleted,
       retried,
       failed,
@@ -991,9 +1152,11 @@ export async function handleCalendarSyncRequest(
         },
         claimed: jobs.length,
         synced,
+        adopted,
         deleted,
         retried,
         failed,
+        expiredHolds,
         cleanup: { done: cleanupDone, failed: cleanupFailed },
         inbound: {
           ...summary,
@@ -1041,6 +1204,7 @@ async function runInboundSync(input: {
   calendarTimeZone: string;
   coverageStartsAt: string;
   coverageEndsAt: string;
+  automationEpoch: string | null;
   now: Date;
   fetcher: typeof fetch;
 }): Promise<InboundRunResult> {
@@ -1088,6 +1252,7 @@ async function pullGoogleCalendar(input: {
   calendarTimeZone: string;
   coverageStartsAt: string;
   coverageEndsAt: string;
+  automationEpoch: string | null;
   now: Date;
   fetcher: typeof fetch;
 }): Promise<InboundRunResult> {
@@ -1110,11 +1275,14 @@ async function pullGoogleCalendar(input: {
   const observeManaged = async (managed: {
     eventId: string;
     appointmentId: string;
+    automationEpoch: string;
+    projectionStage: "pre_reservation" | "confirmed" | null;
     cancelled: boolean;
     startsAt: string | null;
     endsAt: string | null;
     updatedAt: string | null;
     etag: string | null;
+    payloadFingerprintValid: boolean;
   }) => {
     const previouslyObservedAppointment = observedManagedAppointments.get(
       managed.eventId,
@@ -1137,6 +1305,9 @@ async function pullGoogleCalendar(input: {
         p_ends_at: managed.endsAt,
         p_google_updated_at: managed.updatedAt,
         p_google_etag: managed.etag,
+        p_automation_epoch: managed.automationEpoch,
+        p_remote_projection_stage: managed.projectionStage,
+        p_payload_fingerprint_valid: managed.payloadFingerprintValid,
       },
     );
     if (error !== null) {
@@ -1276,6 +1447,13 @@ async function pullGoogleCalendar(input: {
       if (classified.kind === "managed_mismatch") {
         throw calendarWorkerFailure("CALENDAR_INBOUND_MANAGED_EVENT_MISMATCH");
       }
+      if (classified.kind === "managed_legacy") {
+        seenEventIds.add(classified.eventId);
+        await applyExternal(
+          classifyGoogleCalendarEventAsExternal(item, input.calendarTimeZone),
+        );
+        continue;
+      }
       if (classified.kind === "ignored") {
         summary = { ...summary, skipped: summary.skipped + 1 };
         continue;
@@ -1283,7 +1461,11 @@ async function pullGoogleCalendar(input: {
       seenEventIds.add(classified.eventId);
 
       if (classified.kind === "managed") {
-        const outcome = await observeManaged(classified);
+        const outcome = await observeManaged({
+          ...classified,
+          payloadFingerprintValid:
+            await managedGoogleCalendarEventFingerprintIsValid(item),
+        });
         if (outcome === "ignored_unknown_appointment") {
           await applyExternal(
             classifyGoogleCalendarEventAsExternal(item, input.calendarTimeZone),
@@ -1306,14 +1488,22 @@ async function pullGoogleCalendar(input: {
           });
         if (mappingError) throw new Error("CALENDAR_INBOUND_MAPPING_FAILED");
         if (typeof mappedAppointment === "string" && mappedAppointment) {
+          if (!input.automationEpoch) {
+            throw calendarWorkerFailure(
+              "CALENDAR_INBOUND_MANAGED_ASSOCIATION_MISSING",
+            );
+          }
           const outcome = await observeManaged({
             eventId: classified.eventId,
             appointmentId: mappedAppointment,
+            automationEpoch: input.automationEpoch,
+            projectionStage: null,
             cancelled: true,
             startsAt: null,
             endsAt: null,
             updatedAt: classified.updatedAt,
             etag: classified.etag,
+            payloadFingerprintValid: false,
           });
           if (outcome !== "ignored_unknown_appointment") {
             await retireExternalFallback(classified);
@@ -1411,7 +1601,11 @@ async function pullGoogleCalendar(input: {
         pageCursor = appointmentId;
 
         if (seenEventIds.has(eventId)) {
-          if (observedManagedAppointments.get(eventId) !== appointmentId) {
+          const observedAppointment = observedManagedAppointments.get(eventId);
+          if (
+            observedAppointment !== undefined &&
+            observedAppointment !== appointmentId
+          ) {
             throw calendarWorkerFailure(
               "CALENDAR_FULL_RESYNC_MANAGED_EVENT_MISMATCH",
             );
@@ -1430,8 +1624,22 @@ async function pullGoogleCalendar(input: {
             lookup.event,
             input.calendarTimeZone,
           );
+          if (classified.kind === "managed_mismatch") {
+            throw calendarWorkerFailure(
+              "CALENDAR_FULL_RESYNC_MANAGED_EVENT_MISMATCH",
+            );
+          }
+          if (classified.kind !== "managed") {
+            seenEventIds.add(eventId);
+            await applyExternal(
+              classifyGoogleCalendarEventAsExternal(
+                lookup.event,
+                input.calendarTimeZone,
+              ),
+            );
+            continue;
+          }
           if (
-            classified.kind !== "managed" ||
             classified.eventId !== eventId ||
             classified.appointmentId.toLowerCase() !== appointmentId
           ) {
@@ -1439,7 +1647,11 @@ async function pullGoogleCalendar(input: {
               "CALENDAR_FULL_RESYNC_MANAGED_EVENT_MISMATCH",
             );
           }
-          const outcome = await observeManaged(classified);
+          const outcome = await observeManaged({
+            ...classified,
+            payloadFingerprintValid:
+              await managedGoogleCalendarEventFingerprintIsValid(lookup.event),
+          });
           if (outcome === "ignored_unknown_appointment") {
             // El GET confirma que el evento todavía existe aunque el turno haya
             // desaparecido durante el audit. Se conserva en la reconciliación
@@ -1455,14 +1667,22 @@ async function pullGoogleCalendar(input: {
             await retireExternalFallback(classified);
           }
         } else if (value.remote_known) {
+          if (!input.automationEpoch) {
+            throw calendarWorkerFailure(
+              "CALENDAR_INBOUND_MANAGED_ASSOCIATION_MISSING",
+            );
+          }
           const outcome = await observeManaged({
             eventId,
             appointmentId,
+            automationEpoch: input.automationEpoch,
+            projectionStage: null,
             cancelled: true,
             startsAt: null,
             endsAt: null,
             updatedAt: null,
             etag: null,
+            payloadFingerprintValid: false,
           });
           if (outcome === "ignored_unknown_appointment") {
             await applyExternal({

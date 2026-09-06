@@ -179,10 +179,12 @@ export const ManualContent = component$<ManualContentProps>(
           <span class="eyebrow">Calendario</span>
           <h2>Cómo se sincroniza la agenda</h2>
           <p>
-            Cuando Google Calendar está conectado, los turnos confirmados se
-            copian automáticamente. La agenda de esta plataforma sigue siendo la
-            fuente de verdad: si hay una diferencia, verificá primero el turno
-            acá.
+            Estar conectado no significa que la sincronización automática esté
+            activa. Sólo cuando el estado lo confirma, las pre-reservas nuevas
+            creadas después de la activación aparecen como pendientes de seña y,
+            al confirmarlas, el mismo evento pasa a turno confirmado. La agenda
+            de esta plataforma sigue siendo la fuente de verdad: si hay una
+            diferencia, verificá primero el turno acá.
           </p>
           <p>
             Si el estado indica que Google Calendar necesita atención, no borres

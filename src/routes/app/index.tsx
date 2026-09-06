@@ -9,6 +9,7 @@ import { Link } from "@qwik.dev/router";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AppNavigation } from "~/components/app/AppNavigation";
 import { BotAutomationControl } from "~/components/app/BotAutomationControl";
+import { GoogleCalendarStatusBlock } from "~/components/app/GoogleCalendarStatusBlock";
 import { Icon } from "~/components/ui/Icon";
 import {
   APP_DESCRIPTION,
@@ -251,6 +252,8 @@ export default component$(() => {
             </nav>
           </div>
         </header>
+
+        <GoogleCalendarStatusBlock variant="home" />
 
         {state.loading ? (
           <div class="dashboard-state" aria-live="polite">

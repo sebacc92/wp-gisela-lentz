@@ -34,10 +34,12 @@ test("el Manual integra estado simple, enlaces internos y diseño móvil", () =>
   const systemStatus = source("src/components/manual/SystemStatus.tsx");
   const styles = source("src/global.css");
   const inbox = source("src/components/inbox/ConversationList.tsx");
+  const bookingGuide = source("docs/reservas-y-senas.md");
 
   assert.match(page, /<ManualContent/);
   assert.match(page, /action: "manual_status"/);
   assert.match(page, /google-calendar-status/);
+  assert.match(page, /calendar\?\.automationActive === true/);
   assert.match(page, /lastWebhookChecked/);
   assert.equal(page.includes('from("webhook_events")'), false);
   assert.equal(page.includes("whatsapp-health"), false);
@@ -50,6 +52,10 @@ test("el Manual integra estado simple, enlaces internos y diseño móvil", () =>
   assert.match(styles, /@media \(max-width: 680px\)/);
   assert.match(styles, /\.manual-toc/);
   assert.match(styles, /\.system-status-grid/);
+  assert.match(content, /pre-reservas nuevas/);
+  assert.match(content, /después de la activación/);
+  assert.match(bookingGuide, /pre-reservas nuevas/);
+  assert.match(bookingGuide, /conexión[\s\S]*no garantiza/);
 });
 
 test("la UI del Manual no incorpora identificadores ni valores de credenciales", () => {

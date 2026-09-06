@@ -64,16 +64,6 @@ insert into public.professionals (id, name, appointment_duration_minutes)
 values ('94000000-0000-4000-8000-000000000002', 'Profesional Calendar Test', 30);
 insert into public.contacts (id, phone_e164, name)
 values ('94000000-0000-4000-8000-000000000003', '+5491100009403', 'Paciente Calendar Test');
-insert into public.appointments (
-  id, contact_id, professional_id, starts_at, ends_at, status, source
-) values (
-  '94000000-0000-4000-8000-000000000004',
-  '94000000-0000-4000-8000-000000000003',
-  '94000000-0000-4000-8000-000000000002',
-  clock_timestamp() + interval '2 days',
-  clock_timestamp() + interval '2 days 30 minutes',
-  'confirmed', 'manual'
-);
 
 -- El seed local incluye otros turnos futuros. Este test de concurrencia debe
 -- reclamar únicamente su fixture para no confundir un segundo job legítimo con
@@ -114,6 +104,44 @@ begin
 end;
 $calendar_connect$;
 
+-- El contrato actual sólo autoriza filas creadas luego del cutoff y exige que
+-- la observación inbound v2 de la misma cuenta/calendario esté vigente.
+update public.google_calendar_connections connection
+set inbound_sync_token = 'security-window-token',
+    inbound_sync_token_generation = connection.connection_generation,
+    inbound_sync_state = 'incremental',
+    inbound_first_import_approved_at = clock_timestamp(),
+    inbound_sync_contract_version = 2,
+    inbound_coverage_starts_at = (
+      (((current_date - 1)::text || ' 00:00')::timestamp)
+        at time zone 'America/Argentina/Buenos_Aires'
+    ),
+    inbound_coverage_ends_at = (
+      (((current_date + 20)::text || ' 00:00')::timestamp)
+        at time zone 'America/Argentina/Buenos_Aires'
+    ),
+    inbound_sync_timezone = 'America/Argentina/Buenos_Aires',
+    last_sync_completed_at = clock_timestamp(),
+    last_sync_error = null
+where connection.id = true;
+
+select public.activate_google_calendar_automation(
+  (select connection_generation
+   from public.google_calendar_connections where id = true)
+);
+
+insert into public.appointments (
+  id, contact_id, professional_id, starts_at, ends_at, status, source,
+  created_at
+) values (
+  '94000000-0000-4000-8000-000000000004',
+  '94000000-0000-4000-8000-000000000003',
+  '94000000-0000-4000-8000-000000000002',
+  clock_timestamp() + interval '2 days',
+  clock_timestamp() + interval '2 days 30 minutes',
+  'confirmed', 'manual', clock_timestamp()
+);
+
 do $$
 declare
   claimed record;
@@ -124,7 +152,8 @@ begin
   from public.claim_google_calendar_sync_jobs(
     1,
     (select connection_generation
-     from public.google_calendar_connections where id = true)
+     from public.google_calendar_connections where id = true),
+    2
   );
   if claimed.job_id is null then raise exception 'expected claimed calendar job'; end if;
 
@@ -136,15 +165,21 @@ begin
   if exists (
     select 1 from public.claim_google_calendar_sync_jobs(
       1,
-      claimed.connection_generation
+      claimed.connection_generation,
+      2
     )
   ) then raise exception 'newer version was claimed while prior call was in flight'; end if;
 
   if public.complete_google_calendar_sync_job(
     claimed.job_id,
     claimed.desired_version,
-    'stale-event-id',
-    claimed.connection_generation
+    claimed.google_event_id,
+    claimed.connection_generation,
+    'etag-stale-version',
+    claimed.starts_at,
+    claimed.ends_at,
+    claimed.automation_epoch,
+    claimed.projection_stage
   ) then raise exception 'stale calendar version was completed'; end if;
 
   select desired_version into next_version
@@ -162,7 +197,8 @@ begin
   select * into claimed_second
   from public.claim_google_calendar_sync_jobs(
     1,
-    claimed.connection_generation
+    claimed.connection_generation,
+    2
   );
   update public.appointments
   set starts_at = starts_at + interval '1 hour',
@@ -174,7 +210,9 @@ begin
     claimed_second.connection_generation,
     'GOOGLE_NETWORK_FAILED',
     clock_timestamp() + interval '1 minute',
-    false
+    false,
+    claimed_second.automation_epoch,
+    claimed_second.projection_stage
   ) then raise exception 'stale failure changed a newer version'; end if;
   if not exists (
     select 1 from public.google_calendar_sync_jobs
@@ -211,8 +249,9 @@ select is(
   (select connection_generation
    from public.google_calendar_sync_jobs
    where appointment_id = '94000000-0000-4000-8000-000000000004'),
-  100::bigint,
-  'a stale enqueue can never lower the monotonic connection generation'
+  (select connection_generation
+   from public.google_calendar_connections where id = true),
+  'an associated job cannot be detached to an arbitrary connection generation'
 );
 
 update public.google_calendar_sync_jobs
@@ -240,7 +279,8 @@ begin
   from public.claim_google_calendar_sync_jobs(
     1,
     (select connection_generation
-     from public.google_calendar_connections where id = true)
+     from public.google_calendar_connections where id = true),
+    2
   );
   if claimed.job_id is null or claimed.operation <> 'upsert' then
     raise exception 'expected claimed upsert before cancellation race';
@@ -263,8 +303,13 @@ begin
   if public.complete_google_calendar_sync_job(
     claimed.job_id,
     claimed.desired_version,
-    'inserted-after-cancellation',
-    claimed.connection_generation
+    claimed.google_event_id,
+    claimed.connection_generation,
+    'etag-inserted-after-cancellation',
+    claimed.starts_at,
+    claimed.ends_at,
+    claimed.automation_epoch,
+    claimed.projection_stage
   ) then
     raise exception 'cancelled appointment completed stale upsert';
   end if;

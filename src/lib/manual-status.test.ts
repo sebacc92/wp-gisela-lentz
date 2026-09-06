@@ -65,6 +65,7 @@ test("el estado simple cubre automatización, modo de envío y Calendar", () => 
       configured: false,
       connected: false,
       status: "incomplete",
+      automationActive: false,
       pendingCount: 0,
       failedCount: 0,
     }).title,
@@ -76,6 +77,7 @@ test("el estado simple cubre automatización, modo de envío y Calendar", () => 
       configured: true,
       connected: true,
       status: "connected",
+      automationActive: true,
       pendingCount: null,
       failedCount: 0,
     }).tone,
@@ -87,11 +89,52 @@ test("el estado simple cubre automatización, modo de envío y Calendar", () => 
       configured: true,
       connected: false,
       status: "error",
+      automationActive: false,
       pendingCount: 0,
       failedCount: 1,
     }).tone,
     "attention",
   );
+  assert.equal(
+    calendarManualStatus({
+      checked: true,
+      configured: true,
+      connected: true,
+      status: "connected",
+      automationActive: true,
+      pendingCount: 0,
+      failedCount: 0,
+    }).title,
+    "Google Calendar está funcionando correctamente",
+  );
+  const calendarWithoutAutomationField = calendarManualStatus({
+    checked: true,
+    configured: true,
+    connected: true,
+    status: "connected",
+    pendingCount: 0,
+    failedCount: 0,
+  });
+  assert.equal(
+    calendarWithoutAutomationField.title,
+    "Google Calendar está conectado",
+  );
+  assert.match(calendarWithoutAutomationField.detail, /no está activa/);
+  const pendingWithoutAutomation = calendarManualStatus({
+    checked: true,
+    configured: true,
+    connected: true,
+    status: "pending",
+    automationActive: false,
+    pendingCount: 1,
+    failedCount: 0,
+  });
+  assert.equal(
+    pendingWithoutAutomation.title,
+    "Google Calendar tiene cambios pendientes",
+  );
+  assert.match(pendingWithoutAutomation.detail, /no está activa/);
+  assert.doesNotMatch(pendingWithoutAutomation.detail, /sincronizando/);
   assert.equal(
     webhookManualStatus({
       checked: true,

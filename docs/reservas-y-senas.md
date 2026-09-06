@@ -1,9 +1,12 @@
 # Reservas, cobertura y señas
 
-La agenda es la fuente de verdad. Google Calendar es sólo un espejo de los
-turnos confirmados. La IA transcribe los datos visibles del comprobante y una
-regla fija de la aplicación decide si alcanza para confirmar la seña; no existe
-una verificación bancaria de la transferencia.
+La agenda es la fuente de verdad. Con la automatización de Calendar activa,
+Google Calendar refleja las pre-reservas nuevas creadas después de la activación
+y actualiza ese mismo evento cuando el turno se confirma o cancela. Una conexión
+por sí sola no garantiza que esos cambios se sincronicen automáticamente. La IA
+transcribe los datos visibles del comprobante y una regla fija de la aplicación
+decide si alcanza para confirmar la seña; no existe una verificación bancaria de
+la transferencia.
 
 ## Flujo simple para Gisela
 
@@ -63,7 +66,10 @@ demuestra que el comprobante sea auténtico.
 
 - Las plantillas usan valores centralizados (`{deposit_amount}`,
   `{deposit_alias}`, `{deposit_holder}`, `{date}` y `{time}`).
-- Los recordatorios y Google Calendar sólo toman turnos confirmados.
+- Los recordatorios sólo toman turnos confirmados. Con la automatización de
+  Calendar activa, las pre-reservas nuevas posteriores a la activación también
+  se reflejan como pendientes de seña y luego se actualizan sobre el mismo
+  evento.
 - `WHATSAPP_AUTOMATIONS_ENABLED=false` detiene también las respuestas de
   comprobante y vencimiento.
 - La lectura automática requiere simultáneamente `app_settings.ai_enabled=true`,

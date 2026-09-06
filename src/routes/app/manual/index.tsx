@@ -65,6 +65,7 @@ function emptySystemStatus(): ManualSystemStatus {
       configured: false,
       connected: false,
       status: "",
+      automationActive: false,
       pendingCount: 0,
       failedCount: 0,
     }),
@@ -125,6 +126,9 @@ export default component$(() => {
       const calendarConnected = safeBoolean(calendar?.connected);
       const calendarStatus =
         typeof calendar?.status === "string" ? calendar.status : null;
+      // Un backend anterior puede omitir este campo durante el rollout. Sólo
+      // true explícito permite anunciar que el scheduler está activo.
+      const calendarAutomationActive = calendar?.automationActive === true;
       const calendarPending = safeCount(calendar?.pendingCount);
       const calendarFailed = safeCount(calendar?.failedCount);
 
@@ -150,6 +154,7 @@ export default component$(() => {
           configured: calendarConfigured,
           connected: calendarConnected,
           status: calendarStatus,
+          automationActive: calendarAutomationActive,
           pendingCount: calendarPending,
           failedCount: calendarFailed,
         }),

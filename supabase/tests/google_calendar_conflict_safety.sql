@@ -37,26 +37,26 @@ insert into public.appointments (
   '97000000-0000-4000-8000-000000000004',
   '97000000-0000-4000-8000-000000000003',
   '97000000-0000-4000-8000-000000000002',
-  clock_timestamp() + interval '60 days',
-  clock_timestamp() + interval '60 days 60 minutes',
+  clock_timestamp() + interval '6 days',
+  clock_timestamp() + interval '6 days 60 minutes',
   'confirmed', 'manual', 'particular', 60, 'confirmed'
 );
 
 create temporary table safety_fixture as
 select (
-  ((current_date + 70)::text || ' 15:00')::timestamp
+  ((current_date + 10)::text || ' 15:00')::timestamp
   at time zone (select timezone from public.app_settings where id = true)
 ) as free_slot,
 (
-  ((current_date + 71)::text || ' 14:00')::timestamp
+  ((current_date + 11)::text || ' 14:00')::timestamp
   at time zone (select timezone from public.app_settings where id = true)
 ) as cancelled_slot,
 (
-  ((current_date + 72)::text || ' 14:00')::timestamp
+  ((current_date + 12)::text || ' 14:00')::timestamp
   at time zone (select timezone from public.app_settings where id = true)
 ) as expired_slot,
 (
-  ((current_date + 73)::text || ' 14:00')::timestamp
+  ((current_date + 13)::text || ' 14:00')::timestamp
   at time zone (select timezone from public.app_settings where id = true)
 ) as generation_slot;
 
@@ -101,7 +101,7 @@ select bounds.starts_at,
        bounds.starts_at + interval '21 days' as ends_at
 from (
   select (
-    ((current_date + 55)::text || ' 00:00')::timestamp
+    (((current_date - 1)::text || ' 00:00')::timestamp)
       at time zone (select timezone from public.app_settings where id = true)
   ) as starts_at
 ) bounds;
@@ -136,6 +136,12 @@ begin
 end;
 $complete_initial_import$;
 
+create temporary table safety_automation as
+select public.activate_google_calendar_automation(
+  safety_generation.generation
+) as epoch
+from safety_generation;
+
 create temporary table safety_lease as
 select lease.lease_token
 from safety_generation, lateral public.begin_google_calendar_inbound_sync(
@@ -153,15 +159,21 @@ from safety_generation, lateral public.begin_google_calendar_inbound_sync(
 insert into public.google_calendar_sync_jobs (
   appointment_id, operation, desired_version, status, attempts, available_at,
   connection_generation, google_event_id, google_etag,
-  projected_operation, projected_starts_at, projected_ends_at
+  projected_operation, projected_starts_at, projected_ends_at,
+  automation_epoch, authorized_google_account_id,
+  authorized_google_calendar_id, authorized_connection_generation,
+  projection_stage, projected_stage
 )
 select '97000000-0000-4000-8000-000000000004', 'upsert', 2, 'pending', 0,
        clock_timestamp(), safety_generation.generation,
        'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
        '"etag-1"', 'upsert',
        appointment.starts_at - interval '3 hours',
-       appointment.ends_at - interval '3 hours'
-from safety_generation, public.appointments appointment
+       appointment.ends_at - interval '3 hours',
+       automation.epoch, 'google-user-safety', 'calendar-A',
+       safety_generation.generation, 'confirmed', 'confirmed'
+from safety_generation, safety_automation automation,
+     public.appointments appointment
 where appointment.id = '97000000-0000-4000-8000-000000000004';
 
 select is(
@@ -172,9 +184,10 @@ select is(
       '97000000-0000-4000-8000-000000000004', false,
       appointment.starts_at - interval '3 hours',
       appointment.ends_at - interval '3 hours',
-      clock_timestamp(), '"etag-1"'
+      clock_timestamp(), '"etag-1"', automation.epoch, 'confirmed', true
     )
-    from safety_generation, safety_lease, public.appointments appointment
+    from safety_generation, safety_lease, safety_automation automation,
+      public.appointments appointment
     where appointment.id = '97000000-0000-4000-8000-000000000004'
   ),
   'pending_push',
@@ -208,9 +221,10 @@ select is(
       '97000000-0000-4000-8000-000000000004', false,
       appointment.starts_at + interval '5 hours',
       appointment.ends_at + interval '5 hours',
-      clock_timestamp(), '"etag-remoto-2"'
+      clock_timestamp(), '"etag-remoto-2"', automation.epoch, 'confirmed', false
     )
-    from safety_generation, safety_lease, public.appointments appointment
+    from safety_generation, safety_lease, safety_automation automation,
+      public.appointments appointment
     where appointment.id = '97000000-0000-4000-8000-000000000004'
   ),
   'conflict_recorded',
@@ -225,7 +239,7 @@ select is(
   (
     select count(*)::integer
     from safety_generation, lateral public.claim_google_calendar_sync_jobs(
-      5, safety_generation.generation
+      5, safety_generation.generation, 2
     ) job
   ),
   0,
@@ -263,7 +277,7 @@ select is(
   (
     select count(*)::integer
     from safety_generation, lateral public.claim_google_calendar_sync_jobs(
-      5, safety_generation.generation
+      5, safety_generation.generation, 2
     ) job
   ),
   1,
@@ -292,9 +306,11 @@ select is(
       'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
       '97000000-0000-4000-8000-000000000004', false,
       appointment.starts_at, appointment.ends_at,
-      clock_timestamp(), '"etag-metadata-remoto"'
+      clock_timestamp(), '"etag-metadata-remoto"',
+      automation.epoch, 'confirmed', false
     )
-    from safety_generation, safety_lease, public.appointments appointment
+    from safety_generation, safety_lease, safety_automation automation,
+      public.appointments appointment
     where appointment.id = '97000000-0000-4000-8000-000000000004'
   ),
   'conflict_recorded',
@@ -320,7 +336,7 @@ select is(
   (
     select count(*)::integer
     from safety_generation, lateral public.claim_google_calendar_sync_jobs(
-      5, safety_generation.generation
+      5, safety_generation.generation, 2
     ) job
   ),
   0,
@@ -377,9 +393,10 @@ select is(
       'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
       '97000000-0000-4000-8000-000000000004', false,
       appointment.starts_at, appointment.ends_at,
-      clock_timestamp(), null
+      clock_timestamp(), null, automation.epoch, 'confirmed', false
     )
-    from safety_generation, safety_lease, public.appointments appointment
+    from safety_generation, safety_lease, safety_automation automation,
+      public.appointments appointment
     where appointment.id = '97000000-0000-4000-8000-000000000004'
   ),
   'conflict_recorded',
@@ -405,7 +422,7 @@ select is(
   (
     select count(*)::integer
     from safety_generation, lateral public.claim_google_calendar_sync_jobs(
-      5, safety_generation.generation
+      5, safety_generation.generation, 2
     ) claimed
   ),
   0,
@@ -445,9 +462,11 @@ select is(
       'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
       '97000000-0000-4000-8000-000000000004', false,
       appointment.starts_at, appointment.ends_at,
-      clock_timestamp(), '"etag-bootstrap-observed"'
+      clock_timestamp(), '"etag-bootstrap-observed"',
+      automation.epoch, 'confirmed', false
     )
-    from safety_generation, safety_lease, public.appointments appointment
+    from safety_generation, safety_lease, safety_automation automation,
+      public.appointments appointment
     where appointment.id = '97000000-0000-4000-8000-000000000004'
   ),
   'conflict_recorded',
@@ -473,7 +492,7 @@ select is(
   (
     select count(*)::integer
     from safety_generation, lateral public.claim_google_calendar_sync_jobs(
-      5, safety_generation.generation
+      5, safety_generation.generation, 2
     ) claimed
   ),
   0,
@@ -662,7 +681,7 @@ select ok(
     from public.google_calendar_external_events event, safety_conversion conversion
     where event.google_event_id = 'bloque-convertible'
   ),
-  'el bloqueo queda vinculado al turno y su evento original marcado para retirar'
+  'el bloqueo queda vinculado al turno y el evento original permanece registrado'
 );
 
 select is(
@@ -773,28 +792,19 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
 select is(
-  (
-    select count(*)::integer
-    from safety_generation, safety_lease,
-      lateral public.claim_google_calendar_external_cleanup(
-        safety_generation.generation, safety_lease.lease_token, 10
-      ) cleanup
-    where cleanup.google_event_id = 'bloque-cancelado-sin-mapping'
-  ),
-  1,
-  'un turno cancelado habilita borrar el manual aun sin mapping administrado'
+  (select external_cleanup_status
+   from public.google_calendar_external_events
+   where google_event_id = 'bloque-cancelado-sin-mapping'),
+  'pending',
+  'cancelar el turno no cambia ni programa el evento manual de Google'
 );
 
 select is(
-  (
-    select public.complete_google_calendar_external_cleanup(
-      safety_generation.generation, safety_lease.lease_token,
-      'bloque-cancelado-sin-mapping', false, 'GOOGLE_DELETE_FAILED'
-    )
-    from safety_generation, safety_lease
-  ),
-  true,
-  'el fallo de borrar un manual cancelado queda registrado'
+  (select count(*)::integer
+   from public.google_calendar_sync_jobs job, safety_cancel_conversion conversion
+   where job.appointment_id = conversion.appointment_id),
+  0,
+  'el turno cancelado convertido no adquiere un evento administrado sustituto'
 );
 
 select ok(
@@ -806,37 +816,27 @@ select ok(
   and exists (
     select 1 from public.google_calendar_external_events
     where google_event_id = 'bloque-cancelado-sin-mapping'
-      and external_cleanup_status = 'failed'
-  )
-  and exists (
-    select 1
-    from safety_generation, safety_lease,
-      lateral public.claim_google_calendar_external_cleanup(
-        safety_generation.generation, safety_lease.lease_token, 10
-      ) cleanup
-    where cleanup.google_event_id = 'bloque-cancelado-sin-mapping'
+      and status = 'converted'
+      and external_cleanup_status = 'pending'
+      and external_cleanup_error is null
   ),
-  'cleanup failed sigue bloqueando y es reclamable otra vez'
+  'el evento manual conservado mantiene el horario bloqueado sin error de cleanup'
 );
 
-create temporary table safety_cancel_cleanup_done as
-select public.complete_google_calendar_external_cleanup(
-  safety_generation.generation, safety_lease.lease_token,
-  'bloque-cancelado-sin-mapping', true, null
-) as completed
-from safety_generation, safety_lease;
+select * from public.reconcile_google_calendar_sync();
 
 select ok(
-  (select completed from safety_cancel_cleanup_done)
-  and (select external_cleanup_status = 'done'
-       from public.google_calendar_external_events
-       where google_event_id = 'bloque-cancelado-sin-mapping')
-  and public.appointment_slot_is_available(
+  not public.appointment_slot_is_available(
     '97000000-0000-4000-8000-000000000002',
     (select cancelled_slot from safety_fixture), 60, null,
     'America/Argentina/Buenos_Aires'
+  )
+  and not exists (
+    select 1 from public.google_calendar_sync_jobs job,
+      safety_cancel_conversion conversion
+    where job.appointment_id = conversion.appointment_id
   ),
-  'sólo cleanup done libera el horario del turno cancelado'
+  'reconciliar repite la política read-only sin liberar ni reproyectar el horario'
 );
 
 select public.apply_google_calendar_external_event(
@@ -871,16 +871,11 @@ select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
 select is(
-  (
-    select count(*)::integer
-    from safety_generation, safety_lease,
-      lateral public.claim_google_calendar_external_cleanup(
-        safety_generation.generation, safety_lease.lease_token, 10
-      ) cleanup
-    where cleanup.google_event_id = 'bloque-hold-vencido'
-  ),
-  1,
-  'un hold vencido habilita cleanup por ID aunque nunca tuvo mapping'
+  (select external_cleanup_status
+   from public.google_calendar_external_events
+   where google_event_id = 'bloque-hold-vencido'),
+  'pending',
+  'un hold vencido no habilita escritura ni borrado del evento manual'
 );
 
 select ok(
@@ -895,24 +890,21 @@ select ok(
   'el hold vencido permanece fail-closed mientras Google no confirma cleanup'
 );
 
-create temporary table safety_expired_cleanup_done as
-select public.complete_google_calendar_external_cleanup(
-  safety_generation.generation, safety_lease.lease_token,
-  'bloque-hold-vencido', true, null
-) as completed
-from safety_generation, safety_lease;
-
 select ok(
-  (select completed from safety_expired_cleanup_done)
-  and (select external_cleanup_status = 'done'
-       from public.google_calendar_external_events
-       where google_event_id = 'bloque-hold-vencido')
-  and public.appointment_slot_is_available(
+  (select external_cleanup_status = 'pending'
+   from public.google_calendar_external_events
+   where google_event_id = 'bloque-hold-vencido')
+  and not public.appointment_slot_is_available(
     '97000000-0000-4000-8000-000000000002',
     (select expired_slot from safety_fixture), 60, null,
     'America/Argentina/Buenos_Aires'
+  )
+  and not exists (
+    select 1 from public.google_calendar_sync_jobs job,
+      safety_expired_conversion conversion
+    where job.appointment_id = conversion.appointment_id
   ),
-  'cleanup exitoso libera el horario cuyo hold ya venció'
+  'el evento manual sigue bloqueando tras vencer, sin cleanup ni sustituto'
 );
 
 -- Un `converted` sólo se omite dentro de su generación. Simula un evento
@@ -978,8 +970,8 @@ select public.observe_google_calendar_managed_event(
   safety_generation.generation, safety_lease.lease_token,
   'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
   '97000000-0000-4000-8000-000000000004', true, null, null,
-  clock_timestamp(), '"etag-tombstone"'
-) from safety_generation, safety_lease;
+  clock_timestamp(), '"etag-tombstone"', automation.epoch, null, false
+) from safety_generation, safety_lease, safety_automation automation;
 
 select is(
   (select google_etag from public.google_calendar_sync_jobs
@@ -992,8 +984,8 @@ select public.observe_google_calendar_managed_event(
   safety_generation.generation, safety_lease.lease_token,
   'gl' || replace('97000000-0000-4000-8000-000000000004', '-', ''),
   '97000000-0000-4000-8000-000000000004', true, null, null,
-  clock_timestamp(), null
-) from safety_generation, safety_lease;
+  clock_timestamp(), null, automation.epoch, null, false
+) from safety_generation, safety_lease, safety_automation automation;
 
 select is(
   (select google_etag from public.google_calendar_sync_jobs
@@ -1020,7 +1012,7 @@ select is(
   (
     select count(*)::integer
     from safety_generation, lateral public.claim_google_calendar_sync_jobs(
-      5, safety_generation.generation
+      5, safety_generation.generation, 2
     ) job
     where job.operation = 'delete'
   ),
@@ -1029,93 +1021,99 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
--- El cleanup exige el evento sustituto exportado en la conexión vigente
+-- Los eventos convertidos quedan read-only: no hay sustituto ni cleanup
 -- ---------------------------------------------------------------------------
 
 select is(
-  (
-    select count(*)::integer
-    from safety_generation, safety_lease,
-      lateral public.claim_google_calendar_external_cleanup(
-        safety_generation.generation, safety_lease.lease_token, 5
-      ) cleanup
-  ),
+  (select count(*)::integer
+   from public.google_calendar_sync_jobs job, safety_conversion conversion
+   where job.appointment_id = conversion.appointment_id),
   0,
-  'sin el evento del turno exportado todavía no se retira el evento original'
+  'la conversión no crea un evento sustituto administrado'
 );
 
 update public.appointments
 set status = 'confirmed', deposit_status = 'confirmed', hold_expires_at = null
 where id = (select appointment_id from safety_conversion);
-update public.google_calendar_sync_jobs job
-set status = 'succeeded',
-    google_event_id = 'managed-event-conversion',
-    google_etag = '"etag-conversion"',
-    projected_operation = 'upsert',
-    projected_starts_at = appointment.starts_at,
-    projected_ends_at = appointment.ends_at
-from public.appointments appointment, safety_conversion conversion
-where job.appointment_id = conversion.appointment_id
-  and appointment.id = conversion.appointment_id;
-
 select is(
-  (
-    select count(*)::integer
-    from safety_generation, safety_lease,
-      lateral public.claim_google_calendar_external_cleanup(
-        safety_generation.generation, safety_lease.lease_token, 5
-      ) cleanup
-    where cleanup.google_event_id = 'bloque-convertible'
-  ),
-  1,
-  'el cleanup aparece recién después de exportar el evento sustituto'
+  (select external_cleanup_status
+   from public.google_calendar_external_events
+   where google_event_id = 'bloque-convertible'),
+  'pending',
+  'confirmar el turno conserva intacto el evento manual original'
 );
 
 select is(
-  (
-    select public.complete_google_calendar_external_cleanup(
-      safety_generation.generation, safety_lease.lease_token,
-      'bloque-convertible', false, 'GOOGLE_DELETE_FAILED'
-    )
-    from safety_generation, safety_lease
-  ),
-  true,
-  'un fallo de borrado queda registrado sin perder el cleanup'
+  (select count(*)::integer
+   from public.google_calendar_sync_jobs job, safety_conversion conversion
+   where job.appointment_id = conversion.appointment_id),
+  0,
+  'confirmar un turno convertido tampoco habilita su proyección saliente'
 );
+
+select * from public.reconcile_google_calendar_sync();
 
 select is(
-  (
-    select count(*)::integer
-    from safety_generation, safety_lease,
-      lateral public.claim_google_calendar_external_cleanup(
-        safety_generation.generation, safety_lease.lease_token, 5
-      ) cleanup
-    where cleanup.google_event_id = 'bloque-convertible'
-  ),
-  1,
-  'un cleanup failed vuelve a reclamarse en la corrida siguiente'
+  (select count(*)::integer
+   from public.google_calendar_sync_jobs job, safety_conversion conversion
+   where job.appointment_id = conversion.appointment_id),
+  0,
+  'reconcile mantiene excluido el turno convertido sin duplicar Google'
 );
-
-create temporary table safety_cleanup_completion as
-select public.complete_google_calendar_external_cleanup(
-  safety_generation.generation, safety_lease.lease_token,
-  'bloque-convertible', true, null
-) as completed
-from safety_generation, safety_lease;
 
 select ok(
-  (select completed from safety_cleanup_completion)
-  and (
-    select external_cleanup_status = 'done'
-    from public.google_calendar_external_events
-    where google_event_id = 'bloque-convertible'
+  (select status = 'converted'
+      and external_cleanup_status = 'pending'
+      and external_cleanup_error is null
+   from public.google_calendar_external_events
+   where google_event_id = 'bloque-convertible')
+  and not public.appointment_slot_is_available(
+    '97000000-0000-4000-8000-000000000002',
+    (select free_slot from safety_fixture), 60, null,
+    'America/Argentina/Buenos_Aires'
   ),
-  'el retry exitoso cierra y limpia el error del cleanup'
+  'el bloqueo convertido permanece como ocupación read-only, sin cleanup'
 );
 
 -- ---------------------------------------------------------------------------
 -- Cambio de cuenta y de calendario
 -- ---------------------------------------------------------------------------
+
+-- El tombstone observado arriba confirma que el evento administrado ya no
+-- existe. Se completa localmente ese delete antes de desconectar para no
+-- violar la barrera DRAIN de una asociación durable.
+delete from public.google_calendar_sync_conflicts conflict
+where conflict.appointment_id = '97000000-0000-4000-8000-000000000004';
+update public.appointments
+set status = 'cancelled'
+where id = '97000000-0000-4000-8000-000000000004';
+
+do $drain_managed_mapping$
+declare
+  claimed record;
+begin
+  select * into claimed
+  from safety_generation, lateral public.claim_google_calendar_sync_jobs(
+    1, safety_generation.generation, 2
+  );
+  if claimed.job_id is null then
+    raise exception 'expected managed delete claim before disconnect';
+  end if;
+  if not public.complete_google_calendar_sync_job(
+    claimed.job_id,
+    claimed.desired_version,
+    claimed.google_event_id,
+    claimed.connection_generation,
+    null,
+    claimed.starts_at,
+    claimed.ends_at,
+    (select epoch from safety_automation),
+    'absent'
+  ) then
+    raise exception 'expected managed delete completion before disconnect';
+  end if;
+end;
+$drain_managed_mapping$;
 
 do $disconnect_account_a$
 declare

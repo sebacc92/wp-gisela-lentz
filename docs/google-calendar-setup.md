@@ -1,9 +1,9 @@
 # Google Calendar: conexión y sincronización
 
-> **Estado de Gisela (4 de septiembre de 2026):** esta integración está
-> implementada localmente, pero sus Functions, secretos y cron aún no fueron
-> preparados en producción. No iniciar OAuth ni pedir a Gisela que conecte su
-> cuenta hasta completar y autorizar ese despliegue técnico separado.
+> **Estado operativo:** el código y las migraciones se publican con la
+> automatización saliente desactivada. Conectar Calendar o desplegar no instala
+> por sí solo el cron ni autoriza escrituras; la activación requiere una acción
+> técnica separada después de verificar importación v2, calendario y alcance.
 
 La integración permite que Gisela conecte su cuenta desde **Configuración →
 Google Calendar → Conectar**. Google muestra su pantalla de consentimiento y la
@@ -27,43 +27,53 @@ pendientes de revisión en lugar de sobreescribir silenciosamente un turno.
 
 ## Qué se sincroniza
 
-- alta, cambio de nombre y reprogramación desde la aplicación: crea o actualiza
-  el mismo evento;
+- una pre-reserva vigente creada después de la activación aparece como
+  `Pendiente de seña · Nombre`;
+- al confirmar la seña, cambiar el nombre o reprogramar desde la aplicación se
+  actualiza el mismo evento como `Turno confirmado · Nombre`;
 - cancelación desde la aplicación: elimina el evento administrado; el turno se
   conserva como historial y no se borra físicamente;
 - cada turno conserva un ID determinista, así los reintentos no duplican
   eventos;
-- el evento contiene únicamente `Turno odontológico · Nombre`, inicio, fin y un
-  identificador privado del turno;
+- el evento contiene únicamente el título operativo, inicio, fin y marcadores
+  privados de la asociación exacta con el turno y la activación;
 - cada evento se marca además con visibilidad privada, como defensa adicional si
   Gisela comparte el calendario;
 - no se envían teléfono, nota interna, servicio, motivo clínico, asistentes ni
   notificaciones de Google (`sendUpdates=none`).
 - después de la aprobación inicial, los eventos manuales de Google compatibles
   se importan como **bloqueos de agenda**, nunca como pacientes ni turnos;
-- una ADMIN puede convertir un bloqueo en un turno desde la agenda. Si queda
-  esperando seña, el evento original sigue bloqueando el horario; se retira
-  recién cuando existe el evento sustituto administrado o cuando la cancelación
-  quedó confirmada en Google;
-- los eventos de todo el día y las series recurrentes quedan como no soportados
-  para revisión; mientras exista alguno sin resolver, la disponibilidad falla
-  cerrada para evitar una doble reserva;
+- una ADMIN puede convertir un bloqueo en un turno desde la agenda, pero el
+  evento externo original sigue siendo de sólo lectura: no se reemplaza ni se
+  elimina desde la aplicación y no se crea otra proyección para ese turno;
+- los eventos de todo el día y las ocurrencias de series recurrentes se leen
+  dentro de la cobertura móvil y bloquean su rango ocupado. Excepciones movidas
+  o canceladas conservan la identidad de la ocurrencia;
 - mover o borrar en Google un evento que administra la aplicación crea un
   conflicto pendiente. Una ADMIN debe aplicar o rechazar el cambio; Google no
   cancela ni reprograma silenciosamente un turno de paciente.
 
-Al desconectar se eliminan la credencial activa y cualquier candidato local; la
-Function también intenta revocar en Google, sin duplicarlos, tanto el grant
-activo como el candidato. Si Google no está disponible, la desconexión local
-igualmente prevalece y la revocación se puede completar después desde la cuenta
-de Google. Los eventos remotos se conservan.
+Al desconectar sin un epoch activo ni mappings vivos se eliminan la credencial
+activa y cualquier candidato local; la Function también intenta revocar en
+Google, sin duplicarlos, tanto el grant activo como el candidato. Si Google no
+está disponible, la desconexión local igualmente prevalece y la revocación se
+puede completar después desde la cuenta de Google. Los eventos remotos se
+conservan.
+
+Si la automatización ya creó eventos que todavía representan pre-reservas o
+turnos, desconectar o cambiar cuenta/calendario falla con
+`GOOGLE_CALENDAR_AUTOMATION_DRAIN_REQUIRED`. Pausar cron no elimina esa
+barrera: primero hay que reconciliar cada mapping hasta `absent` bajo el mismo
+alcance. Nunca forzar la conexión por SQL ni abandonar eventos administrados en
+otro calendario.
 
 Una reconexión vuelve a exigir una selección explícita. Mientras exista una
 conexión activa, autorizar otra cuenta sólo prepara el candidato: la cuenta, el
 calendario, los tokens incrementales, los bloqueos y la cola anteriores no
-cambian hasta confirmar un calendario owner válido. La confirmación rota la
-generación de conexión de forma atómica y vuelve a exigir preview y aprobación
-para el nuevo alcance.
+cambian hasta confirmar un calendario owner válido. Reautorizar exactamente la
+misma cuenta/calendario conserva el epoch y re-bindea la generación; cualquier
+destino distinto exige que el alcance anterior ya esté drenado. En ambos casos
+se vuelve a exigir preview y aprobación.
 
 ## 1. Preparar Google Cloud
 
@@ -123,8 +133,9 @@ permisos de Calendar](https://developers.google.com/workspace/calendar/api/auth)
 Las conexiones creadas con el permiso legado `calendar.app.created` deben pasar
 otra vez por OAuth después de desplegar esta versión. Un refresh token anterior
 no adquiere los dos permisos nuevos por el solo hecho de actualizar el código.
-No habilitar la sincronización productiva hasta comprobar el consentimiento y la
-selección con la cuenta de prueba.
+No habilitar la sincronización productiva hasta comprobar el consentimiento, la
+selección y la importación v2 con la cuenta y el calendario definitivos. No
+reutilizar ni exportar trabajos de una conexión de prueba anterior.
 
 ## 2. Configurar secretos de Edge Functions
 
@@ -179,34 +190,102 @@ pnpm exec supabase functions deploy process-calendar-sync
 ```
 
 Después desplegar el frontend. `google-calendar-selection` debe existir antes de
-publicar la pantalla que consume `selectionPending`. No reanudar el cron hasta
-completar las verificaciones de sólo lectura y la prueba controlada.
+publicar la pantalla que consume `selectionPending`. Las migraciones terminan
+sin cron de Calendar y con la salida desactivada: no instalar el scheduler hasta
+recibir la autorización explícita posterior al preflight.
 
 ## 4. Mantener la sincronización activa
 
-Crear un cron que invoque `process-calendar-sync` cada minuto con método `POST`
-y el encabezado:
+La migración instala infraestructura inerte para un único cron cada minuto y un
+disparo inmediato transaccional. La URL exacta y el secreto dedicado deben
+existir una sola vez en Supabase Vault; nunca se escriben en SQL ni en el
+repositorio. Sólo `postgres` puede ejecutar la instalación explícita, que valida
+el calendario, la generación, la importación v2 y la ausencia de trabajo previo
+en curso antes de crear el epoch de autorización.
 
-```text
-x-google-calendar-cron-secret: VALOR_DE_GOOGLE_CALENDAR_CRON_SECRET
+Cada cambio autorizado deja una tarea durable en la misma transacción. El
+servidor solicita el procesamiento inmediato y el cron funciona como
+recuperación: consulta cambios entrantes, renueva la cobertura móvil de 21 días,
+procesa vencimientos y reintenta fallos transitorios. Ambos caminos usan el
+mismo lease y la misma cola idempotente. El botón **Sincronizar ahora** conserva
+los permisos y controles del procesador existente.
+
+### Preparar la activación sin encenderla
+
+Antes de instalar el scheduler:
+
+1. Guardar en **Edge Functions → Secrets** un valor aleatorio de al menos 32
+   caracteres con el nombre exacto GOOGLE_CALENDAR_CRON_SECRET. No reutilizar
+   secretos de WhatsApp ni escribir el valor en SQL, Git, logs o el historial de
+   la terminal.
+2. En **Database → Vault**, crear exactamente dos secretos:
+   - google_calendar_automation_project_url: la URL
+     https://PROJECT_REF.supabase.co;
+   - google_calendar_automation_cron_secret: el mismo valor aleatorio
+     configurado en la Edge Function.
+3. Verificar que exista una sola fila por cada nombre. La instalación falla
+   cerrada si falta una, si hay duplicados, si la URL no coincide con el project
+   ref compilado o si el secreto no cumple la longitud mínima.
+4. Comprobar desde Data API que Accept-Profile: net responda
+   PGRST106 Invalid schema. net.http_request_queue y net.\_http_response son
+   infraestructura interna de Supabase y no deben figurar entre los schemas
+   expuestos.
+5. Consultar por lectura la generación activa, importación v2, cobertura, lease,
+   conflictos y jobs previos. No copiar IDs de eventos, tokens ni datos de
+   pacientes al informe.
+
+Crear esos secretos todavía no instala cron, no cambia el epoch y no toca
+Google.
+
+### Activar sólo después de la autorización
+
+La activación debe ocurrir **antes** de crear la primera pre-reserva que se
+quiera proyectar. El timestamp de esa transacción es el corte: ningún turno ni
+job anterior puede adoptar el epoch.
+
+Desde una sesión postgres, sustituyendo únicamente la generación ya verificada:
+
+```sql
+select private.install_google_calendar_automatic_schedule(
+  <GENERACION_VERIFICADA>
+);
+
+select private.google_calendar_automatic_schedule_status();
 ```
 
-URL:
+El primer resultado debe informar enabled=true y un solo job cada minuto. El
+segundo debe informar configurationConsistent=true, configuredJobs=1 y
+activeJobs=1. Recién después se crea la pre-reserva ficticia autorizada y se
+valida el ciclo.
 
-```text
-https://PROJECT_REF.supabase.co/functions/v1/process-calendar-sync
+### Pausa y recuperación
+
+Ante una falla después de activar, pausar únicamente el job exacto conserva los
+mappings y corta tanto el cron como el disparo inmediato, porque la
+configuración deja de ser consistente:
+
+```sql
+select cron.alter_job(
+  job_id := (
+    select cron_job_id
+    from private.google_calendar_automatic_config
+    where id = true
+  ),
+  active := false
+);
 ```
 
-Guardar URL y secreto en Supabase Vault; no escribir el secreto directamente
-en SQL. Supabase documenta este patrón en
-[Scheduling Edge Functions](https://supabase.com/docs/guides/functions/schedule-functions).
+Corregir o revertir frontend/Functions desde la revisión recuperable y volver a
+activar ese mismo job sólo tras validar el contrato. No borrar la configuración
+ni crear otro cron. La desinstalación definitiva:
 
-Cada cambio de turno deja una tarea durable en Postgres. El worker toma las
-tareas con bloqueo, renueva el access token, realiza operaciones idempotentes y
-reintenta fallos transitorios con espera exponencial. También ejecuta una
-reconciliación para reparar tareas perdidas. En la práctica, un cambio se verá
-en Google normalmente dentro del minuto siguiente; el botón **Sincronizar
-ahora** permite hacerlo de inmediato.
+```sql
+select private.uninstall_google_calendar_automatic_schedule();
+```
+
+falla cerrada mientras quede un evento administrado que deba actualizarse o
+retirarse. Sólo usarla cuando todos los mappings del epoch estén drenados a
+absent; nunca para forzar un rollback.
 
 Una sincronización completa lista la ventana futura y, además, audita por ID los
 eventos administrados conocidos que no aparecieron allí. Así un turno movido al
@@ -235,61 +314,62 @@ ejemplo `[PRUEBA CALENDAR]`. No usar datos reales para validar el despliegue.
 5. No aprobar si el recorrido aparece truncado o informa eventos no soportados.
    Aprobar la primera importación y usar **Sincronizar ahora**. Un evento manual
    ficticio debe aparecer como bloqueo, no como paciente ni turno.
-6. Crear y confirmar un turno ficticio desde la aplicación y sincronizar. Debe
-   aparecer una sola vez en Google aun si se repite la sincronización. Un turno
-   que siga en `scheduled` no debe exportarse.
-7. Cambiar nombre y horario desde la aplicación. Debe actualizarse el mismo
-   evento.
-8. Mover el evento administrado desde Google. Debe aparecer un conflicto para
+6. Repetir el preflight de alcance y, con autorización explícita, instalar el
+   scheduler para la generación comprobada. Confirmar un solo cron activo y
+   configuración consistente.
+7. Crear una pre-reserva ficticia autorizada **después** de ese corte. Debe
+   aparecer una sola vez como
+   `Pendiente de seña · Nombre`, aun si se repite la sincronización.
+8. Confirmar la seña, cambiar el nombre y reprogramar. Debe actualizarse el
+   mismo ID como `Turno confirmado · Nombre`.
+9. Mover el evento administrado desde Google. Debe aparecer un conflicto para
    aplicar o rechazar; el turno interno no cambia antes de esa decisión.
-9. Rechazar ese conflicto para restaurar la proyección y luego cancelar el turno
-   desde la aplicación. El evento administrado debe desaparecer sin borrar el
-   historial interno.
-10. Desconectar y confirmar que desaparecen las credenciales y el alcance
-    locales, mientras los eventos ya creados se conservan en Google.
-11. Revisar que logs, respuestas de Edge y tablas públicas no contengan tokens,
+10. Rechazar ese conflicto para restaurar la proyección y luego cancelar el turno
+    desde la aplicación. El evento administrado debe desaparecer sin borrar el
+    historial interno.
+11. Tras comprobar que el evento cancelado dejó el epoch drenado a absent,
+    desinstalar y desconectar. Deben desaparecer las credenciales y el alcance
+    locales; los eventos externos permanecen intactos en Google.
+12. Revisar que logs, respuestas de Edge y tablas públicas no contengan tokens,
     códigos OAuth, teléfonos ni notas internas.
 
-No habilitar el cron definitivo hasta completar esta prueba con el proyecto,
-dominio y cuenta correctos.
+No activar el scheduler ni crear un evento de prueba real sin autorización
+explícita, aun cuando el código ya esté desplegado.
 
 ## 6. Reemplazar una cuenta de prueba por la cuenta real
 
-El cambio intencional desde una cuenta de prueba se hace con una ventana corta
-sin sincronización. No reutilizar el calendario ni las credenciales de prueba:
+Un retarget sólo es seguro si la automatización nunca se activó o si todos sus
+mappings ya terminaron en `absent`. Una pausa no convierte un alcance con
+eventos vivos en drenado.
 
-1. Confirmar que la cuenta real ya posee el calendario definitivo, con la zona
-   horaria exacta de la aplicación.
-2. Pausar sólo el cron de Calendar y esperar a que no haya jobs en
-   `processing` ni un lease entrante vigente.
-3. Guardar un diagnóstico de sólo lectura de la conexión y de los contadores de
-   cola. No copiar tokens, IDs de Vault ni datos de pacientes.
-4. Desde Configuración, desconectar la cuenta de prueba. Esta acción cancela la
-   cola de la generación anterior y deja de considerar sus bloqueos; no borra
-   sus eventos en Google.
-5. Iniciar OAuth con la cuenta real y completar la selección dentro de los 15
+1. Confirmar que la cuenta real posee el calendario definitivo y que su zona
+   horaria coincide exactamente con la aplicación.
+2. Si existe scheduler, pausar únicamente su `cron_job_id`. Esperar a que no
+   haya jobs `processing` ni lease entrante vigente.
+3. Guardar un diagnóstico de sólo lectura: epoch, estados agregados de jobs y
+   cantidad de mappings vivos. No copiar tokens, IDs de eventos, nombres de
+   pacientes ni secretos.
+4. Si queda cualquier mapping `pre_reservation` o `confirmed`, no
+   desconectar ni confirmar otro destino. Continuar operando el alcance actual
+   o resolver el drenaje con una decisión explícita; la aplicación no mueve ni
+   abandona esos eventos.
+5. Sólo con cero mappings vivos, ejecutar la desinstalación y comprobar
+   configuración inactiva y cero jobs de Calendar. Luego desconectar desde
+   Configuración; no borrar ni modificar eventos del calendario anterior.
+6. Iniciar OAuth con la cuenta real y completar la selección dentro de los 15
    minutos. Si vence, volver a conectar; nunca forzar la selección con datos
    guardados del intento anterior.
-6. Antes de confirmar, revisar nombre, indicador de principal y zona horaria.
-   Al confirmar se crea una generación nueva y se encolan los turnos futuros ya
-   confirmados. Mantener el cron pausado hasta decidir que esos turnos realmente
-   deben copiarse al calendario elegido.
-7. Verificar por lectura que el estado sea conectado, que no quede una selección
-   pendiente y que los bloqueos/conflictos de la cuenta de prueba no aparezcan
-   en el alcance activo.
-8. Ejecutar el preview de la cuenta real. Aprobar la primera importación sólo si
-   los contadores corresponden al calendario esperado, el recorrido no está
-   truncado y no hay eventos no soportados. Verificar además que ningún turno
-   confirmado ya cargado se solape con un evento manual: esos casos deben
-   resolverse antes de habilitar su salida para no duplicarlos.
-9. Hacer una sincronización manual controlada y comprobar creación, edición y
-   reintento con un turno ficticio. Luego reanudar el cron y verificar una corrida
-   correcta.
-10. Recién después de validar la cuenta real, quitar el acceso de la aplicación
-    desde la cuenta de prueba si la revocación automática no quedó confirmada.
+7. Antes de confirmar, revisar nombre, indicador de principal y zona horaria.
+   Confirmar crea una generación nueva, pero no adopta ni exporta turnos o jobs
+   anteriores.
+8. Ejecutar preview, aprobar la primera importación y completar una lectura
+   manual. No continuar si el alcance está truncado, tiene disponibilidad
+   ambigua o no coincide con el calendario esperado.
+9. Repetir el preflight y activar sólo con autorización explícita. Crear la
+   primera pre-reserva ficticia después del nuevo corte y validar el mismo ID a
+   través del ciclo.
 
-Si se confirmó el calendario incorrecto pero el cron sigue pausado, no ejecutar
-**Sincronizar ahora**: desconectar y repetir OAuth con el destino correcto. Si ya
-hubo escrituras, detener la sincronización y reconciliar esos eventos antes de
-otro cambio de cuenta; la aplicación no los elimina del calendario anterior de
-forma automática.
+Si se confirmó un calendario incorrecto **antes de activar**, no ejecutar
+**Sincronizar ahora**: desconectar y repetir OAuth. Si ya hubo escrituras, pausar
+y conservar el mismo alcance hasta drenar; no forzar el retarget ni eliminar
+eventos anteriores.

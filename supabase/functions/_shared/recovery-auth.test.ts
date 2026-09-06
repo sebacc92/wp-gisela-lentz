@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { authorizeProcessorRequest } from "./recovery-auth.ts";
+import { authorizeProcessorRequest, secretMatches } from "./recovery-auth.ts";
 
 const INTERNAL_SECRET = "11".repeat(32);
 const COEXISTENCE_RECOVERY_SECRET = "22".repeat(32);
@@ -74,6 +74,20 @@ test("rejects missing, incorrect and partial secrets", async () => {
     }),
     false,
   );
+});
+
+test("compares a dedicated secret through fixed-size digests", async () => {
+  assert.equal(await secretMatches(INTERNAL_SECRET, INTERNAL_SECRET), true);
+  assert.equal(
+    await secretMatches(` ${INTERNAL_SECRET} `, INTERNAL_SECRET),
+    true,
+  );
+  assert.equal(await secretMatches("", INTERNAL_SECRET), false);
+  assert.equal(
+    await secretMatches(INTERNAL_SECRET.slice(0, -1), INTERNAL_SECRET),
+    false,
+  );
+  assert.equal(await secretMatches(INTERNAL_SECRET, ""), false);
 });
 
 test("does not accept a valid secret in the other header namespace", async () => {

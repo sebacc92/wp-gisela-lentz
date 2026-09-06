@@ -15,7 +15,7 @@ function constantTimeDigestEqual(left: Uint8Array, right: Uint8Array): boolean {
   return difference === 0;
 }
 
-async function secretMatches(
+export async function secretMatches(
   providedSecret: string,
   expectedSecret: string,
 ): Promise<boolean> {

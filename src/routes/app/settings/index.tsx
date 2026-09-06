@@ -356,6 +356,8 @@ export default component$(() => {
     syncStatus: "synced" as GoogleCalendarSyncStatus,
     lastSyncedAt: "",
     lastCheckedAt: "",
+    lastSyncCompletedAt: "",
+    automationActive: false,
     lastSyncError: "",
     inboundSyncState: "",
     firstImportApproved: false,
@@ -567,10 +569,16 @@ export default component$(() => {
         typeof data.calendarName === "string" ? data.calendarName : "";
       const lastCheckedAt =
         typeof data.lastCheckedAt === "string" ? data.lastCheckedAt : "";
+      const lastSyncCompletedAt =
+        typeof data.lastSyncCompletedAt === "string"
+          ? data.lastSyncCompletedAt
+          : "";
       const inboundSyncState =
         typeof data.inboundSyncState === "string" ? data.inboundSyncState : "";
       const firstImportApproved = data.firstImportApproved === true;
       googleCalendar.lastCheckedAt = lastCheckedAt;
+      googleCalendar.lastSyncCompletedAt = lastSyncCompletedAt;
+      googleCalendar.automationActive = data.automationActive === true;
       googleCalendar.lastSyncError =
         typeof data.lastSyncError === "string" ? data.lastSyncError : "";
       googleCalendar.inboundSyncState = inboundSyncState;
@@ -579,7 +587,8 @@ export default component$(() => {
         status: data.status,
         firstImportApproved,
         inboundSyncState,
-        lastCheckedAt,
+        lastSyncCompletedAt,
+        automationActive: googleCalendar.automationActive,
       });
       googleCalendar.blockCount = Number(data.blockCount ?? 0);
       googleCalendar.unsupportedCount = Number(data.unsupportedCount ?? 0);
@@ -2159,9 +2168,9 @@ export default component$(() => {
                         <span>
                           <strong>Calendario conectado</strong>
                           <small>
-                            Los turnos confirmados y sus cambios se copian
-                            automáticamente en pocos minutos. Los turnos aún
-                            programados no se envían.
+                            {googleCalendar.automationActive
+                              ? "Las pre-reservas vigentes, los turnos confirmados y sus cambios se copian automáticamente en pocos minutos."
+                              : "Google Calendar está conectado, pero todavía no se hacen escrituras automáticas."}
                           </small>
                         </span>
                         <span
@@ -2169,6 +2178,7 @@ export default component$(() => {
                             "google-calendar-state": true,
                             pending:
                               googleCalendar.syncStatus === "pending" ||
+                              googleCalendar.syncStatus === "inactive" ||
                               googleCalendar.syncStatus === "first_import" ||
                               googleCalendar.syncStatus === "not_checked",
                             reconnect:
@@ -2180,15 +2190,17 @@ export default component$(() => {
                           <i />
                           {googleCalendar.syncStatus === "pending"
                             ? "Sincronizando"
-                            : googleCalendar.syncStatus === "first_import"
-                              ? "Importación pendiente"
-                              : googleCalendar.syncStatus === "not_checked"
-                                ? "Sin revisión"
-                                : googleCalendar.syncStatus === "attention"
-                                  ? "Revisar sincronización"
-                                  : googleCalendar.syncStatus === "reconnect"
-                                    ? "Volver a conectar"
-                                    : "Todo al día"}
+                            : googleCalendar.syncStatus === "inactive"
+                              ? "Automatización no activada"
+                              : googleCalendar.syncStatus === "first_import"
+                                ? "Importación pendiente"
+                                : googleCalendar.syncStatus === "not_checked"
+                                  ? "Sin revisión"
+                                  : googleCalendar.syncStatus === "attention"
+                                    ? "Revisar sincronización"
+                                    : googleCalendar.syncStatus === "reconnect"
+                                      ? "Volver a conectar"
+                                      : "Todo al día"}
                         </span>
                       </div>
 
@@ -2205,10 +2217,10 @@ export default component$(() => {
                           </dd>
                         </div>
                         <div>
-                          <dt>Última revisión</dt>
+                          <dt>Última revisión exitosa</dt>
                           <dd>
                             {formatLastCalendarSync(
-                              googleCalendar.lastCheckedAt,
+                              googleCalendar.lastSyncCompletedAt,
                             )}
                           </dd>
                         </div>
@@ -2248,11 +2260,12 @@ export default component$(() => {
                         <Icon name="info" size={18} />
                         <span>
                           <strong>Los turnos se administran desde acá.</strong>
-                          Si cambiás o cancelás un turno confirmado en esta
-                          aplicación, el cambio se envía a Google Calendar en
-                          pocos minutos. Los eventos que crees a mano en Google
-                          aparecen acá como bloqueos de agenda, nunca como
-                          turnos de pacientes.
+                          {googleCalendar.automationActive
+                            ? " Las pre-reservas y los turnos nuevos creados después de la activación se envían a Google; sus cambios y cancelaciones actualizan ese mismo evento."
+                            : " La sincronización manual sólo revisa Google. Las pre-reservas y los turnos todavía no se envían hasta activar la automatización."}{" "}
+                          Los eventos que crees a mano en Google aparecen acá
+                          como bloqueos de agenda, nunca como turnos de
+                          pacientes.
                         </span>
                       </div>
 
@@ -2908,6 +2921,7 @@ export default component$(() => {
                               !canRunManualGoogleCalendarSync(
                                 googleCalendar.firstImportApproved,
                                 googleCalendar.inboundSyncState,
+                                googleCalendar.connected,
                               ) ||
                               Boolean(googleCalendar.action) ||
                               Boolean(googleCalendar.resolving)
@@ -2917,6 +2931,7 @@ export default component$(() => {
                                 !canRunManualGoogleCalendarSync(
                                   googleCalendar.firstImportApproved,
                                   googleCalendar.inboundSyncState,
+                                  googleCalendar.connected,
                                 )
                               ) {
                                 googleCalendar.error = false;
@@ -2970,7 +2985,7 @@ export default component$(() => {
                                         summary,
                                         outcome,
                                         checkedAt:
-                                          googleCalendar.lastCheckedAt ||
+                                          googleCalendar.lastSyncCompletedAt ||
                                           new Date(),
                                         skippedReason:
                                           typeof data?.inbound
@@ -3035,6 +3050,9 @@ export default component$(() => {
                                 googleCalendar.email = "";
                                 googleCalendar.calendarName = "";
                                 googleCalendar.lastSyncedAt = "";
+                                googleCalendar.lastCheckedAt = "";
+                                googleCalendar.lastSyncCompletedAt = "";
+                                googleCalendar.automationActive = false;
                                 googleCalendar.syncStatus = "synced";
                                 googleCalendar.message =
                                   data.remoteRevocationConfirmed === true

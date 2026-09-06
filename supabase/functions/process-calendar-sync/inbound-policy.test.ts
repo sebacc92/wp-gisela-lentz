@@ -61,6 +61,8 @@ test("el preview cuenta por categoría sin exponer ningún detalle", () => {
         private: {
           managed_by: "gisela_lentz_agenda",
           appointment_id: "8c4b7679-f3b8-4bd8-98cb-a5a57a49b9e1",
+          automation_epoch: "11111111-1111-4111-8111-111111111111",
+          projection_stage: "confirmed",
         },
       },
       start: { dateTime: "2026-09-04T14:00:00.000Z" },

@@ -195,6 +195,7 @@ export interface CalendarManualStatusInput {
   configured: boolean | null;
   connected: boolean | null;
   status: string | null;
+  automationActive?: boolean | null;
   pendingCount: number | null;
   failedCount: number | null;
 }
@@ -275,11 +276,27 @@ export function calendarManualStatus(
     };
   }
   if (input.pendingCount > 0 || input.status === "pending") {
+    if (input.automationActive !== true) {
+      return {
+        tone: "pending",
+        title: "Google Calendar tiene cambios pendientes",
+        detail:
+          "La sincronización automática no está activa. Revisá los cambios desde Configuración → Google Calendar.",
+      };
+    }
     return {
       tone: "pending",
       title: "Google Calendar se está actualizando",
       detail:
         "Los turnos se están sincronizando. Volvé a revisar en unos minutos.",
+    };
+  }
+  if (input.automationActive !== true) {
+    return {
+      tone: "neutral",
+      title: "Google Calendar está conectado",
+      detail:
+        "La sincronización automática todavía no está activa. Revisá o sincronizá desde Configuración → Google Calendar.",
     };
   }
   return {

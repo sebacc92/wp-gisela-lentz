@@ -70,11 +70,11 @@ values (
 create temporary table calendar_fixture as
 select
   (
-    ((current_date + 60)::text || ' 15:00')::timestamp
+    ((current_date + 6)::text || ' 15:00')::timestamp
     at time zone (select timezone from public.app_settings where id = true)
   ) as free_slot,
   (
-    ((current_date + 61)::text || ' 09:00')::timestamp
+    ((current_date + 7)::text || ' 09:00')::timestamp
     at time zone (select timezone from public.app_settings where id = true)
   ) as appointment_start;
 
@@ -135,7 +135,7 @@ select bounds.starts_at,
        bounds.starts_at + interval '21 days' as ends_at
 from (
   select (
-    ((current_date + 55)::text || ' 00:00')::timestamp
+    (((current_date - 1)::text || ' 00:00')::timestamp)
       at time zone (select timezone from public.app_settings where id = true)
   ) as starts_at
 ) bounds;
@@ -194,6 +194,34 @@ select public.complete_google_calendar_inbound_sync(
   calendar_sync_window.ends_at
 ) from calendar_generation, calendar_lease, calendar_sync_window;
 delete from calendar_lease;
+
+create temporary table calendar_automation as
+select public.activate_google_calendar_automation(
+  calendar_generation.generation
+) as epoch
+from calendar_generation;
+
+-- Este turno antecede al cutoff. Sólo es managed porque el fixture declara la
+-- asociación remota exacta ya existente; la activación no lo backfillea.
+insert into public.google_calendar_sync_jobs (
+  appointment_id, operation, desired_version, connection_generation, status,
+  attempts, available_at, google_event_id, google_etag,
+  projected_operation, projected_starts_at, projected_ends_at,
+  automation_epoch, authorized_google_account_id,
+  authorized_google_calendar_id, authorized_connection_generation,
+  projection_stage, projected_stage
+)
+select appointment.id, 'upsert', 1, generation.generation, 'succeeded',
+       1, clock_timestamp(),
+       public.google_calendar_automation_event_id(appointment.id),
+       '"etag-managed-initial"', 'upsert',
+       appointment.starts_at, appointment.ends_at,
+       automation.epoch, 'google-user-bidi', 'calendar-id-bidi',
+       generation.generation, 'confirmed', 'confirmed'
+from public.appointments appointment, calendar_generation generation,
+     calendar_automation automation
+where appointment.id = '95000000-0000-4000-8000-000000000004';
+
 insert into calendar_lease (lease_token, sync_token, first_import_approved)
 select lease.lease_token, lease.sync_token, lease.first_import_approved
 from calendar_generation, lateral public.begin_google_calendar_inbound_sync(
@@ -329,9 +357,10 @@ select is(
       calendar_generation.generation, calendar_lease.lease_token,
       'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
       '95000000-0000-4000-8000-000000000004', false,
-      appointment.starts_at, appointment.ends_at, clock_timestamp()
+      appointment.starts_at, appointment.ends_at, clock_timestamp(),
+      '"etag-managed-initial"', automation.epoch, 'confirmed', true
     )
-    from calendar_generation, calendar_lease,
+    from calendar_generation, calendar_lease, calendar_automation automation,
       public.appointments appointment
     where appointment.id = '95000000-0000-4000-8000-000000000004'
   ),
@@ -340,7 +369,8 @@ select is(
 );
 
 select is(
-  (select count(*)::integer from public.google_calendar_sync_jobs),
+  (select count(*)::integer from public.google_calendar_sync_jobs
+   where status in ('pending', 'processing')),
   0,
   'una observación en sincronía no encola trabajo saliente'
 );
@@ -352,9 +382,10 @@ select is(
       'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
       '95000000-0000-4000-8000-000000000004', false,
       appointment.starts_at + interval '2 hours',
-      appointment.ends_at + interval '2 hours', clock_timestamp()
+      appointment.ends_at + interval '2 hours', clock_timestamp(),
+      '"etag-managed-moved"', automation.epoch, 'confirmed', false
     )
-    from calendar_generation, calendar_lease,
+    from calendar_generation, calendar_lease, calendar_automation automation,
       public.appointments appointment
     where appointment.id = '95000000-0000-4000-8000-000000000004'
   ),
@@ -377,9 +408,11 @@ select is(
     select public.observe_google_calendar_managed_event(
       calendar_generation.generation, calendar_lease.lease_token,
       'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
-      '95000000-0000-4000-8000-000000000004', true, null, null, clock_timestamp()
+      '95000000-0000-4000-8000-000000000004', true, null, null,
+      clock_timestamp(), '"etag-managed-deleted"', automation.epoch, null,
+      false
     )
-    from calendar_generation, calendar_lease
+    from calendar_generation, calendar_lease, calendar_automation automation
   ),
   'conflict_recorded',
   'borrar el evento en Google convierte la propuesta en cancelación pendiente'
@@ -593,10 +626,34 @@ select
   'confirmed', 'manual', 'particular', 60, 'confirmed'
 from calendar_apply_fixture fixture;
 
--- Igual que el caso de una reconexion: el evento determinista existe en
--- Google, pero esta generacion todavia no tiene baseline saliente.
-delete from public.google_calendar_sync_jobs
-where appointment_id = '95000000-0000-4000-8000-000000000022';
+-- El evento managed sólo se reconoce con asociación local exacta. Este
+-- fixture declara el baseline que una exportación confirmada habría guardado.
+insert into public.google_calendar_sync_jobs (
+  appointment_id, operation, desired_version, connection_generation, status,
+  attempts, available_at, google_event_id, google_etag,
+  projected_operation, projected_starts_at, projected_ends_at,
+  automation_epoch, authorized_google_account_id,
+  authorized_google_calendar_id, authorized_connection_generation,
+  projection_stage, projected_stage
+)
+select appointment.id, 'upsert', 1, generation.generation, 'succeeded',
+       1, clock_timestamp(),
+       public.google_calendar_automation_event_id(appointment.id),
+       '"etag-apply-baseline"', 'upsert',
+       appointment.starts_at, appointment.ends_at,
+       automation.epoch, 'google-user-bidi', 'calendar-id-bidi',
+       generation.generation, 'confirmed', 'confirmed'
+from public.appointments appointment, calendar_generation generation,
+     calendar_automation automation
+where appointment.id = '95000000-0000-4000-8000-000000000022'
+on conflict (appointment_id) do update
+set status = 'succeeded',
+    attempts = 1,
+    google_etag = excluded.google_etag,
+    projected_operation = excluded.projected_operation,
+    projected_starts_at = excluded.projected_starts_at,
+    projected_ends_at = excluded.projected_ends_at,
+    projected_stage = excluded.projected_stage;
 
 create temporary table calendar_apply_lease as
 select lease.lease_token
@@ -621,9 +678,11 @@ select is(
       '95000000-0000-4000-8000-000000000022', false,
       fixture.accepted_start,
       fixture.accepted_start + interval '60 minutes',
-      clock_timestamp(), '"etag-apply-outside-hours"'
+      clock_timestamp(), '"etag-apply-outside-hours"',
+      automation.epoch, 'confirmed', false
     )
     from calendar_generation, calendar_apply_lease,
+      calendar_automation automation,
       calendar_apply_fixture fixture
   ),
   'conflict_recorded',
@@ -803,9 +862,11 @@ select is(
       '95000000-0000-4000-8000-000000000022', false,
       fixture.blocked_start,
       fixture.blocked_start + interval '60 minutes',
-      clock_timestamp(), '"etag-apply-blocked"'
+      clock_timestamp(), '"etag-apply-blocked"',
+      automation.epoch, 'confirmed', false
     )
     from calendar_generation, calendar_apply_lease,
+      calendar_automation automation,
       calendar_apply_fixture fixture
   ),
   'conflict_recorded',

@@ -1,8 +1,9 @@
 # Sincronización bidireccional: orden de despliegue
 
-Este documento describe el orden previsto. **Nada de esto se ejecutó todavía.**
-El estado remoto (migraciones aplicadas, versiones de Functions y cron) no fue
-consultado en esta tarea: figura como **NO VERIFICADO**.
+Este documento describe el orden y las barreras de cada despliegue. El estado
+remoto nunca se infiere de este archivo: antes de cada intervención hay que
+comprobar por lectura migraciones, versiones de Functions, conexión, cola y
+cron del proyecto exacto.
 
 La versión nueva deja de crear o elegir calendarios automáticamente. OAuth
 prepara un candidato efímero y una ADMIN debe seleccionar un calendario
@@ -17,8 +18,9 @@ Antes de abrir la ventana de despliegue:
 2. Revisar por lectura qué migraciones faltan, el estado de la conexión, los
    contadores de jobs y si existe un lease entrante vigente. No copiar tokens,
    secretos ni datos de pacientes al registro de la intervención.
-3. Identificar el job remoto que invoca `process-calendar-sync`, su frecuencia y
-   el mecanismo exacto para pausarlo y reanudarlo. El repositorio no lo crea.
+3. Comprobar que no exista un job de Calendar antes de la activación e
+   identificar los crons ajenos (por ejemplo, WhatsApp) que deben permanecer
+   intactos.
 4. Confirmar que el calendario definitivo ya existe, pertenece a la cuenta que
    se conectará y usa exactamente la zona horaria configurada en la aplicación.
 5. Confirmar en Google Cloud la redirect URI exacta y los permisos nuevos:
@@ -35,15 +37,20 @@ Antes de abrir la ventana de despliegue:
 
 ## Orden obligatorio
 
-1. **Pausar sólo el cron de Calendar.** Esperar hasta que no haya jobs en
-   `processing` ni un lease entrante vigente. No iniciar OAuth, no desconectar y
-   no usar **Sincronizar ahora** durante la ventana.
+1. **Si existe un cron de Calendar, pausar sólo ese job.** Esperar hasta que no
+   haya jobs en `processing` ni un lease entrante vigente. No iniciar OAuth, no
+   desconectar y no usar **Sincronizar ahora** durante la ventana.
 2. **Aplicar migraciones** (`supabase db push`) en orden de timestamp:
    - `20260902220000_google_calendar_bidirectional_sync.sql`
    - `20260902230000_manual_deposit_proof_review.sql`
    - `20260903120000_google_calendar_conflict_safety.sql`
    - `20260903130000_deposit_review_hardening.sql`
    - `20260904120000_google_calendar_explicit_selection.sql`
+   - `20260905170000_google_calendar_conflict_admin_reschedule.sql`
+   - `20260905183000_google_calendar_disconnect_safe_update.sql`
+   - `20260905200000_google_calendar_windowed_recurrence.sql`
+   - `20260905210000_google_calendar_pre_reservation_projection.sql`
+   - `20260905220000_google_calendar_automatic_schedule.sql`
 3. **Desplegar todas las Edge Functions de Calendar desde la misma revisión:**
    - `google-calendar-selection`
    - `google-calendar-status`
@@ -55,8 +62,9 @@ Antes de abrir la ventana de despliegue:
    Function de selección y el nuevo status ya estén disponibles.
 5. **Verificar por lectura** que status responde, que `selectionPending` tiene un
    valor coherente y que la conexión activa anterior no cambió por el despliegue.
-6. Completar la prueba controlada y recién entonces **reanudar el cron**. Debe
-   quedar un solo scheduler activo para Calendar.
+6. Confirmar que la publicación quedó inerte. No instalar el scheduler ni crear
+   una pre-reserva real hasta completar el preflight y recibir autorización
+   explícita; la prueba del ciclo ocurre después de ese corte.
 
 `_shared/google-calendar.ts` se empaqueta dentro de cada Function que lo importa.
 Por eso no alcanza con desplegar sólo el callback: OAuth, selección, desconexión
@@ -64,19 +72,13 @@ y worker deben pertenecer a la misma revisión.
 
 ## Compatibilidad temporal con el runtime anterior
 
-Las migraciones bidireccionales conservan compatibilidad con un worker anterior:
-
-- `complete_google_calendar_sync_job` mantiene la firma de **4 argumentos** como
-  wrapper de la firma nueva de 7. El worker anterior puede cerrar jobs, aunque no
-  registra ETag ni horario proyectado.
-- `observe_google_calendar_managed_event` conserva la firma de **8 argumentos**
-  sin ETag y delega en la de 9.
-- `claim_google_calendar_sync_jobs` agrega `google_etag`; un worker anterior
-  ignora esa columna.
-- `google_calendar_status()` agrega columnas; la Function anterior consume sólo
-  las que conoce.
-- `appointment_slot_is_available` incorpora bloqueos importados. Mientras la
-  tabla de eventos externos esté vacía, el comportamiento previo se conserva.
+El contrato de pre-reservas conserva las firmas anteriores de la cola como
+wrappers deliberadamente cerrados. Durante una ventana DB → Function, y también
+si se revierte sólo el código, el worker anterior no puede reclamar ni completar
+jobs del nuevo epoch y tampoco puede reclamar limpieza de eventos externos. El
+worker actual usa un claim versionado, asociación exacta y fingerprint del
+payload. `google_calendar_status()` agrega columnas de forma compatible con la
+Function anterior.
 
 La última migración tiene una excepción deliberada: reemplaza
 `complete_google_calendar_connection(...)` por un error
@@ -117,14 +119,18 @@ consentimiento antes de usar la selección explícita.
    consultar Google, confirma ownership y exige que la zona coincida exactamente
    con `app_settings.timezone`.
 6. Sólo entonces la base reemplaza la conexión en una transacción, rota su
-   generación, elimina el candidato y encola los turnos confirmados futuros.
+   generación y elimina el candidato. Esto todavía no autoriza salida: los
+   turnos y jobs anteriores al corte de activación permanecen excluidos.
 
-Si cuenta o calendario cambian, los jobs antiguos se cancelan, sus mappings no
-se transportan y los bloqueos/conflictos del alcance anterior quedan
-`superseded`. Si se reautoriza exactamente la misma cuenta y el mismo calendario,
-la historia activa puede adoptar la generación nueva, pero la primera importación
-se vuelve a aprobar. En ambos casos los eventos existentes en Google se
-preservan.
+Si cuenta o calendario cambian antes de activar, los jobs legacy quedan
+excluidos y los bloqueos/conflictos del alcance anterior dejan de formar parte
+de la nueva generación. Con un epoch activo, cualquier job no drenado o mapping
+`pre_reservation`/`confirmed` bloquea el retarget con
+`GOOGLE_CALENDAR_AUTOMATION_DRAIN_REQUIRED`; no se transporta ni abandona. Si
+se reautoriza exactamente la misma cuenta y el mismo calendario, la historia
+activa conserva el epoch y se re-bindea a la generación nueva, pero la primera
+importación se vuelve a aprobar. En todos los casos los eventos existentes en
+Google se preservan.
 
 Si el candidato vence antes de confirmar, la conexión activa anterior no cambia.
 El operador debe volver a iniciar OAuth; no debe reutilizar un ID guardado ni
@@ -146,61 +152,84 @@ existente en la aplicación se solape con un bloqueo manual del calendario: el
 worker debe retener ese upsert para evitar un duplicado y la equivalencia se
 resuelve de forma humana.
 
-Los eventos de todo el día y las series recurrentes no se convierten en bloqueos
-automáticamente y cierran la disponibilidad hasta su revisión. Un cambio o
-borrado en Google de un turno administrado se registra como conflicto y requiere
-aplicar o rechazar desde la aplicación.
-
-Los bloqueos convertidos siguen ocupando el horario mientras el borrado del
-evento manual esté pendiente o haya fallado. Esto cubre también un turno que
-queda esperando seña y luego vence: sólo una limpieza confirmada libera ese
-horario.
+Los eventos de todo el día y las ocurrencias recurrentes compatibles se
+conservan como bloqueos dentro de la cobertura móvil. Los eventos externos,
+incluidos los bloqueos convertidos, son siempre de sólo lectura: no se limpian,
+reemplazan ni eliminan desde la aplicación. Un cambio o borrado en Google de un
+evento administrado por la aplicación se registra como conflicto y requiere
+revisión.
 
 ## Cron
 
-No hay un job de Calendar versionado en este repositorio. El scheduler remoto
-debe invocar `process-calendar-sync` cada minuto con `POST` y el header secreto
-documentado en [google-calendar-setup.md](google-calendar-setup.md). Antes de
-cerrar el despliegue hay que comprobar por lectura:
+La infraestructura versionada queda inerte al migrar. La instalación explícita
+crea un solo job cada minuto y liga cron, cuenta, calendario, generación y epoch
+en la misma transacción; el secreto dedicado permanece en Vault. Antes de
+activarla hay que comprobar por lectura:
 
-- que existe exactamente un job habilitado;
+- que todavía no existe ningún job de Calendar durante el despliegue inerte;
+- que, al autorizar la activación, se crea exactamente un job habilitado;
 - que apunta al project ref correcto;
 - que una ejecución actualiza `last_checked_at` aun sin cambios;
 - que no quedan leases o jobs `processing` estancados.
 
+Antes de instalar, configurar el mismo valor aleatorio (mínimo 32 caracteres)
+como secreto de Edge `GOOGLE_CALENDAR_CRON_SECRET` y como secreto de Vault
+`google_calendar_automation_cron_secret`. Vault debe contener además
+`google_calendar_automation_project_url` con la URL exacta del proyecto. Ningún
+valor debe pasar por Git, logs ni tablas públicas. Data API debe rechazar el
+schema `net` con `PGRST106 Invalid schema`.
+
+Después de verificar la generación y recibir autorización explícita:
+
+```sql
+select private.install_google_calendar_automatic_schedule(
+  <GENERACION_VERIFICADA>
+);
+select private.google_calendar_automatic_schedule_status();
+```
+
+El status esperado es enabled y configurationConsistent, con un solo job
+configurado y activo. Para una pausa de recuperación, desactivar únicamente ese
+`cron_job_id` con `cron.alter_job(..., active := false)`; esto también bloquea
+los disparos inmediatos sin perder mappings.
+`private.uninstall_google_calendar_automatic_schedule()` sólo se usa con el
+epoch drenado a absent y falla cerrada en cualquier otro estado. El
+procedimiento detallado está en
+[google-calendar-setup.md](google-calendar-setup.md).
+
 ## Cutover seguro: cuenta de prueba → cuenta real
 
-La selección de un calendario nuevo encola inmediatamente todos los turnos
-confirmados y futuros. Por eso el cron debe permanecer pausado hasta verificar el
-destino.
+La selección de un calendario nuevo no adopta turnos ni jobs anteriores. Sin
+embargo, un epoch que todavía representa eventos vivos tampoco se puede
+abandonar: pausar el scheduler no alcanza para habilitar un retarget.
 
-1. Confirmar previamente que el calendario real existe, es owner y tiene la zona
-   horaria correcta.
-2. Con cron pausado y sin procesamiento en curso, guardar contadores de sólo
-   lectura de la conexión de prueba.
-3. Desconectar la cuenta de prueba desde Configuración. Esto borra credenciales y
-   alcance locales, rota la generación y cancela jobs anteriores; no elimina
-   eventos del calendario de prueba.
-4. Iniciar OAuth con la cuenta real. En **Falta confirmar**, verificar nombre,
+1. Confirmar previamente que el calendario real existe, es owner y tiene la
+   zona horaria correcta.
+2. Si existe cron de Calendar, pausar únicamente su `cron_job_id`. Esperar a
+   que no haya jobs `processing` ni lease entrante vigente.
+3. Guardar contadores de sólo lectura del epoch, jobs y mappings. No copiar
+   tokens, eventos, emails ni datos de pacientes.
+4. Si queda cualquier mapping `pre_reservation` o `confirmed`, detener el
+   cutover. Seguir operando el alcance actual o acordar cómo drenarlo; no
+   desconectar, mover ni borrar eventos para forzar el cambio.
+5. Sólo con todos los mappings en `absent`, desinstalar el scheduler y
+   comprobar cero jobs de Calendar. Después desconectar desde Configuración; los
+   eventos externos del calendario anterior permanecen intactos.
+6. Iniciar OAuth con la cuenta real. En **Falta confirmar**, verificar nombre,
    principal y zona horaria sin copiar identificadores ni emails.
-5. Confirmar sólo el calendario definitivo. Verificar por lectura que:
-   - `connected=true` y `selectionPending=false`;
-   - el nombre y la zona son los esperados;
-   - la generación cambió;
-   - sólo hay jobs de la generación nueva;
-   - los bloqueos y conflictos de la prueba no forman parte del alcance activo.
-6. Ejecutar el preview. No aprobar si los contadores no corresponden al
-   calendario esperado.
-7. Habilitar la primera importación y hacer una sincronización manual controlada
-   con un turno y un evento `[PRUEBA CALENDAR]`. Repetirla para comprobar que no
-   aparecen duplicados.
-8. Reanudar el cron y confirmar una corrida correcta antes de cerrar la ventana.
-9. Si la revocación remota de la cuenta de prueba no se confirmó, quitar ese
-   acceso desde esa cuenta sólo después de validar la conexión real.
+7. Confirmar sólo el calendario definitivo. Verificar por lectura conexión,
+   generación y alcance; ningún job de la cuenta anterior puede adquirir el
+   epoch nuevo.
+8. Ejecutar preview, aprobar la primera importación y completar una
+   sincronización manual sólo de lectura/sentido entrante. No continuar si el
+   recorrido está truncado o el calendario no coincide.
+9. Repetir el preflight y, con autorización explícita, activar el scheduler para
+   la generación comprobada. Crear la pre-reserva ficticia recién después del
+   corte y validar una sola proyección.
 
-No borrar el calendario de prueba como parte del cutover. Conservarlo hasta
-terminar la reconciliación y eliminar luego sólo los artefactos ficticios mediante
-un procedimiento humano controlado.
+No borrar ni modificar el calendario de prueba como parte del cutover. Si la
+revocación del grant anterior no quedó confirmada, retirarla desde esa cuenta
+sólo después de comprobar la conexión definitiva.
 
 ## Abortar o corregir una selección
 
@@ -208,11 +237,11 @@ un procedimiento humano controlado.
   candidato local e invalida cualquier callback tardío de ese intento; una
   conexión activa anterior permanece intacta. Luego se puede iniciar OAuth de
   nuevo sin esperar el vencimiento.
-- **Calendario incorrecto confirmado, cron aún pausado:** no ejecutar sync;
+- **Calendario incorrecto confirmado, todavía sin epoch:** no ejecutar sync;
   desconectar y repetir el flujo con el destino correcto.
-- **Ya hubo escrituras:** mantener el cron pausado, medir los eventos afectados y
-  reconciliarlos antes de otro cambio. Cambiar de cuenta no borra eventos remotos
-  del alcance anterior.
+- **Ya hubo escrituras:** mantener el cron pausado y el mismo alcance. Medir y
+  drenar los mappings antes de otro cambio; si no pueden quedar en `absent`,
+  el retarget sigue bloqueado y requiere una decisión operativa explícita.
 - **Falla entre migración y Functions:** no habilitar OAuth ni cron. Completar el
   despliegue desde la misma revisión; no revertir migraciones aplicadas con SQL
   improvisado.
