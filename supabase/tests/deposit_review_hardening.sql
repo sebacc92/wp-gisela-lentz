@@ -142,7 +142,15 @@ begin
       sync_scope_google_calendar_id = connection.google_calendar_id,
       sync_scope_generation = connection.connection_generation,
       last_sync_completed_at = clock_timestamp(),
-      last_sync_error = null
+      last_sync_error = null,
+      last_error = null,
+      -- This test's OAuth scope must also authorize appointment projection.
+      automation_enabled = true,
+      automation_epoch = '99000000-0000-4000-8000-000000000090',
+      automation_activated_at = clock_timestamp() - interval '1 day',
+      automation_google_account_id = connection.google_account_id,
+      automation_google_calendar_id = connection.google_calendar_id,
+      automation_connection_generation = connection.connection_generation
   where connection.id = true;
 end;
 $calendar_connect$;

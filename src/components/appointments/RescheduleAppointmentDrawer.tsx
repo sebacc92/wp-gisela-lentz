@@ -13,6 +13,11 @@ import type {
 import { businessDateInput } from "~/lib/date-time";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
+  calendarBookingError,
+  calendarProjectionNotice,
+  verifyAppointmentCalendar,
+} from "~/lib/calendar-projection";
+import {
   loadAvailableSlots,
   type AppointmentListItem,
 } from "~/lib/supabase/data";
@@ -174,14 +179,18 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
                 },
               );
               if (rescheduleError) {
-                error.value = rescheduleError.message.includes(
-                  "SLOT_UNAVAILABLE",
-                )
-                  ? "Ese horario acaba de ocuparse. Elegí otro disponible."
-                  : "No pudimos reprogramar el turno.";
+                error.value = calendarBookingError(rescheduleError.message);
                 return;
               }
-              await props.onSaved$("Turno reprogramado.");
+              const calendarState = await verifyAppointmentCalendar(
+                getSupabaseClient(),
+                props.appointment.id,
+              );
+              await props.onSaved$(
+                calendarState === "synced"
+                  ? "Turno reprogramado en el sistema y Google Calendar."
+                  : calendarProjectionNotice(calendarState),
+              );
             } catch {
               error.value =
                 "No pudimos confirmar si el turno se reprogramó. Cerrá y revisá la agenda antes de volver a intentar.";

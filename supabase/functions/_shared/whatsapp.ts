@@ -9,6 +9,9 @@ import {
   type WhatsAppAutomationExecutionLease,
 } from "./app-automations.ts";
 
+import { verifiedOwnerPhone, ownerSummarySchedule } from "./owner-access.ts";
+import { isSyncedAppointmentCalendarProjection } from "./calendar-booking-availability.ts";
+
 export interface WhatsAppContact {
   id: string;
   phone_e164: string | null;
@@ -475,6 +478,7 @@ export function isAutomaticWhatsAppSource(value: string | null): boolean {
     value === "handoff" ||
     value === "urgent_handoff" ||
     value === "owner_access" ||
+    value === "owner_daily_summary" ||
     value === "reminder" ||
     value === "deposit_request" ||
     value === "deposit_confirmation" ||
@@ -617,7 +621,9 @@ export function isCustomerServiceWindowOpen(
   if (!lastInboundMessageAt) return false;
   const openedAt = new Date(lastInboundMessageAt).getTime();
   return (
-    Number.isFinite(openedAt) && Date.now() - openedAt < 24 * 60 * 60 * 1000
+    Number.isFinite(openedAt) &&
+    openedAt <= Date.now() &&
+    Date.now() - openedAt < 24 * 60 * 60 * 1000
   );
 }
 
@@ -877,7 +883,7 @@ interface OutboundPolicyContext {
   appointmentId: string | null;
 }
 
-async function assertOutboundPolicy(args: {
+export async function assertOutboundPolicy(args: {
   client: SupabaseClient;
   conversation: WhatsAppConversation;
   contact: WhatsAppContact;
@@ -1085,6 +1091,29 @@ async function assertOutboundPolicy(args: {
               ? "DEPOSIT_PROOF_ACKNOWLEDGEMENT_STALE"
               : "LATE_DEPOSIT_PROOF_ACKNOWLEDGEMENT_STALE",
           );
+        }
+      }
+      if (
+        source === "deposit_request" ||
+        source === "deposit_confirmation" ||
+        source === "operator_deposit_request" ||
+        source === "operator_deposit_confirmation"
+      ) {
+        const { data: projection, error: projectionError } = await client.rpc(
+          "appointment_google_calendar_projection",
+          { p_appointment_id: appointmentId },
+        );
+        const expectedStage =
+          source === "deposit_confirmation" ||
+          source === "operator_deposit_confirmation"
+            ? "confirmed"
+            : "pre_reservation";
+        if (
+          projectionError ||
+          !isSyncedAppointmentCalendarProjection(projection) ||
+          projection.projectionStage !== expectedStage
+        ) {
+          throw new WhatsAppPolicyError("CALENDAR_PROJECTION_PENDING");
         }
       }
       if (
@@ -1409,6 +1438,78 @@ async function assertTestRecipientAllowed(args: {
   throw new WhatsAppPolicyError("TEST_RECIPIENT_NOT_ALLOWED");
 }
 
+/** Revalidate the actual Graph recipient against immutable signed-inbound
+ * evidence. Editable contact details or an AI/name claim never grant access. */
+export async function assertPrivateOwnerDispatch(args: {
+  client: SupabaseClient;
+  source: string | null;
+  type: string;
+  contactId: string;
+  conversationId: string;
+  recipient: { kind: string; value: string };
+  metadata: Record<string, unknown>;
+}): Promise<void> {
+  if (args.source !== "owner_access" && args.source !== "owner_daily_summary")
+    return;
+  if (args.type !== "text" || args.recipient.kind === "bsuid") {
+    throw new WhatsAppPolicyError("OWNER_RECIPIENT_UNVERIFIED");
+  }
+  const messageId = args.metadata.inbound_message_id;
+  if (typeof messageId !== "string" || !messageId) {
+    throw new WhatsAppPolicyError("OWNER_RECIPIENT_UNVERIFIED");
+  }
+  const inbound = await args.client
+    .from("messages")
+    .select("metadata,created_at,whatsapp_origin")
+    .eq("id", messageId)
+    .eq("contact_id", args.contactId)
+    .eq("conversation_id", args.conversationId)
+    .eq("direction", "inbound")
+    .maybeSingle();
+  const phone = verifiedOwnerPhone(inbound.data?.metadata);
+  if (
+    inbound.error ||
+    !phone ||
+    phone.slice(1) !== args.recipient.value ||
+    inbound.data?.whatsapp_origin !== "cloud_api"
+  ) {
+    throw new WhatsAppPolicyError("OWNER_RECIPIENT_UNVERIFIED");
+  }
+  if (!isCustomerServiceWindowOpen(inbound.data.created_at)) {
+    throw new WhatsAppPolicyError("CUSTOMER_SERVICE_WINDOW_CLOSED");
+  }
+  if (args.source === "owner_daily_summary") {
+    const schedule = ownerSummarySchedule();
+    if (
+      runtimeSecret("WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED") !== "true" ||
+      !schedule.due ||
+      args.metadata.owner_summary_date !== schedule.date
+    ) {
+      throw new WhatsAppPolicyError("OWNER_SUMMARY_NOT_DUE");
+    }
+    const settings = await args.client
+      .from("app_settings")
+      .select("automations_enabled")
+      .eq("id", true)
+      .single();
+    if (settings.error || settings.data?.automations_enabled !== true) {
+      throw new WhatsAppPolicyError("AUTOMATIONS_DISABLED");
+    }
+    const contact = await args.client
+      .from("contacts")
+      .select("whatsapp_consent_status")
+      .eq("id", args.contactId)
+      .single();
+    if (
+      contact.error ||
+      !contact.data ||
+      contact.data.whatsapp_consent_status === "opted_out"
+    ) {
+      throw new WhatsAppPolicyError("CONTACT_OPTED_OUT");
+    }
+  }
+}
+
 export async function sendAndRecordMessage(args: {
   client: SupabaseClient;
   conversation: WhatsAppConversation;
@@ -1487,6 +1588,15 @@ export async function sendAndRecordMessage(args: {
     contact,
     conversation,
     credentials: initialCredentials,
+  });
+  await assertPrivateOwnerDispatch({
+    client,
+    source,
+    type,
+    contactId: contact.id,
+    conversationId: conversation.id,
+    recipient: recipientIdentity,
+    metadata,
   });
   const recipient = recipientIdentity.value;
   const recipientFingerprint = await whatsappRecipientFingerprint({
@@ -1718,6 +1828,15 @@ export async function sendAndRecordMessage(args: {
       contact,
       conversation,
       credentials: initialCredentials,
+    });
+    await assertPrivateOwnerDispatch({
+      client,
+      source,
+      type,
+      contactId: contact.id,
+      conversationId: conversation.id,
+      recipient: currentRecipientIdentity,
+      metadata,
     });
     const currentRecipientFingerprint = await whatsappRecipientFingerprint({
       identity: currentRecipientIdentity,

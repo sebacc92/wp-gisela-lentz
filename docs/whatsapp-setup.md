@@ -260,6 +260,41 @@ turno/tipo y el envío conserva una clave de idempotencia inmutable. Mantener la
 URL del endpoint y `REMINDER_CRON_SECRET` exclusivamente en Vault; no escribir
 valores reales en la migración ni en esta guía.
 
+### Resumen privado de Gisela: configuración separada
+
+1. Configurar en Edge Functions `WHATSAPP_OWNER_NUMBERS` con **el único teléfono
+   personal confirmado de Gisela**, formato `+549...`. No se completa por
+   deducción ni se usa el número comercial. La ausencia o más de un número
+   deshabilitan el acceso privado.
+2. Aplicar la migración `20260906040000_whatsapp_owner_daily_summary.sql` y
+   desplegar `whatsapp-webhook`, `whatsapp-automation` y `process-reminders` con
+   sus módulos compartidos. Un mensaje recibido antes de esta versión no tiene
+   la nueva evidencia: Gisela debe enviar uno nuevo desde su teléfono personal.
+3. Habilitar `WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED=true`,
+   `WHATSAPP_AUTOMATIONS_ENABLED=true` y el bot en la aplicación. El resumen
+   respeta test mode y su allowlist; durante una prueba sólo admite ese número.
+4. Mantener el cron `process-reminders` cada cinco minutos con
+   `REMINDER_CRON_SECRET`. El disparo de las 21:00 locales es 00:00 UTC del día
+   siguiente. Los disparos 21:05 y 21:10 permiten reintentos; a las 21:15 se
+   cierra. No hace falta activar plantillas ni recordatorios a pacientes.
+5. Gisela envía un mensaje de texto, por ejemplo “turnos de mañana”. Ese
+   mensaje abre su ventana de 24 h; escribir desde la app comercial o responder
+   desde el sistema a Gisela no la renueva. Si a las 21 no hay ventana, se omite
+   el resumen sin usar plantillas. `BAJA` cancela posteriores resúmenes.
+
+El cron debe quedar creado en el proyecto de destino al desplegar. Si aún no
+existe, crear desde Supabase Dashboard un Cron HTTP para el endpoint
+`/functions/v1/process-reminders` con método POST, expresión `*/5 * * * *`,
+header `x-cron-secret` y URL/valor del secreto recuperados desde Vault. No pegar
+secretos reales en el código del job ni crear otro cron si ya hay uno equivalente.
+La revisión y los tests locales no crean ese job remoto ni envían WhatsApp reales.
+
+La bitácora de resultado está en `whatsapp_owner_daily_summaries` (sólo backend):
+`sent`, `skipped` o `failed`, con motivos como
+`CUSTOMER_SERVICE_WINDOW_CLOSED`, `OWNER_RECIPIENT_UNVERIFIED` o
+`CONTACT_OPTED_OUT`. `process-reminders` también devuelve `owner_summary`.
+No incluye el teléfono ni los nombres de pacientes en logs de error.
+
 ## 8. Health y resolución simple
 
 En **Configuración → WhatsApp → Verificar conexión**:

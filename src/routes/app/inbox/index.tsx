@@ -27,6 +27,10 @@ import type {
 } from "~/lib/inbox-types";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
+  calendarBookingError,
+  calendarProjectionNotice,
+} from "~/lib/calendar-projection";
+import {
   loadBookingDurationSettings,
   loadInboxData,
   loadProfessionals,
@@ -384,16 +388,19 @@ export default component$(() => {
                 },
               );
               if (!result.confirmed) {
-                notice.value = "No pudimos confirmar la seña.";
+                notice.value =
+                  "No pudimos comprobar si la seña se confirmó. Revisá el turno en la agenda antes de volver a intentar.";
                 return;
               }
-              notice.value = result.notified
-                ? "Seña confirmada y paciente avisado por WhatsApp."
-                : "Seña confirmada. No pudimos enviar el aviso por WhatsApp.";
+              notice.value = result.calendarState
+                ? calendarProjectionNotice(result.calendarState)
+                : result.notified
+                  ? "Seña confirmada y paciente avisado por WhatsApp."
+                  : "Seña confirmada. No pudimos enviar el aviso por WhatsApp.";
               reloadVersion.value += 1;
             } catch {
               notice.value =
-                "No pudimos confirmar la seña. Revisá la conexión e intentá nuevamente.";
+                "No pudimos comprobar si la seña se confirmó. Revisá el turno en la agenda antes de volver a intentar.";
             } finally {
               confirmingDeposit.value = false;
             }
@@ -653,9 +660,7 @@ export default component$(() => {
             );
 
             if (error) {
-              notice.value = error.message.includes("SLOT_UNAVAILABLE")
-                ? "Ese horario acaba de ocuparse. Elegí otro disponible."
-                : "No pudimos crear el turno.";
+              notice.value = calendarBookingError(error.message);
               return;
             }
 
@@ -675,11 +680,15 @@ export default component$(() => {
 
             appointmentDrawerOpen.value = false;
             contactDrawerOpen.value = true;
-            notice.value = notification.notified
-              ? `Horario de ${serviceName} reservado y pedido de seña enviado por WhatsApp.`
-              : notification.required
-                ? `Horario de ${serviceName} reservado. No pudimos enviar el pedido de seña por WhatsApp.`
-                : `Turno de ${serviceName} guardado y confirmado. La seña está desactivada.`;
+            notice.value = !createdAppointment
+              ? calendarProjectionNotice("unavailable")
+              : notification.calendarState
+                ? calendarProjectionNotice(notification.calendarState)
+                : notification.notified
+                  ? `Horario de ${serviceName} reservado y pedido de seña enviado por WhatsApp.`
+                  : notification.required
+                    ? `Horario de ${serviceName} reservado. No pudimos enviar el pedido de seña por WhatsApp.`
+                    : `Turno de ${serviceName} guardado y confirmado. La seña está desactivada.`;
             reloadVersion.value += 1;
           }}
         />

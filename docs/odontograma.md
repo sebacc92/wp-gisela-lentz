@@ -48,6 +48,24 @@ La cara interna se llama palatina en el maxilar superior y lingual en el
 inferior. Es la misma cara, así que se guarda con un único valor
 `palatina_lingual` y se nombra según la arcada al mostrarla.
 
+## Uso de la ficha
+
+- La vista permite alternar dentición permanente, temporaria y mixta. El selector
+  «Ir a pieza» abre cualquier pieza sin tener que recorrer la arcada en móvil.
+- Cada cara conserva su propio hallazgo; por ejemplo, caries oclusal y una
+  obturación distal pueden coexistir. El resumen y el historial identifican
+  esa diferencia. Los estados que no admiten caras siguen las restricciones de
+  la base.
+- El historial y el estado actual usan `entry_sequence`, igual que la vista de
+  la base. La carga pagina por esa secuencia para no truncar fichas extensas.
+- Cambiar de pieza, paciente o pantalla avisa si hay cambios sin guardar.
+  Durante el guardado se bloquean los controles que podrían cambiar el
+  destinatario del registro. El asiento confirmado por el servidor se incorpora
+  al historial sin depender de una segunda consulta.
+- Una carga fallida no muestra una ficha vacía editable: permite reintentar.
+  Los permisos de ADMIN, el fechado del servidor y el modelo append-only se
+  conservan.
+
 ## Qué falta
 
 - Imprimir o exportar la ficha de un paciente.

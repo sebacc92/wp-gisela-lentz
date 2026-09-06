@@ -34,6 +34,9 @@ set appointment_buffer_minutes = 15,
     minimum_booking_notice_minutes = 0
 where id = true;
 
+-- These domain tests require an authorized, freshly observed Calendar.
+\ir _support/calendar-ready.inc
+
 insert into public.professionals (
   id, name, specialty, appointment_duration_minutes, active
 )

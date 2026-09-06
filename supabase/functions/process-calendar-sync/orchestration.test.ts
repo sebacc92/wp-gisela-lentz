@@ -114,7 +114,10 @@ function fakeSupabase(
         },
         maybeSingle: () =>
           Promise.resolve({
-            data: { status: "connected", connection_generation: 1 },
+            data:
+              table === "app_settings"
+                ? { appointment_buffer_minutes: 15 }
+                : { status: "connected", connection_generation: 1 },
             error: null,
           }),
       };
@@ -420,6 +423,67 @@ Deno.test(
 );
 
 Deno.test(
+  "un turno manual agregado entre el pull y el push impide escribir en Google",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        claim_google_calendar_sync_jobs: () => ({
+          data: [claimedUpsertJob()],
+          error: null,
+        }),
+      }),
+    );
+    let lists = 0;
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        lists += 1;
+        return eventsListResponse(
+          lists === 1
+            ? []
+            : [
+                {
+                  id: "human-booking-after-inbound",
+                  start: { dateTime: APP_START },
+                  end: { dateTime: APP_END },
+                },
+              ],
+        );
+      }
+      return null;
+    });
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    const body = await response.json();
+    assert.equal(lists, 2);
+    assert.equal(body.retried, 1);
+    assert.equal(body.synced, 0);
+    assert.equal(
+      calls.some(
+        (call) =>
+          call.url.includes("/events") &&
+          ["POST", "PATCH", "DELETE"].includes(call.method),
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.some(
+        (call) => call.name === "complete_google_calendar_sync_job",
+      ),
+      false,
+    );
+    assert.equal(
+      rpcCalls.find((call) => call.name === "fail_google_calendar_sync_job")
+        ?.args.p_error_code,
+      "GOOGLE_CALENDAR_SLOT_OCCUPIED",
+    );
+  },
+);
+
+Deno.test(
   "inbound adopta un POST pendiente perdido antes de confirmar el mismo evento",
   async () => {
     const pendingPayload = await googleCalendarEventPayload(
@@ -522,7 +586,7 @@ Deno.test(
     const eventMethods = calls.filter((call) => call.url.includes("/events"));
     assert.deepEqual(
       eventMethods.map((call) => call.method),
-      ["GET", "POST", "GET", "PATCH"],
+      ["GET", "GET", "POST", "GET", "GET", "PATCH"],
     );
     assert.equal(
       eventMethods.at(-1)?.headers["if-match"],

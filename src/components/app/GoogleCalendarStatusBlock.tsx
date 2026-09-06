@@ -1,6 +1,7 @@
 import {
   $,
   component$,
+  useComputed$,
   useContext,
   useStore,
   useVisibleTask$,
@@ -21,6 +22,7 @@ import {
 } from "~/lib/google-calendar-operational-status";
 import { canRunManualGoogleCalendarSync } from "~/lib/google-calendar-ui-state";
 import { getSupabaseClient } from "~/lib/supabase/client";
+import "./calendar-status.css";
 
 interface GoogleCalendarStatusBlockProps {
   variant: "home" | "agenda";
@@ -33,6 +35,7 @@ function formatSuccessfulReview(value: string): string {
   return new Intl.DateTimeFormat("es-AR", {
     dateStyle: "short",
     timeStyle: "short",
+    hourCycle: "h23",
     timeZone: BUSINESS_CONFIG.timezone,
   }).format(date);
 }
@@ -122,6 +125,7 @@ export const GoogleCalendarStatusBlock =
 
         const outcome = parseCalendarSyncOutcome(data?.outcome);
         const summary = parseCalendarSyncSummary(data?.summary);
+        window.dispatchEvent(new Event("calendar-synchronized"));
         if (!(await loadStatus())) return;
 
         state.error = outcome === "error" || summary.failed > 0;
@@ -147,9 +151,9 @@ export const GoogleCalendarStatusBlock =
       }
     });
 
-    const view = state.status
-      ? googleCalendarOperationalView(state.status)
-      : null;
+    const view = useComputed$(() =>
+      state.status ? googleCalendarOperationalView(state.status) : null,
+    );
     const canSynchronize = Boolean(
       appUser.isAdmin &&
       !state.error &&
@@ -166,7 +170,7 @@ export const GoogleCalendarStatusBlock =
         class={{
           "calendar-operational-status": true,
           [variant]: true,
-          [view?.kind ?? "unknown"]: true,
+          [view.value?.kind ?? "unknown"]: true,
           error: state.error,
         }}
         aria-label="Estado de Google Calendar"
@@ -178,46 +182,52 @@ export const GoogleCalendarStatusBlock =
           </span>
           <div>
             <strong>
-              {state.loading && !view
+              {state.loading && !view.value
                 ? "Comprobando Google Calendar…"
-                : (view?.title ?? "Estado de Google Calendar no disponible")}
+                : (view.value?.title ??
+                  "Estado de Google Calendar no disponible")}
             </strong>
             <small>
-              {view?.detail ??
+              {view.value?.detail ??
                 "Volvé a consultar el estado antes de depender de la sincronización."}
             </small>
           </div>
         </div>
 
         {state.status && (
-          <dl class="calendar-operational-details">
-            <div>
-              <dt>Automatización</dt>
-              <dd>
-                {state.status.connected && state.status.automationActive
-                  ? "Activa"
-                  : "No activada"}
-              </dd>
-            </div>
-            <div>
-              <dt>Última revisión exitosa</dt>
-              <dd>
-                {formatSuccessfulReview(state.status.lastSuccessfulReviewAt)}
-              </dd>
-            </div>
-            <div>
-              <dt>Pendientes</dt>
-              <dd>{state.status.pendingCount}</dd>
-            </div>
-            <div>
-              <dt>Para revisar</dt>
-              <dd>
-                {state.status.conflictCount} conflicto(s) ·{" "}
-                {state.status.failedCount} trabajo(s) con error
-                {state.status.hasSyncError ? " · última revisión fallida" : ""}
-              </dd>
-            </div>
-          </dl>
+          <details class="calendar-status-disclosure">
+            <summary>Detalles de sincronización</summary>
+            <dl class="calendar-operational-details">
+              <div>
+                <dt>Automatización</dt>
+                <dd>
+                  {state.status.connected && state.status.automationActive
+                    ? "Activa"
+                    : "No activada"}
+                </dd>
+              </div>
+              <div>
+                <dt>Última revisión exitosa</dt>
+                <dd>
+                  {formatSuccessfulReview(state.status.lastSuccessfulReviewAt)}
+                </dd>
+              </div>
+              <div>
+                <dt>Pendientes</dt>
+                <dd>{state.status.pendingCount}</dd>
+              </div>
+              <div>
+                <dt>Para revisar</dt>
+                <dd>
+                  {state.status.conflictCount} conflicto(s) ·{" "}
+                  {state.status.failedCount} trabajo(s) con error
+                  {state.status.hasSyncError
+                    ? " · última revisión fallida"
+                    : ""}
+                </dd>
+              </div>
+            </dl>
+          </details>
         )}
 
         {state.message && (

@@ -11,6 +11,10 @@ select set_config('request.jwt.claim.role', 'service_role', true);
 
 update public.app_settings set automations_enabled = true where id;
 
+-- These proof tests observe a synthetic Calendar; disconnected booking is no
+-- longer a supported operational state. No real API requests are performed.
+\ir _support/calendar-ready.inc
+
 insert into auth.users (id, email, encrypted_password, aud, role)
 values (
   '98000000-0000-4000-8000-000000000099',
@@ -430,6 +434,9 @@ select ok(
   'rescheduling a pending hold preserves the deposit data already announced'
 );
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000030');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000040',
   (select lease_token from public.whatsapp_automation_executions
@@ -566,6 +573,9 @@ select ok(
   'the proof session becomes idle even with a later inbound already queued'
 );
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000030');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000040',
   (select lease_token from public.whatsapp_automation_executions
@@ -669,6 +679,9 @@ from public.claim_whatsapp_automation_execution(
 )
 \gset reupload_claim_
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000035');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000048',
   (select lease_token from public.whatsapp_automation_executions
@@ -768,6 +781,9 @@ from public.claim_whatsapp_automation_execution(
 )
 \gset review_claim_
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000031');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000041',
   (select lease_token from public.whatsapp_automation_executions
@@ -853,6 +869,9 @@ from public.claim_whatsapp_automation_execution(
   '98000000-0000-4000-8000-000000000042', '{}'::jsonb, 900
 )
 \gset manual_claim_
+
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000032');
 
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000042',
@@ -940,6 +959,9 @@ from public.claim_whatsapp_automation_execution(
   '98000000-0000-4000-8000-000000000043', '{}'::jsonb, 900
 )
 \gset late_claim_
+
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000033');
 
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000043',
@@ -1098,6 +1120,9 @@ update public.appointments
 set status = 'cancelled'
 where id = '98000000-0000-4000-8000-000000000030';
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000030');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000040',
   (select lease_token from public.whatsapp_automation_executions
@@ -1136,6 +1161,9 @@ select public.update_appointment_status(
 );
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
+
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000031');
 
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000041',
@@ -1179,7 +1207,8 @@ select public.complete_whatsapp_automation_execution(
 );
 
 -- El mensaje entra a tiempo, pero el cleanup vence el hold mientras termina
--- el OCR. Si el horario continúa libre, la RPC lo recupera bajo exclusión.
+-- el OCR. Si el horario continúa libre, conserva el comprobante para revisión;
+-- no confirma una pre-reserva cuya proyección en Google ya fue retirada.
 insert into public.appointments (
   id, contact_id, professional_id, service_id, starts_at, ends_at,
   status, source, coverage, duration_minutes, deposit_status,
@@ -1229,6 +1258,9 @@ set status = 'cancelled',
     hold_expired_notification_status = 'pending'
 where id = '98000000-0000-4000-8000-000000000036';
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000036');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000046',
   (select lease_token from public.whatsapp_automation_executions
@@ -1240,15 +1272,16 @@ select public.process_automated_deposit_proof(
 \gset recovered_
 
 select ok(
-  :'recovered_result'::jsonb ->> 'status' = 'confirmed'
+  :'recovered_result'::jsonb ->> 'status' = 'review'
+  and (:'recovered_result'::jsonb -> 'review_reasons') @> '["CALENDAR_AVAILABILITY_UNVERIFIED"]'::jsonb
   and (
-    select status = 'confirmed'
-      and deposit_status = 'confirmed'
+    select status = 'scheduled'
+      and deposit_status = 'proof_received'
       and not deposit_proof_late
     from public.appointments
     where id = '98000000-0000-4000-8000-000000000036'
   ),
-  'an on-time proof safely recovers a cleanup race while the slot is free'
+  'a timely proof survives cleanup for review without confirming an unprojected hold'
 );
 
 -- Mismo borde, pero el horario ya fue tomado. La exclusión debe ganar y el
@@ -1313,6 +1346,9 @@ from public.claim_whatsapp_automation_execution(
   '98000000-0000-4000-8000-000000000047', '{}'::jsonb, 900
 )
 \gset occupied_claim_
+
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000037');
 
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000047',
@@ -1458,7 +1494,8 @@ select ok(
 
 -- Orden inverso: un cleanup antiguo alcanzó a cancelar antes de materializar
 -- el dispatch. Al aparecer el dispatch y reclamarse el inbound puntual, el
--- snapshot vencido se conserva y process recupera el slot libre.
+-- snapshot vencido se conserva y process recupera el comprobante para revisión.
+-- La confirmación automática exige además una pre-reserva vigente en Google.
 insert into public.contacts (
   id, phone_e164, whatsapp_id, name, coverage, is_existing_patient
 ) values
@@ -1580,6 +1617,9 @@ from public.claim_whatsapp_automation_execution(
 )
 \gset cron_before_claim_
 
+select pg_temp.calendar_ready();
+select pg_temp.calendar_projection_synced('98000000-0000-4000-8000-000000000043');
+
 select public.process_automated_deposit_proof(
   '98000000-0000-4000-8000-000000000055',
   (select lease_token from public.whatsapp_automation_executions
@@ -1593,15 +1633,16 @@ select public.process_automated_deposit_proof(
 select ok(
   :'cron_before_claim_session_state' = 'waiting_deposit'
   and not :'cron_before_claim_fresh_session'::boolean
-  and :'cron_recovered_result'::jsonb ->> 'status' = 'confirmed'
+  and :'cron_recovered_result'::jsonb ->> 'status' = 'review'
+  and (:'cron_recovered_result'::jsonb -> 'review_reasons') @> '["CALENDAR_AVAILABILITY_UNVERIFIED"]'::jsonb
   and (
-    select status = 'confirmed'
-      and deposit_status = 'confirmed'
+    select status = 'scheduled'
+      and deposit_status = 'proof_received'
       and hold_expired_notification_status = 'cancelled'
     from public.appointments
     where id = '98000000-0000-4000-8000-000000000043'
   ),
-  'cron before claim still preserves the timely snapshot and safely confirms the free slot'
+  'cron before claim preserves timely evidence for review when the Calendar hold is absent'
 );
 
 create function pg_temp.pending_dispatch_blocks_expiration_work()

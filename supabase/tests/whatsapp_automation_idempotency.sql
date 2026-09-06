@@ -14,6 +14,9 @@ select set_config('request.jwt.claim.role', 'service_role', true);
 -- intent explicit.
 update public.app_settings set automations_enabled = true where id;
 
+-- Domain effects require an active, freshly observed Calendar in this practice.
+\ir _support/calendar-ready.inc
+
 select (
   current_date + 7 + mod(8 - extract(isodow from current_date)::integer, 7)
 )::date as test_date
@@ -272,6 +275,8 @@ select throws_ok(
   'the same inbound cannot apply a different profile mutation on retry'
 );
 
+select pg_temp.calendar_ready();
+
 select public.create_whatsapp_automation_appointment(
   '97000000-0000-4000-8000-000000000010',
   :'create_retry_lease_token'::uuid,
@@ -425,6 +430,8 @@ from public.claim_whatsapp_automation_execution(
   900
 )
 \gset reschedule_
+
+select pg_temp.calendar_ready();
 
 select public.reschedule_whatsapp_automation_appointment(
   '97000000-0000-4000-8000-000000000011',

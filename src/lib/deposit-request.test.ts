@@ -31,6 +31,12 @@ function requestClient(
     },
   };
   return {
+    async rpc() {
+      return {
+        data: { state: "synced", projectionStage: "pre_reservation" },
+        error: null,
+      };
+    },
     from() {
       return settingsQuery;
     },

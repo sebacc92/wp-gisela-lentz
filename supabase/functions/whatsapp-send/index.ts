@@ -18,6 +18,7 @@ import {
   validIdempotencyKey,
 } from "../_shared/whatsapp.ts";
 import { isWhatsAppCredentialResolutionError } from "../_shared/whatsapp-account-credentials.ts";
+import { isSyncedAppointmentCalendarProjection } from "../_shared/calendar-booking-availability.ts";
 
 interface SendRequest {
   conversationId?: string;
@@ -194,6 +195,26 @@ Deno.serve(async (request) => {
           409,
         );
       }
+      const { data: projection, error: projectionError } = await client.rpc(
+        "appointment_google_calendar_projection",
+        { p_appointment_id: appointmentId },
+      );
+      if (
+        projectionError ||
+        !isSyncedAppointmentCalendarProjection(projection) ||
+        projection.projectionStage !==
+          (validConfirmation ? "confirmed" : "pre_reservation")
+      ) {
+        return jsonResponse(
+          request,
+          {
+            error: "CALENDAR_PROJECTION_PENDING",
+            message:
+              "El turno está guardado, pero falta verificarlo en Google Calendar antes de enviar el aviso al paciente.",
+          },
+          409,
+        );
+      }
     }
 
     const serviceWindowOpen = isCustomerServiceWindowOpen(
@@ -352,11 +373,13 @@ Deno.serve(async (request) => {
           error: error.code,
           retryable: false,
           message:
-            error.code === "CONTACT_OPTED_OUT"
-              ? "El contacto pidió no recibir mensajes proactivos."
-              : error.code === "CUSTOMER_SERVICE_WINDOW_CLOSED"
-                ? "La ventana de atención de WhatsApp está cerrada."
-                : "El envío fue bloqueado por las reglas de WhatsApp.",
+            error.code === "CALENDAR_PROJECTION_PENDING"
+              ? "El turno está guardado, pero falta verificarlo en Google Calendar antes de enviar el aviso al paciente."
+              : error.code === "CONTACT_OPTED_OUT"
+                ? "El contacto pidió no recibir mensajes proactivos."
+                : error.code === "CUSTOMER_SERVICE_WINDOW_CLOSED"
+                  ? "La ventana de atención de WhatsApp está cerrada."
+                  : "El envío fue bloqueado por las reglas de WhatsApp.",
         },
         409,
       );

@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  verifyAppointmentCalendar,
+  type CalendarProjectionState,
+} from "./calendar-projection.ts";
 
 export interface CreatedAppointmentResult {
   id: string;
@@ -45,7 +49,17 @@ export async function requestDepositAndNotify(
     depositRequired: boolean;
     conversationId?: string;
   },
-): Promise<{ required: boolean; notified: boolean }> {
+): Promise<{
+  required: boolean;
+  notified: boolean;
+  calendarState?: CalendarProjectionState;
+}> {
+  const calendarState = await verifyAppointmentCalendar(
+    client,
+    input.appointmentId,
+  );
+  if (calendarState !== "synced")
+    return { required: input.depositRequired, notified: false, calendarState };
   if (!input.depositRequired) return { required: false, notified: false };
 
   // La reserva ya existe. Desde acá el aviso es best-effort y nunca debe

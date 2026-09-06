@@ -24,6 +24,9 @@ select ok(
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+-- These domain tests require an authorized, freshly observed Calendar.
+\ir _support/calendar-ready.inc
+
 insert into auth.users (id, email, encrypted_password, aud, role)
 values (
   '96000000-0000-4000-8000-000000000001',
@@ -258,8 +261,8 @@ select is(
     select count(*)::integer from public.google_calendar_sync_jobs
     where appointment_id = '96000000-0000-4000-8000-000000000006'
   ),
-  0,
-  'sin Google Calendar conectado no se encola nada; la cola no duplica filas'
+  1,
+  'Google Calendar autorizado conserva un solo job pese a confirmar dos veces'
 );
 
 select * from finish();

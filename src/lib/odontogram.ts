@@ -26,6 +26,7 @@ export interface OdontogramEntry {
   surfaces: Partial<Record<ToothSurface, ToothCondition>>;
   note: string | null;
   recordedAt: string;
+  entrySequence: number;
 }
 
 export const CONDITION_LABELS: Record<ToothCondition, string> = {
@@ -121,10 +122,13 @@ export const ALL_SURFACES: ToothSurface[] = [
 export function toothSummary(entry: OdontogramEntry | undefined): string {
   if (!entry) return "Sin registrar";
   const label = CONDITION_LABELS[entry.condition];
-  const surfaces = Object.keys(entry.surfaces ?? {}) as ToothSurface[];
+  const surfaces = ALL_SURFACES.filter((surface) => entry.surfaces?.[surface]);
   if (!surfaces.length) return label;
   return `${label} · ${surfaces
-    .map((surface) => surfaceLabel(entry.tooth, surface))
+    .map((surface) => {
+      const finding = entry.surfaces[surface];
+      return `${surfaceLabel(entry.tooth, surface)}${finding && finding !== entry.condition ? `: ${CONDITION_LABELS[finding]}` : ""}`;
+    })
     .join(", ")}`;
 }
 
@@ -136,7 +140,7 @@ export function currentByTooth(
   const current = new Map<number, OdontogramEntry>();
   for (const entry of entries) {
     const existing = current.get(entry.tooth);
-    if (!existing || entry.recordedAt >= existing.recordedAt) {
+    if (!existing || entry.entrySequence > existing.entrySequence) {
       current.set(entry.tooth, entry);
     }
   }

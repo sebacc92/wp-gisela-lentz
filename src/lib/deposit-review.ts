@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  verifyAppointmentCalendar,
+  type CalendarProjectionState,
+} from "./calendar-projection.ts";
 import { BUSINESS_CONFIG } from "../config/business.ts";
 import { renderDepositConfirmationMessage } from "./deposit-confirmation.ts";
 
@@ -64,6 +68,7 @@ export type DepositConfirmationError =
   | "UNKNOWN";
 
 export interface ManualDepositConfirmation {
+  calendarState?: CalendarProjectionState;
   confirmed: boolean;
   alreadyConfirmed: boolean;
   notified: boolean;
@@ -102,7 +107,7 @@ export function describeDepositConfirmationError(
     case "ADMIN_REQUIRED":
       return "Confirmar una seña lo hace la persona administradora.";
     default:
-      return "No pudimos confirmar la seña. No se hicieron cambios; intentá de nuevo.";
+      return "No pudimos comprobar si la seña se confirmó. Revisá el turno en la agenda antes de volver a intentar.";
   }
 }
 
@@ -136,6 +141,18 @@ export async function confirmDepositManually(
     already_confirmed?: boolean;
   } | null;
   const alreadyConfirmed = row?.already_confirmed === true;
+  const calendarState = await verifyAppointmentCalendar(
+    client,
+    input.appointmentId,
+  );
+  if (calendarState !== "synced")
+    return {
+      confirmed: true,
+      alreadyConfirmed,
+      notified: false,
+      error: null,
+      calendarState,
+    };
 
   // Un segundo clic no vuelve a escribirle al paciente. Además la clave de
   // idempotencia del envío es la misma que usa el flujo automático.

@@ -1,3 +1,4 @@
+import { loadOwnerAgenda } from "../_shared/owner-agenda.ts";
 import {
   PATIENT_PROFILE_PROMPTS,
   MAIN_MENU_OPTIONS,
@@ -39,7 +40,10 @@ import {
   whatsappConversationOperationallyEnabled,
   type WhatsAppAutomationExecutionLease,
 } from "../_shared/app-automations.ts";
-import { refreshCalendarAvailabilityBeforeBooking } from "../_shared/calendar-booking-availability.ts";
+import {
+  ensureAppointmentCalendarProjection,
+  refreshCalendarAvailabilityBeforeBooking,
+} from "../_shared/calendar-booking-availability.ts";
 import {
   conciseBusinessLocationMessage,
   configuredBusinessHoursMessage,
@@ -85,11 +89,9 @@ import {
 import {
   OWNER_HELP_MESSAGE,
   detectOwnerRequest,
-  formatOwnerAgenda,
   formatOwnerPatient,
-  isOwnerNumber,
-  ownerNumbersFromEnvironment,
-  type OwnerAgendaAppointment,
+  verifiedOwnerPhone,
+  OWNER_TIMEZONE,
 } from "../_shared/owner-access.ts";
 import { createServiceClient } from "../_shared/supabase.ts";
 import { constantTimeEqual } from "../_shared/whatsapp-webhook.ts";
@@ -882,6 +884,7 @@ Deno.serve(async (request) => {
     const mediaContextReady =
       inbound.type === "audio" || depositProofMediaContextReady;
     const snapshotMediaEnabled =
+      verifiedOwnerPhone(metadata) === null &&
       mediaContextReady &&
       mediaOpenAIEnabled({
         globalAutomationsEnabled: whatsappAutomationsEnabled(),
@@ -1126,6 +1129,31 @@ Deno.serve(async (request) => {
       await saveSession("human_handoff", context);
     };
 
+    const verifySavedCalendarProjection = async (appointmentId: string) => {
+      const synced = await ensureAppointmentCalendarProjection({
+        readProjection: async () => {
+          const { data, error } = await client.rpc(
+            "appointment_google_calendar_projection",
+            { p_appointment_id: appointmentId },
+          );
+          if (error) throw error;
+          return data;
+        },
+        refresh: refreshCalendarAvailability,
+      });
+      if (!synced) {
+        // The local reservation and its idempotency ledger already exist.
+        // Preserve both; never recreate or blindly cancel a possibly live
+        // Google event after a delayed or lost response.
+        await handoff(
+          "CALENDAR_PROJECTION_PENDING",
+          { appointmentId },
+          "El turno quedó guardado en el sistema, pero falta verificarlo en Google Calendar. La secretaria lo va a revisar antes de confirmártelo.",
+        );
+      }
+      return synced;
+    };
+
     const respondToDepositProofResult = async (
       proof: AutomatedDepositProofResult,
     ): Promise<Response> => {
@@ -1156,6 +1184,14 @@ Deno.serve(async (request) => {
             appointmentId: proof.appointmentId,
             type: "deposit_confirm",
           };
+        }
+        if (!(await verifySavedCalendarProjection(proof.appointmentId))) {
+          return await finish({
+            processed: true,
+            state: "human_handoff",
+            reason: "CALENDAR_PROJECTION_PENDING",
+            appointmentId: proof.appointmentId,
+          });
         }
         const template = appSettings.deposit_confirmed_message_template?.trim();
         const defaultConfirmationMessage = `¡Listo! Recibimos el comprobante y tu turno quedó confirmado para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)}.`;
@@ -1361,81 +1397,41 @@ Deno.serve(async (request) => {
 
     // El número personal autorizado consulta su propia agenda: nunca entra al
     // flujo de reserva ni recibe el menú de pacientes.
-    if (isOwnerNumber(contact.phone_e164, ownerNumbersFromEnvironment())) {
+    const ownerPhone = verifiedOwnerPhone(metadata);
+    if (ownerPhone !== null && ownerPhone === contact.phone_e164) {
       const requested = detectOwnerRequest(inboundBody);
       let reply = OWNER_HELP_MESSAGE;
 
       if (requested?.kind === "agenda") {
-        const now = new Date();
-        const dayOffset = requested.day === "tomorrow" ? 1 : 0;
-        const from = new Date(now);
-        if (requested.day !== "week") {
-          from.setUTCDate(from.getUTCDate() + dayOffset);
-          from.setUTCHours(0, 0, 0, 0);
-        }
-        const until = new Date(from);
-        until.setUTCDate(
-          until.getUTCDate() + (requested.day === "week" ? 7 : 1),
-        );
-
-        const { data, error } = await client
-          .from("appointments")
-          .select(
-            "starts_at,coverage,deposit_status,contacts(name,phone_e164),services(name)",
-          )
-          .gte("starts_at", from.toISOString())
-          .lt("starts_at", until.toISOString())
-          .in("status", ["scheduled", "confirmed"])
-          .order("starts_at");
-        if (error) throw error;
-
-        const appointments: OwnerAgendaAppointment[] = (data ?? []).map(
-          (row) => {
-            const patient = Array.isArray(row.contacts)
-              ? row.contacts[0]
-              : row.contacts;
-            const service = Array.isArray(row.services)
-              ? row.services[0]
-              : row.services;
-            return {
-              startsAt: row.starts_at as string,
-              patientName: (patient?.name as string) ?? "Sin nombre",
-              patientPhone: (patient?.phone_e164 as string) ?? null,
-              coverage: (row.coverage as string) ?? null,
-              service: (service?.name as string) ?? null,
-              depositStatus: (row.deposit_status as string) ?? null,
-            };
-          },
-        );
-        reply = formatOwnerAgenda({
-          appointments,
-          day: requested.day,
-          timezone: businessTimezone,
-        });
+        reply = await loadOwnerAgenda({ client, day: requested.day });
       } else if (requested?.kind === "patient") {
         const { data, error } = await client
           .from("contacts")
-          .select("id,name,phone_e164,coverage,administrative_notes")
-          .ilike("name", `%${requested.query}%`)
+          .select("id,name,phone_e164,coverage")
+          .ilike("name", `%${requested.query.replace(/[\\%_]/g, "\\$&")}%`)
           .limit(9);
         if (error) throw error;
 
         const matches = await Promise.all(
           (data ?? []).map(async (row) => {
-            const { data: next } = await client
+            const { data: next, error: nextError } = await client
               .from("appointments")
-              .select("starts_at,coverage,deposit_status,services(name)")
+              .select("starts_at,coverage,deposit_status")
               .eq("contact_id", row.id)
               .gte("starts_at", new Date().toISOString())
               .in("status", ["scheduled", "confirmed"])
+              .or(
+                `status.eq.confirmed,deposit_status.not.in.(pending,proof_received),hold_expires_at.gt.${new Date().toISOString()}`,
+              )
               .order("starts_at")
               .limit(1)
               .maybeSingle();
+            if (nextError) throw nextError;
             return {
               name: row.name as string,
               phone: (row.phone_e164 as string) ?? null,
               coverage: (row.coverage as string) ?? null,
-              notes: (row.administrative_notes as string) ?? null,
+              notes: null,
               nextAppointment: next
                 ? {
                     startsAt: next.starts_at as string,
@@ -1452,7 +1448,7 @@ Deno.serve(async (request) => {
         reply = formatOwnerPatient({
           matches,
           query: requested.query,
-          timezone: businessTimezone,
+          timezone: OWNER_TIMEZONE,
         });
       }
 
@@ -3211,6 +3207,15 @@ Deno.serve(async (request) => {
             type: "create",
           };
 
+          if (!(await verifySavedCalendarProjection(appointmentId))) {
+            return await finish({
+              processed: true,
+              state: "human_handoff",
+              reason: "CALENDAR_PROJECTION_PENDING",
+              appointmentId,
+            });
+          }
+
           if (appointment.deposit_status === "pending") {
             const template =
               typeof appSettings.deposit_request_message_template === "string"
@@ -3508,6 +3513,14 @@ Deno.serve(async (request) => {
               appointmentId,
               type: "reschedule",
             };
+            if (!(await verifySavedCalendarProjection(appointmentId))) {
+              return await finish({
+                processed: true,
+                state: "human_handoff",
+                reason: "CALENDAR_PROJECTION_PENDING",
+                appointmentId,
+              });
+            }
             const rescheduledAppointment =
               rescheduleResult &&
               !Array.isArray(rescheduleResult) &&
@@ -3641,6 +3654,14 @@ Deno.serve(async (request) => {
         appointment?.status === "confirmed" ||
         appointment?.depositStatus === "confirmed"
       ) {
+        if (!(await verifySavedCalendarProjection(appointment.id))) {
+          return await finish({
+            processed: true,
+            state: "human_handoff",
+            reason: "CALENDAR_PROJECTION_PENDING",
+            appointmentId: appointment.id,
+          });
+        }
         const message = "Tu turno ya está confirmado.";
         await send(textPayload(message), message, {
           appointment_id: appointment.id,

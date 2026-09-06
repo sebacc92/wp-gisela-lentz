@@ -88,7 +88,72 @@ function runtimeEnvironment(name: string): string | undefined {
 }
 
 export function ownerNumbersFromEnvironment(): Set<string> {
-  return parseOwnerNumbers(runtimeEnvironment("WHATSAPP_OWNER_NUMBERS"));
+  const configured = parseOwnerNumbers(
+    runtimeEnvironment("WHATSAPP_OWNER_NUMBERS"),
+  );
+  // Este consultorio pertenece a una sola profesional. Una lista ambigua no
+  // puede ampliar silenciosamente el acceso a toda la agenda.
+  return configured.size === 1 ? configured : new Set<string>();
+}
+
+export const OWNER_TIMEZONE = "America/Argentina/Buenos_Aires";
+
+/** Una identidad proviene del webhook firmado, nunca de un teléfono editable. */
+export function verifiedOwnerPhone(
+  metadata: Record<string, unknown> | null | undefined,
+  allowlist = ownerNumbersFromEnvironment(),
+): string | null {
+  const phone = metadata?.verified_sender_phone_e164;
+  return metadata?.sender_identity_source === "signed_meta_webhook" &&
+    typeof phone === "string" &&
+    isOwnerNumber(phone, allowlist)
+    ? phone
+    : null;
+}
+
+export function ownerAgendaRange(
+  day: "today" | "tomorrow" | "week",
+  now = new Date(),
+): { from: string; until: string; localDate: string } {
+  const date = new Intl.DateTimeFormat("en-CA", {
+    timeZone: OWNER_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  // Argentina usa UTC-03. Límites explícitos evitan incluir turnos de las
+  // 21–24 del día anterior cuando el servidor trabaja en UTC.
+  const from = new Date(`${date}T00:00:00-03:00`);
+  if (day === "tomorrow") from.setUTCDate(from.getUTCDate() + 1);
+  const until = new Date(from);
+  until.setUTCDate(until.getUTCDate() + (day === "week" ? 7 : 1));
+  return {
+    from: from.toISOString(),
+    until: until.toISOString(),
+    localDate: date,
+  };
+}
+
+export function ownerSummarySchedule(now = new Date()): {
+  due: boolean;
+  date: string;
+  scheduledAt: string;
+} {
+  const { localDate } = ownerAgendaRange("today", now);
+  const scheduledAt = new Date(`${localDate}T21:00:00-03:00`);
+  const elapsed = now.getTime() - scheduledAt.getTime();
+  return {
+    due: elapsed >= 0 && elapsed < 15 * 60 * 1000,
+    date: localDate,
+    scheduledAt: scheduledAt.toISOString(),
+  };
+}
+
+function plainSummaryValue(value: string, limit = 120): string {
+  return value
+    .replace(/[\r\n\t]+/g, " ")
+    .trim()
+    .slice(0, limit);
 }
 
 export interface OwnerAgendaAppointment {
@@ -134,15 +199,21 @@ export function formatOwnerAgenda(args: {
   appointments: OwnerAgendaAppointment[];
   day: "today" | "tomorrow" | "week";
   timezone: string;
+  blocks?: Array<{ startsAt: string; endsAt: string; allDay: boolean }>;
+  calendarNeedsReview?: boolean;
 }): string {
   const title = DAY_TITLES[args.day];
-  if (!args.appointments.length) {
-    return `${title}: no tenés turnos agendados.`;
-  }
-
-  const lines: string[] = [`${title}:`, ""];
+  const lines: string[] = [
+    args.appointments.length
+      ? `${title}:`
+      : `${title}: sin turnos cargados en el sistema.`,
+    "",
+  ];
   let lastDay = "";
+  let shown = 0;
   for (const appointment of args.appointments) {
+    if (lines.join("\n").length > 3400) break;
+    shown += 1;
     if (args.day === "week") {
       const day = dayIn(appointment.startsAt, args.timezone);
       if (day !== lastDay) {
@@ -153,22 +224,47 @@ export function formatOwnerAgenda(args: {
     }
     const parts = [
       timeIn(appointment.startsAt, args.timezone),
-      appointment.patientName,
+      plainSummaryValue(appointment.patientName),
     ];
     if (appointment.coverage) {
       parts.push(appointment.coverage === "ioma" ? "IOMA" : "Particular");
     }
-    if (appointment.service) parts.push(appointment.service);
+    // El resumen no exporta motivos clínicos ni tratamientos por WhatsApp.
     lines.push(
       `${parts.join(" · ")}${depositSuffix(appointment.depositStatus)}`,
     );
   }
   lines.push("");
+  if (shown < args.appointments.length) {
+    lines.push(
+      `+ ${args.appointments.length - shown} turnos más. Consultá la agenda completa en /app.`,
+    );
+  }
   lines.push(
     args.appointments.length === 1
       ? "1 turno."
       : `${args.appointments.length} turnos.`,
   );
+  if (args.blocks?.length) {
+    lines.push("", "Horarios ocupados en Google Calendar:");
+    let shownBlocks = 0;
+    for (const block of args.blocks) {
+      if (lines.join("\n").length > 3700) break;
+      const day =
+        args.day === "week" ? `${dayIn(block.startsAt, args.timezone)} · ` : "";
+      lines.push(
+        `${day}${block.allDay ? "Todo el día" : `${timeIn(block.startsAt, args.timezone)}–${timeIn(block.endsAt, args.timezone)}`} · Ocupado`,
+      );
+      shownBlocks += 1;
+    }
+    if (shownBlocks < args.blocks.length)
+      lines.push(`+ ${args.blocks.length - shownBlocks} horarios más en /app.`);
+  }
+  if (args.calendarNeedsReview)
+    lines.push(
+      "",
+      "Google Calendar necesita una revisión reciente. Verificá la agenda en /app.",
+    );
   return lines.join("\n");
 }
 
@@ -214,6 +310,7 @@ export function formatOwnerPatient(args: {
   } else {
     lines.push("Próximo turno: no tiene");
   }
-  if (patient.notes) lines.push(`Notas: ${patient.notes}`);
+  // Las notas libres pueden contener datos clínicos; se consultan en /app.
+  lines.push("Ficha completa y notas: consultá el sistema interno.");
   return lines.join("\n");
 }

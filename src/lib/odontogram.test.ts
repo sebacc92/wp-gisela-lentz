@@ -26,6 +26,7 @@ function entry(overrides: Partial<OdontogramEntry> = {}): OdontogramEntry {
     surfaces: { oclusal: "caries" },
     note: null,
     recordedAt: "2026-08-30T10:00:00.000Z",
+    entrySequence: 1,
     ...overrides,
   };
 }
@@ -121,6 +122,7 @@ test("el estado vigente de una pieza es su último asiento", () => {
       condition: "obturado",
       surfaces: { oclusal: "obturado" },
       recordedAt: "2026-08-20T10:00:00Z",
+      entrySequence: 2,
     }),
     entry({ id: "c", tooth: 21, condition: "sano", surfaces: {} }),
   ];
@@ -129,4 +131,32 @@ test("el estado vigente de una pieza es su último asiento", () => {
   assert.equal(current.get(16)?.condition, "obturado");
   assert.equal(current.get(21)?.condition, "sano");
   assert.equal(current.size, 2, "una corrección no agrega una pieza nueva");
+});
+
+test("la secuencia del servidor define el estado aunque la fecha o la llegada cambien", () => {
+  const latest = entry({
+    id: "latest",
+    entrySequence: 3,
+    condition: "obturado",
+  });
+  const older = entry({
+    id: "older",
+    entrySequence: 2,
+    recordedAt: "2026-09-01T10:00:00Z",
+  });
+  assert.equal(currentByTooth([latest, older]).get(16)?.id, "latest");
+  assert.equal(currentByTooth([older, latest]).get(16)?.id, "latest");
+  assert.equal(
+    currentByTooth([latest, entry({ entrySequence: 1 })]).get(16)?.id,
+    "latest",
+  );
+});
+
+test("el resumen conserva hallazgos diferentes en cada cara", () => {
+  assert.equal(
+    toothSummary(
+      entry({ surfaces: { distal: "obturado", oclusal: "caries" } }),
+    ),
+    "Caries · Oclusal, Distal: Obturada",
+  );
 });

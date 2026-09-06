@@ -331,14 +331,14 @@ select ok(
 );
 
 select ok(
-  public.appointment_slot_is_available(
+  not public.appointment_slot_is_available(
     '9a000000-0000-4000-8000-000000000002',
     (select starts_at from selection_availability_fixture),
     30,
     null,
     'America/Argentina/Buenos_Aires'
   ),
-  'la disponibilidad se abre recién con aprobación y sync incremental completo'
+  'aprobación y sync completos todavía requieren activar la automatización para ofrecer turnos'
 );
 
 create temporary table selection_automation as

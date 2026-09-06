@@ -54,7 +54,7 @@ export function describeBlockConversionError(
     case "SERVICE_NOT_AVAILABLE":
       return "Ese servicio no está activo. El bloqueo se mantiene sin cambios.";
     default:
-      return "No pudimos convertir el bloqueo. No se hicieron cambios; intentá de nuevo.";
+      return "No pudimos comprobar si el bloqueo se convirtió. Actualizá la agenda antes de volver a intentar.";
   }
 }
 

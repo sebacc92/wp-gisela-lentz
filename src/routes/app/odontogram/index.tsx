@@ -5,7 +5,7 @@ import {
   useStore,
   useVisibleTask$,
 } from "@qwik.dev/core";
-import type { DocumentHead } from "@qwik.dev/router";
+import { usePreventNavigate$, type DocumentHead } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
 import { Icon } from "~/components/ui/Icon";
 import { getPageTitle } from "~/config/business";
@@ -13,6 +13,7 @@ import { isAdminProfile } from "~/lib/admin-access";
 import { formatBusinessDate } from "~/lib/date-time";
 import {
   ALL_SURFACES,
+  ALL_TEETH,
   CONDITION_LABELS,
   LOWER_PERMANENT,
   LOWER_PRIMARY,
@@ -21,6 +22,8 @@ import {
   UPPER_PRIMARY,
   conditionAllowsSurfaces,
   currentByTooth,
+  isPrimaryTooth,
+  isUpperTooth,
   surfaceLabel,
   toothSummary,
   type OdontogramEntry,
@@ -44,6 +47,7 @@ interface EntryRow {
   surfaces: Record<string, string> | null;
   note: string | null;
   recorded_at: string;
+  entry_sequence: number;
 }
 
 interface OdontogramState {
@@ -64,6 +68,7 @@ function mapEntry(row: EntryRow): OdontogramEntry {
     surfaces: (row.surfaces ?? {}) as OdontogramEntry["surfaces"],
     note: row.note,
     recordedAt: row.recorded_at,
+    entrySequence: row.entry_sequence,
   };
 }
 
@@ -80,7 +85,11 @@ export default component$(() => {
   const patientId = useSignal("");
   const selectedTooth = useSignal<number | null>(null);
   const draftCondition = useSignal<ToothCondition>("caries");
-  const draftSurfaces = useStore<Record<string, boolean>>({});
+  const draftSurfaces = useStore<
+    Partial<Record<ToothSurface, ToothCondition | "">>
+  >({});
+  const draftDirty = useSignal(false);
+  const dentition = useSignal<"permanent" | "primary" | "mixed">("permanent");
   const draftNote = useSignal("");
   const saving = useSignal(false);
   const entriesLoading = useSignal(false);
@@ -88,29 +97,96 @@ export default component$(() => {
   const notice = useSignal("");
   const noticeKind = useSignal<"success" | "error">("success");
 
-  const loadEntries = $(async (contactId: string, showLoading = true) => {
-    const sequence = entryLoadSequence.value + 1;
-    entryLoadSequence.value = sequence;
+  const loadEntries = $(async (contactId: string) => {
+    const sequence = ++entryLoadSequence.value;
     state.error = "";
+    state.entries = [];
     if (!contactId) {
-      state.entries = [];
       entriesLoading.value = false;
       return;
     }
-    if (showLoading) entriesLoading.value = true;
-    const { data, error } = await getSupabaseClient()
-      .from("odontogram_entries")
-      .select("id,contact_id,tooth,condition,surfaces,note,recorded_at")
-      .eq("contact_id", contactId)
-      .order("recorded_at", { ascending: true });
-    if (sequence !== entryLoadSequence.value) return;
-    entriesLoading.value = false;
-    if (error) {
-      state.error = "No pudimos abrir la ficha clínica.";
-      state.entries = [];
-      return;
+    entriesLoading.value = true;
+    try {
+      // Paginar por secuencia evita truncar fichas extensas o perder el orden
+      // cuando otro registro se agrega mientras se consulta el historial.
+      const entries: OdontogramEntry[] = [];
+      let before: number | undefined;
+      while (sequence === entryLoadSequence.value) {
+        let request = getSupabaseClient()
+          .from("odontogram_entries")
+          .select(
+            "id,contact_id,tooth,condition,surfaces,note,recorded_at,entry_sequence",
+          )
+          .eq("contact_id", contactId)
+          .order("entry_sequence", { ascending: false })
+          .limit(500);
+        if (before !== undefined)
+          request = request.lt("entry_sequence", before);
+        const { data, error } = await request;
+        if (sequence !== entryLoadSequence.value) return;
+        if (error) throw error;
+        const rows = (data ?? []) as EntryRow[];
+        entries.push(...rows.map(mapEntry));
+        if (rows.length < 500) break;
+        before = rows[rows.length - 1].entry_sequence;
+      }
+      if (sequence === entryLoadSequence.value) state.entries = entries;
+    } catch {
+      if (sequence === entryLoadSequence.value) {
+        state.error = "No pudimos abrir la ficha clínica.";
+      }
+    } finally {
+      if (sequence === entryLoadSequence.value) entriesLoading.value = false;
     }
-    state.entries = (data ?? []).map((row) => mapEntry(row as EntryRow));
+  });
+
+  const discardDraft = $(() => {
+    if (saving.value) return false;
+    if (
+      draftDirty.value &&
+      !window.confirm(
+        "Hay cambios sin guardar en esta pieza. ¿Querés descartarlos?",
+      )
+    )
+      return false;
+    draftDirty.value = false;
+    return true;
+  });
+
+  usePreventNavigate$((target) => {
+    if (!draftDirty.value && !saving.value) return false;
+    if (target === undefined || saving.value) return true;
+    const discard = window.confirm(
+      "Hay cambios sin guardar en esta pieza. ¿Querés salir y descartarlos?",
+    );
+    if (discard) draftDirty.value = false;
+    return !discard;
+  });
+
+  const chooseTooth = $(async (tooth: number) => {
+    if (selectedTooth.value === tooth || !(await discardDraft())) return;
+    const entry = currentByTooth(state.entries).get(tooth);
+    selectedTooth.value = tooth;
+    if (dentition.value !== "mixed")
+      dentition.value = isPrimaryTooth(tooth) ? "primary" : "permanent";
+    draftCondition.value = entry?.condition ?? "caries";
+    for (const surface of ALL_SURFACES)
+      draftSurfaces[surface] = entry?.surfaces[surface] ?? "";
+    draftNote.value = "";
+    notice.value = "";
+    window.requestAnimationFrame(() => {
+      const detail = document.getElementById("odontogram-detail");
+      detail?.focus({ preventScroll: true });
+      if (window.matchMedia("(max-width: 1320px)").matches) {
+        detail?.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+            .matches
+            ? "instant"
+            : "smooth",
+          block: "start",
+        });
+      }
+    });
   });
 
   // El perfil se resuelve sólo en el navegador para no renderizar información
@@ -138,53 +214,71 @@ export default component$(() => {
       return;
     }
 
-    const { data: patients } = await client
+    const { data: patients, error } = await client
       .from("contacts")
       .select("id,name,phone_e164")
       .order("name");
     state.patients = (patients ?? []) as PatientOption[];
+    if (error)
+      state.error =
+        "No pudimos cargar los pacientes. Recargá la página para reintentar.";
     state.loading = false;
   });
 
   const record = $(async () => {
     const tooth = selectedTooth.value;
-    if (!tooth || !patientId.value || saving.value) return;
+    const contactId = patientId.value;
+    if (
+      !tooth ||
+      !contactId ||
+      saving.value ||
+      entriesLoading.value ||
+      state.error ||
+      !state.isAdmin
+    )
+      return;
     saving.value = true;
-    const allowed = conditionAllowsSurfaces(draftCondition.value);
-    const surfaces: Record<string, string> = {};
-    if (allowed) {
+    notice.value = "";
+    const condition = draftCondition.value;
+    const surfaces: Partial<Record<ToothSurface, ToothCondition>> = {};
+    if (conditionAllowsSurfaces(condition)) {
       for (const surface of ALL_SURFACES) {
-        if (
-          draftSurfaces[surface] &&
-          SURFACE_CONDITIONS.includes(draftCondition.value)
-        ) {
-          surfaces[surface] = draftCondition.value;
-        }
+        const finding = draftSurfaces[surface];
+        if (finding && SURFACE_CONDITIONS.includes(finding))
+          surfaces[surface] = finding;
       }
     }
-
-    const { error } = await getSupabaseClient()
-      .from("odontogram_entries")
-      .insert({
-        contact_id: patientId.value,
-        tooth,
-        condition: draftCondition.value,
-        surfaces,
-        note: draftNote.value.trim() || null,
-        recorded_by: state.userId,
-      });
-    if (error) {
-      saving.value = false;
-      notice.value = "No pudimos guardar el registro.";
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from("odontogram_entries")
+        .insert({
+          contact_id: contactId,
+          tooth,
+          condition,
+          surfaces,
+          note: draftNote.value.trim() || null,
+          recorded_by: state.userId,
+        })
+        .select(
+          "id,contact_id,tooth,condition,surfaces,note,recorded_at,entry_sequence",
+        )
+        .single();
+      if (error || !data) throw error;
+      // El registro devuelto por el servidor ya tiene fecha y secuencia.
+      // No depende de una segunda consulta que podría fallar tras guardar.
+      if (patientId.value === contactId)
+        state.entries = [mapEntry(data as EntryRow), ...state.entries];
+      draftNote.value = "";
+      draftDirty.value = false;
+      notice.value = `Pieza ${tooth}: registro guardado en la ficha.`;
+      noticeKind.value = "success";
+    } catch {
+      notice.value =
+        "No pudimos confirmar el guardado. Tus cambios siguen acá; revisá la ficha antes de repetirlo.";
       noticeKind.value = "error";
-      return;
+    } finally {
+      saving.value = false;
     }
-    draftNote.value = "";
-    for (const surface of ALL_SURFACES) draftSurfaces[surface] = false;
-    notice.value = "Registro agregado a la ficha.";
-    noticeKind.value = "success";
-    await loadEntries(patientId.value, false);
-    saving.value = false;
   });
 
   const current = currentByTooth(state.entries);
@@ -207,8 +301,7 @@ export default component$(() => {
   const toothHistory = selectedTooth.value
     ? state.entries
         .filter((entry) => entry.tooth === selectedTooth.value)
-        .slice()
-        .reverse()
+        .sort((a, b) => b.entrySequence - a.entrySequence)
     : [];
   const selectedSurfaceCount = ALL_SURFACES.filter(
     (surface) => draftSurfaces[surface],
@@ -216,7 +309,9 @@ export default component$(() => {
 
   const renderRow = (teeth: number[], label: string) => (
     <div class="odontogram-arch">
-      <span class="odontogram-arch-label">{label}</span>
+      <span class="odontogram-arch-label">
+        {label.includes("superior") ? "Superior" : "Inferior"}
+      </span>
       <div class="odontogram-row" role="group" aria-label={label}>
         {teeth.map((tooth) => {
           const entry = current.get(tooth);
@@ -233,25 +328,16 @@ export default component$(() => {
               aria-label={`Pieza ${tooth}: ${toothSummary(entry)}${isSelected ? ". Seleccionada" : ""}`}
               aria-pressed={isSelected}
               title={`Pieza ${tooth} · ${toothSummary(entry)}`}
-              onClick$={() => {
-                selectedTooth.value = tooth;
-                draftCondition.value = entry?.condition ?? "caries";
-                for (const surface of ALL_SURFACES) {
-                  draftSurfaces[surface] = Boolean(entry?.surfaces?.[surface]);
-                }
-                draftNote.value = "";
-                if (window.matchMedia("(max-width: 1100px)").matches) {
-                  window.requestAnimationFrame(() => {
-                    document
-                      .getElementById("odontogram-detail")
-                      ?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  });
-                }
-              }}
+              id={`odontogram-tooth-${tooth}`}
+              disabled={saving.value}
+              onClick$={() => chooseTooth(tooth)}
             >
               <span class="odontogram-tooth-number">{tooth}</span>
               <span class="odontogram-tooth-state" aria-hidden="true">
                 <span />
+              </span>
+              <span class="odontogram-tooth-code" aria-hidden="true">
+                {entry ? CONDITION_LABELS[entry.condition].slice(0, 3) : "—"}
               </span>
               {isSelected && (
                 <span class="odontogram-tooth-check" aria-hidden="true">
@@ -382,10 +468,16 @@ export default component$(() => {
               <span class="odontogram-select-wrap">
                 <select
                   value={patientId.value}
+                  disabled={saving.value}
                   aria-describedby="odontogram-patient-results"
                   onChange$={async (_, element) => {
+                    if (!(await discardDraft())) {
+                      element.value = patientId.value;
+                      return;
+                    }
                     patientId.value = element.value;
                     selectedTooth.value = null;
+                    notice.value = "";
                     await loadEntries(element.value);
                   }}
                 >
@@ -439,6 +531,13 @@ export default component$(() => {
             <strong>Abriendo la ficha de {selectedPatient?.name}</strong>
             <span>Cargando piezas e historial…</span>
           </div>
+        ) : state.error ? (
+          <div class="section-empty odontogram-empty">
+            <strong>La ficha no está disponible</strong>
+            <span>
+              Reintentá la carga para consultar y registrar información.
+            </span>
+          </div>
         ) : (
           <div class="odontogram-workspace">
             <div class="odontogram-patient-summary">
@@ -450,7 +549,8 @@ export default component$(() => {
                 <strong>{selectedPatient?.name}</strong>
               </span>
               <span class="odontogram-record-count">
-                {current.size} de 52 piezas registradas
+                {current.size}{" "}
+                {current.size === 1 ? "pieza registrada" : "piezas registradas"}
               </span>
             </div>
 
@@ -463,7 +563,7 @@ export default component$(() => {
                     </span>
                     <span>
                       <h2 id="chart-title">Seleccioná una pieza</h2>
-                      <p>El color muestra el último estado registrado.</p>
+                      <p>Consultá el estado y agregá hallazgos por cara.</p>
                     </span>
                   </div>
                   <details class="odontogram-legend">
@@ -491,6 +591,63 @@ export default component$(() => {
                   </details>
                 </div>
 
+                <div class="odontogram-chart-tools">
+                  <div
+                    class="odontogram-dentition-toggle"
+                    role="group"
+                    aria-label="Dentición visible"
+                  >
+                    {(
+                      [
+                        ["permanent", "Permanente"],
+                        ["primary", "Temporaria"],
+                        ["mixed", "Mixta"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={dentition.value === value}
+                        onClick$={() => {
+                          dentition.value = value;
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <label class="odontogram-quick-select">
+                    <span>Ir a pieza</span>
+                    <select
+                      value={selectedTooth.value ?? ""}
+                      disabled={saving.value}
+                      onChange$={async (_, element) => {
+                        if (element.value)
+                          await chooseTooth(Number(element.value));
+                        element.value = String(selectedTooth.value ?? "");
+                      }}
+                    >
+                      <option value="">Elegí una pieza</option>
+                      <optgroup label="Permanentes">
+                        {ALL_TEETH.filter(
+                          (tooth) => !isPrimaryTooth(tooth),
+                        ).map((tooth) => (
+                          <option key={tooth} value={String(tooth)}>
+                            {`Pieza ${tooth} · ${toothSummary(current.get(tooth))}`}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Temporarias">
+                        {ALL_TEETH.filter(isPrimaryTooth).map((tooth) => (
+                          <option key={tooth} value={String(tooth)}>
+                            {`Pieza ${tooth} · ${toothSummary(current.get(tooth))}`}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </label>
+                </div>
+
                 <div class="odontogram-orientation" aria-hidden="true">
                   <span>Derecha del paciente</span>
                   <i />
@@ -499,10 +656,16 @@ export default component$(() => {
 
                 <section
                   class="odontogram-dentition"
+                  hidden={dentition.value === "primary"}
                   aria-labelledby="permanent-title"
                 >
                   <h3 id="permanent-title">Dentición permanente</h3>
-                  <div class="odontogram-scroll" tabIndex={0}>
+                  <div
+                    class="odontogram-scroll"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Piezas permanentes, desplazamiento horizontal"
+                  >
                     {renderRow(UPPER_PERMANENT, "Arcada superior permanente")}
                     <span class="odontogram-midline" aria-hidden="true" />
                     {renderRow(LOWER_PERMANENT, "Arcada inferior permanente")}
@@ -511,12 +674,15 @@ export default component$(() => {
 
                 <section
                   class="odontogram-dentition"
+                  hidden={dentition.value === "permanent"}
                   aria-labelledby="primary-title"
                 >
                   <h3 id="primary-title">Dentición temporaria</h3>
                   <div
                     class="odontogram-scroll odontogram-scroll-primary"
                     tabIndex={0}
+                    role="region"
+                    aria-label="Piezas temporarias, desplazamiento horizontal"
                   >
                     {renderRow(UPPER_PRIMARY, "Arcada superior temporaria")}
                     <span class="odontogram-midline" aria-hidden="true" />
@@ -541,7 +707,15 @@ export default component$(() => {
                   <>
                     <header class="odontogram-detail-heading">
                       <span>
-                        <small>Pieza seleccionada</small>
+                        <small>
+                          {isPrimaryTooth(selectedTooth.value)
+                            ? "Temporaria"
+                            : "Permanente"}{" "}
+                          ·{" "}
+                          {isUpperTooth(selectedTooth.value)
+                            ? "Superior"
+                            : "Inferior"}
+                        </small>
                         <h2 id="tooth-detail-title">
                           Pieza {selectedTooth.value}
                         </h2>
@@ -550,7 +724,15 @@ export default component$(() => {
                         type="button"
                         class="odontogram-close-button"
                         aria-label={`Cerrar detalle de la pieza ${selectedTooth.value}`}
-                        onClick$={() => (selectedTooth.value = null)}
+                        disabled={saving.value}
+                        onClick$={async () => {
+                          if (!(await discardDraft())) return;
+                          const tooth = selectedTooth.value;
+                          selectedTooth.value = null;
+                          document
+                            .getElementById(`odontogram-tooth-${tooth}`)
+                            ?.focus();
+                        }}
                       >
                         <Icon name="x" size={18} />
                       </button>
@@ -573,7 +755,11 @@ export default component$(() => {
 
                     <div class="odontogram-form-heading">
                       <h3>Nuevo registro</h3>
-                      <p>Se agregará al historial sin borrar los anteriores.</p>
+                      <p>
+                        Para {selectedPatient?.name} · Pieza{" "}
+                        {selectedTooth.value}. Los registros anteriores se
+                        conservan.
+                      </p>
                     </div>
 
                     <label class="form-field odontogram-condition-field">
@@ -581,10 +767,15 @@ export default component$(() => {
                       <span class="odontogram-select-wrap">
                         <select
                           value={draftCondition.value}
-                          onChange$={(_, element) =>
-                            (draftCondition.value =
-                              element.value as ToothCondition)
-                          }
+                          disabled={saving.value}
+                          onChange$={(_, element) => {
+                            draftCondition.value =
+                              element.value as ToothCondition;
+                            draftDirty.value = true;
+                            if (!conditionAllowsSurfaces(draftCondition.value))
+                              for (const surface of ALL_SURFACES)
+                                draftSurfaces[surface] = "";
+                          }}
                         >
                           {(
                             Object.keys(CONDITION_LABELS) as ToothCondition[]
@@ -602,43 +793,71 @@ export default component$(() => {
                       </span>
                     </label>
 
-                    {SURFACE_CONDITIONS.includes(draftCondition.value) && (
-                      <fieldset class="odontogram-surfaces">
+                    {conditionAllowsSurfaces(draftCondition.value) ? (
+                      <fieldset
+                        class="odontogram-surfaces"
+                        disabled={saving.value}
+                      >
                         <legend>
-                          Caras afectadas
-                          <small>
-                            {selectedSurfaceCount
-                              ? `${selectedSurfaceCount} ${selectedSurfaceCount === 1 ? "seleccionada" : "seleccionadas"}`
-                              : "Ninguna seleccionada"}
-                          </small>
+                          Hallazgos por cara{" "}
+                          <small>{selectedSurfaceCount} registradas</small>
                         </legend>
-                        <p>Podés marcar más de una.</p>
-                        <div class="odontogram-surface-grid">
-                          {ALL_SURFACES.map((surface: ToothSurface) => (
+                        <p>
+                          Podés registrar un hallazgo diferente en cada cara. Si
+                          no indicás caras, el estado describe la pieza
+                          completa.
+                        </p>
+                        <div class="odontogram-surface-fields">
+                          {ALL_SURFACES.map((surface) => (
                             <label
                               key={surface}
-                              class="odontogram-surface-option"
+                              class={{
+                                "odontogram-surface-field": true,
+                                "has-finding": Boolean(draftSurfaces[surface]),
+                              }}
                             >
-                              <input
-                                type="checkbox"
-                                checked={Boolean(draftSurfaces[surface])}
-                                onChange$={(_, element) =>
-                                  (draftSurfaces[surface] = element.checked)
-                                }
-                              />
                               <span>
-                                <i aria-hidden="true">
-                                  <Icon name="check" size={13} />
-                                </i>
                                 {surfaceLabel(
                                   selectedTooth.value ?? 11,
                                   surface,
                                 )}
                               </span>
+                              <select
+                                value={draftSurfaces[surface] || ""}
+                                onChange$={(_, element) => {
+                                  draftSurfaces[surface] = element.value as
+                                    | ToothCondition
+                                    | "";
+                                  draftDirty.value = true;
+                                }}
+                              >
+                                <option
+                                  value=""
+                                  selected={!draftSurfaces[surface]}
+                                >
+                                  Sin hallazgo
+                                </option>
+                                {SURFACE_CONDITIONS.map((condition) => (
+                                  <option
+                                    key={condition}
+                                    value={condition}
+                                    selected={
+                                      draftSurfaces[surface] === condition
+                                    }
+                                  >
+                                    {CONDITION_LABELS[condition]}
+                                  </option>
+                                ))}
+                              </select>
                             </label>
                           ))}
                         </div>
                       </fieldset>
+                    ) : (
+                      <p class="odontogram-whole-tooth-note">
+                        Este estado se registra para la pieza completa, sin
+                        hallazgos por cara.
+                      </p>
                     )}
 
                     <label class="form-field odontogram-note-field">
@@ -648,12 +867,14 @@ export default component$(() => {
                       <textarea
                         rows={3}
                         maxLength={2000}
+                        disabled={saving.value}
                         value={draftNote.value}
                         placeholder="Ej.: control, evolución o indicación clínica"
                         aria-describedby="odontogram-note-count"
-                        onInput$={(_, element) =>
-                          (draftNote.value = element.value)
-                        }
+                        onInput$={(_, element) => {
+                          draftNote.value = element.value;
+                          draftDirty.value = true;
+                        }}
                       />
                       <small
                         id="odontogram-note-count"
@@ -663,6 +884,11 @@ export default component$(() => {
                       </small>
                     </label>
 
+                    {draftDirty.value && (
+                      <p class="odontogram-draft-status" role="status">
+                        Cambios sin guardar · Pieza {selectedTooth.value}
+                      </p>
+                    )}
                     <button
                       class="primary-button odontogram-save-button"
                       type="button"
@@ -681,7 +907,7 @@ export default component$(() => {
                       ) : (
                         <>
                           <Icon name="check" size={17} />
-                          Agregar a la ficha
+                          Guardar pieza {selectedTooth.value}
                         </>
                       )}
                     </button>
@@ -707,13 +933,15 @@ export default component$(() => {
                               <span>
                                 <strong>{toothSummary(entry)}</strong>
                                 <small>
-                                  {formatBusinessDate(
-                                    new Date(entry.recordedAt),
-                                    {
-                                      dateStyle: "medium",
-                                      timeStyle: "short",
-                                    },
-                                  )}
+                                  <time dateTime={entry.recordedAt}>
+                                    {formatBusinessDate(
+                                      new Date(entry.recordedAt),
+                                      {
+                                        dateStyle: "medium",
+                                        timeStyle: "short",
+                                      },
+                                    )}
+                                  </time>
                                   {index === 0 && <em>Actual</em>}
                                 </small>
                                 {entry.note && <p>{entry.note}</p>}

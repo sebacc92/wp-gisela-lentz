@@ -156,7 +156,15 @@ set status = 'connected',
     last_sync_error = null,
     sync_scope_google_account_id = 'google-window-account',
     sync_scope_google_calendar_id = 'calendar-window-id',
-    sync_scope_generation = fixture.generation
+    sync_scope_generation = fixture.generation,
+    -- This test varies the inbound window; booking also requires the same
+    -- already-authorized outbound scope in the single-practice application.
+    automation_enabled = true,
+    automation_epoch = '9b000000-0000-4000-8000-000000000090',
+    automation_activated_at = clock_timestamp() - interval '1 day',
+    automation_google_account_id = 'google-window-account',
+    automation_google_calendar_id = 'calendar-window-id',
+    automation_connection_generation = fixture.generation
 from window_fixture fixture
 where connection.id = true;
 

@@ -38,6 +38,10 @@ select ok(
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+update public.app_settings
+set private_duration_minutes = 60
+where id = true;
+
 insert into auth.users (id, email, encrypted_password, aud, role)
 values (
   '95000000-0000-4000-8000-000000000001',

@@ -15,6 +15,44 @@ export interface CalendarAvailabilityRefreshInput {
   fetcher?: typeof fetch;
 }
 
+export function isSyncedAppointmentCalendarProjection(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const projection = value as { state?: unknown; projectionStage?: unknown };
+  return (
+    projection.state === "synced" &&
+    (projection.projectionStage === "pre_reservation" ||
+      projection.projectionStage === "confirmed")
+  );
+}
+
+/** A queue entry or a successful worker response is not proof of this turn. */
+export async function ensureAppointmentCalendarProjection(input: {
+  readProjection: () => Promise<unknown>;
+  refresh: () => Promise<boolean>;
+}): Promise<boolean> {
+  try {
+    const current = await input.readProjection();
+    if (isSyncedAppointmentCalendarProjection(current)) return true;
+    if (
+      !current ||
+      typeof current !== "object" ||
+      Array.isArray(current) ||
+      (current as { state?: unknown }).state !== "pending"
+    )
+      return false;
+    try {
+      await input.refresh();
+    } catch {
+      // Recover an acknowledgment lost after the worker committed the job.
+    }
+    // A response may be lost after Google and the DB accepted this exact job.
+    // Conversely, a successful refresh may have processed unrelated jobs only.
+    return isSyncedAppointmentCalendarProjection(await input.readProjection());
+  } catch {
+    return false;
+  }
+}
+
 export function isCompleteCalendarAvailabilityRefresh(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const response = value as CalendarAvailabilityRefreshResponse;

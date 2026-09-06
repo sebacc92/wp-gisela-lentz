@@ -36,4 +36,6 @@ package-lock.json
 yarn.lock
 server
 supabase/.temp
+# SQL includes: Prettier otherwise interprets .inc as HTML.
+supabase/tests/_support/*.inc
 artifacts/meta-app-review/*.html

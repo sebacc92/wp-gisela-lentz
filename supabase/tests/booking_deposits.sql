@@ -25,6 +25,9 @@ set minimum_booking_notice_minutes = 0,
     reminder_2h_enabled = false
 where id = true;
 
+-- These domain tests require an authorized, freshly observed Calendar.
+\ir _support/calendar-ready.inc
+
 insert into auth.users (id, email, encrypted_password, aud, role)
 values (
   '95000000-0000-4000-8000-000000000001',

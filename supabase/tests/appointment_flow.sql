@@ -9,6 +9,10 @@ select plan(1);
 select set_config('request.jwt.claims', '{"role":"service_role"}', true);
 select set_config('request.jwt.claim.role', 'service_role', true);
 
+-- These domain tests require an authorized, freshly observed Calendar.
+\ir _support/calendar-ready.inc
+select pg_temp.calendar_ready(date_trunc('day', now()) + interval '28 days');
+
 create function pg_temp.assert_true(value boolean, message text)
 returns void
 language plpgsql

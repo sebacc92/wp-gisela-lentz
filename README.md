@@ -351,6 +351,16 @@ importar no habilita por sí solo el scheduler ni las escrituras en Google.
 Configuración de OAuth, permisos mínimos, activación, rollback y prueba
 controlada en [docs/google-calendar-setup.md](docs/google-calendar-setup.md).
 
+En la instancia de Gisela, las nuevas reservas requieren Google Calendar
+operativo y una lectura reciente de disponibilidad. Guardar en la base local no
+equivale a confirmar la sincronización: los avisos de reserva y seña esperan la
+proyección del turno exacto. Ver [garantías y límites de las reservas](docs/google-calendar-booking-guarantees.md).
+
+El resumen privado de las 21:00 es independiente de los recordatorios a
+pacientes: requiere el número personal autorizado y un mensaje entrante válido
+dentro de las últimas 24 horas; si la ventana está cerrada, se omite sin plantilla
+paga. La configuración está en [cumplimiento de WhatsApp](docs/whatsapp-compliance.md).
+
 ## WhatsApp Business App Coexistence
 
 El repositorio incluye recepción segura y procesamiento durable de `messages`,

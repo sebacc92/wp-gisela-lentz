@@ -7,6 +7,7 @@ import {
 } from "@qwik.dev/core";
 import { useLocation, type DocumentHead } from "@qwik.dev/router";
 import "./agenda-print.css";
+import "./agenda.css";
 import { AppNavigation } from "~/components/app/AppNavigation";
 import { GoogleCalendarStatusBlock } from "~/components/app/GoogleCalendarStatusBlock";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
@@ -35,6 +36,11 @@ import {
   type DepositReviewDecision,
 } from "~/lib/deposit-review";
 import { getSupabaseClient } from "~/lib/supabase/client";
+import {
+  calendarProjectionNotice,
+  readAppointmentCalendar,
+  type CalendarProjectionState,
+} from "~/lib/calendar-projection";
 import {
   loadAppointments,
   loadBookingDurationSettings,
@@ -204,6 +210,9 @@ export default component$(() => {
   const reviewingDeposit = useSignal<DepositReviewDecision | "">("");
   const convertingBlockId = useSignal("");
   const detailRef = useSignal<HTMLElement>();
+  const detailCalendar = useSignal<CalendarProjectionState | "loading">(
+    "loading",
+  );
   const reloadVersion = useSignal(0);
   const notice = useSignal("");
   const printState = useStore<{
@@ -239,10 +248,14 @@ export default component$(() => {
     error: false,
   });
 
-  useVisibleTask$(async ({ track }) => {
+  useVisibleTask$(async ({ track, cleanup }) => {
     track(() => selectedDate.value);
     track(() => futureDepositMode.value);
     track(() => reloadVersion.value);
+    let current = true;
+    cleanup(() => {
+      current = false;
+    });
     state.loading = true;
     state.error = false;
     try {
@@ -260,15 +273,18 @@ export default component$(() => {
           loadBookingDurationSettings(client),
           loadCalendarBlocks(client, fromIso, toIso),
         ]);
+      if (!current) return;
       state.appointments = appointments;
       state.professionals = professionals;
       state.services = services;
       state.bookingDurations = bookingDurations;
       state.blocks = blocks;
-      state.depositReviews = await loadDepositProofReviews(
+      const depositReviews = await loadDepositProofReviews(
         client,
         appointments.map((appointment) => appointment.id),
       ).catch((): DepositProofReview[] => []);
+      if (!current) return;
+      state.depositReviews = depositReviews;
       const { data: user } = await client.auth.getUser();
       if (user.user) {
         const { data: profile } = await client
@@ -276,12 +292,12 @@ export default component$(() => {
           .select("role")
           .eq("id", user.user.id)
           .maybeSingle();
-        state.isAdmin = profile?.role === "ADMIN";
+        if (current) state.isAdmin = profile?.role === "ADMIN";
       }
     } catch {
-      state.error = true;
+      if (current) state.error = true;
     } finally {
-      state.loading = false;
+      if (current) state.loading = false;
     }
   });
 
@@ -294,12 +310,46 @@ export default component$(() => {
         { event: "*", schema: "public", table: "appointments" },
         () => (reloadVersion.value += 1),
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "google_calendar_external_events",
+        },
+        () => (reloadVersion.value += 1),
+      )
       .subscribe();
-    cleanup(() => void client.removeChannel(channel));
+    const refresh = () => {
+      if (!document.hidden) reloadVersion.value += 1;
+    };
+    const interval = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("calendar-synchronized", refresh);
+    cleanup(() => {
+      void client.removeChannel(channel);
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("calendar-synchronized", refresh);
+    });
   });
 
   // El detalle es un diálogo modal: al abrirlo recibe el foco y al cerrarlo lo
   // devuelve a la fila que lo abrió, para que el teclado no quede perdido.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track, cleanup }) => {
+    const id = track(() => selectedId.value);
+    track(() => reloadVersion.value);
+    if (!id) return;
+    let current = true;
+    cleanup(() => {
+      current = false;
+    });
+    detailCalendar.value = "loading";
+    const result = await readAppointmentCalendar(getSupabaseClient(), id);
+    if (current) detailCalendar.value = result;
+  });
+
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track, cleanup }) => {
     const openId = track(() => selectedId.value);
@@ -390,7 +440,7 @@ export default component$(() => {
         notice.value = statusSuccessMessage(appointment.contactName, status);
       } catch {
         notice.value =
-          "No pudimos cambiar el estado. No se hicieron cambios; intentá de nuevo.";
+          "No pudimos comprobar si cambió el estado. Actualizá la agenda antes de volver a intentar.";
       } finally {
         savingStatus.value = "";
       }
@@ -405,7 +455,7 @@ export default component$(() => {
     });
     if (
       !window.confirm(
-        `¿Confirmar la seña y el turno?\n\nPaciente: ${appointment.contactName}\nFecha: ${dateAndTime}\nServicio: ${appointment.serviceName}\n\nQueda registrado como tu decisión: el sistema no verifica la transferencia con el banco. El turno queda confirmado y se le avisa por WhatsApp.`,
+        `¿Confirmar la seña y el turno?\n\nPaciente: ${appointment.contactName}\nFecha: ${dateAndTime}\nServicio: ${appointment.serviceName}\n\nQueda registrado como tu decisión: el sistema no verifica la transferencia con el banco. El aviso por WhatsApp se envía si Google Calendar y la ventana de atención lo permiten.`,
       )
     ) {
       return;
@@ -425,13 +475,16 @@ export default component$(() => {
       }
       selectedId.value = "";
       reloadVersion.value += 1;
-      notice.value = result.alreadyConfirmed
-        ? `El turno de ${appointment.contactName} ya estaba confirmado.`
-        : result.notified
-          ? `Seña confirmada. Avisamos a ${appointment.contactName} por WhatsApp.`
-          : "Seña confirmada. El turno quedó guardado, pero no pudimos enviar el aviso por WhatsApp.";
+      notice.value = result.calendarState
+        ? calendarProjectionNotice(result.calendarState)
+        : result.alreadyConfirmed
+          ? `El turno de ${appointment.contactName} ya estaba confirmado.`
+          : result.notified
+            ? `Seña confirmada. Avisamos a ${appointment.contactName} por WhatsApp.`
+            : "Seña confirmada. El turno quedó guardado, pero no pudimos enviar el aviso por WhatsApp.";
     } catch {
-      notice.value = "No pudimos confirmar la seña. Intentá nuevamente.";
+      notice.value =
+        "No pudimos comprobar si la seña se confirmó. Actualizá la agenda antes de volver a intentar.";
     } finally {
       confirmingDeposit.value = false;
     }
@@ -553,6 +606,23 @@ export default component$(() => {
     confirmingDeposit.value ||
     Boolean(reviewingDeposit.value);
   const isToday = selectedDate.value === businessDateInput();
+  const weekStart = shiftDate(
+    selectedDate.value,
+    -((new Date(`${selectedDate.value}T12:00:00Z`).getUTCDay() + 6) % 7),
+  );
+  const weekDays = Array.from({ length: 7 }, (_, index) =>
+    shiftDate(weekStart, index),
+  );
+  const activeDayAppointments = state.appointments.filter(
+    (appointment) =>
+      appointment.status !== "cancelled" &&
+      appointment.depositStatus !== "expired",
+  );
+  const pendingDayAppointments = activeDayAppointments.filter(
+    (appointment) =>
+      appointment.depositStatus === "pending" ||
+      appointment.depositStatus === "proof_received",
+  );
   const noticeIsError = notice.value.startsWith("No pudimos");
 
   return (
@@ -590,28 +660,35 @@ export default component$(() => {
               section="turnos"
               label="¿Cómo funcionan los turnos?"
             />
-            <button
-              class="secondary-button agenda-print-action"
-              type="button"
-              disabled={Boolean(printState.preparing)}
-              onClick$={() => preparePrint("today")}
-            >
-              <Icon name="printer" size={17} />
-              {printState.preparing === "today"
-                ? "Preparando…"
-                : "Imprimir hoy"}
-            </button>
-            <button
-              class="secondary-button agenda-print-action"
-              type="button"
-              disabled={Boolean(printState.preparing)}
-              onClick$={() => preparePrint("tomorrow")}
-            >
-              <Icon name="printer" size={17} />
-              {printState.preparing === "tomorrow"
-                ? "Preparando…"
-                : "Imprimir mañana"}
-            </button>
+            <details class="agenda-print-menu">
+              <summary class="secondary-button">
+                <Icon name="printer" size={17} /> Imprimir
+              </summary>
+              <div class="agenda-print-options">
+                <button
+                  class="secondary-button agenda-print-action"
+                  type="button"
+                  disabled={Boolean(printState.preparing)}
+                  onClick$={() => preparePrint("today")}
+                >
+                  <Icon name="printer" size={17} />
+                  {printState.preparing === "today"
+                    ? "Preparando…"
+                    : "Imprimir hoy"}
+                </button>
+                <button
+                  class="secondary-button agenda-print-action"
+                  type="button"
+                  disabled={Boolean(printState.preparing)}
+                  onClick$={() => preparePrint("tomorrow")}
+                >
+                  <Icon name="printer" size={17} />
+                  {printState.preparing === "tomorrow"
+                    ? "Preparando…"
+                    : "Imprimir mañana"}
+                </button>
+              </div>
+            </details>
             <button
               class="primary-button"
               type="button"
@@ -623,6 +700,40 @@ export default component$(() => {
         </header>
 
         <GoogleCalendarStatusBlock variant="agenda" />
+
+        {!futureDepositMode.value && (
+          <nav class="agenda-week" aria-label="Días de la semana">
+            {weekDays.map((date) => (
+              <button
+                key={date}
+                type="button"
+                class={{
+                  "agenda-week-day": true,
+                  selected: date === selectedDate.value,
+                  today: date === businessDateInput(),
+                }}
+                aria-label={formatSelectedDate(date)}
+                aria-pressed={date === selectedDate.value}
+                aria-current={date === businessDateInput() ? "date" : undefined}
+                onClick$={() => {
+                  selectedDate.value = date;
+                  selectedId.value = "";
+                }}
+              >
+                <span>
+                  {new Intl.DateTimeFormat("es-AR", {
+                    weekday: "short",
+                    timeZone: "UTC",
+                  })
+                    .format(new Date(`${date}T12:00:00Z`))
+                    .replace(".", "")}
+                </span>
+                <strong>{Number(date.slice(-2))}</strong>
+                <small>{date === businessDateInput() ? "Hoy" : "\u00a0"}</small>
+              </button>
+            ))}
+          </nav>
+        )}
 
         <div class="section-toolbar agenda-toolbar">
           <div class="agenda-date-nav" aria-label="Cambiar día">
@@ -659,18 +770,29 @@ export default component$(() => {
             >
               →
             </button>
-            {!isToday && (
-              <button
-                class="filter-pill"
-                type="button"
-                onClick$={() => {
-                  futureDepositMode.value = false;
-                  selectedDate.value = businessDateInput();
-                }}
-              >
-                Volver a hoy
-              </button>
-            )}
+            <button
+              class={{
+                "filter-pill": true,
+                active: isToday && !futureDepositMode.value,
+              }}
+              type="button"
+              onClick$={() => {
+                futureDepositMode.value = false;
+                selectedDate.value = businessDateInput();
+              }}
+            >
+              Hoy
+            </button>
+            <button
+              class="filter-pill"
+              type="button"
+              onClick$={() => {
+                futureDepositMode.value = false;
+                selectedDate.value = shiftDate(businessDateInput(), 1);
+              }}
+            >
+              Mañana
+            </button>
           </div>
           <label class="search-field compact-search">
             <Icon name="search" size={17} />
@@ -732,16 +854,59 @@ export default component$(() => {
           )}
         </div>
 
-        {state.blocks.length > 0 && (
-          <section
+        <div
+          class="agenda-day-summary"
+          aria-label={
+            futureDepositMode.value
+              ? "Resumen de próximos turnos"
+              : "Resumen del día"
+          }
+        >
+          {!state.loading && !state.error && (
+            <>
+              <span>
+                <strong>{activeDayAppointments.length}</strong> turnos activos
+              </span>
+              <span>
+                <strong>{pendingDayAppointments.length}</strong> señas
+                pendientes
+              </span>
+              <span>
+                <strong>{state.blocks.length}</strong> bloqueos de Google
+              </span>
+              <button type="button" onClick$={() => (reloadVersion.value += 1)}>
+                Actualizar agenda
+              </button>
+            </>
+          )}
+        </div>
+
+        {!state.loading && !state.error && state.blocks.length > 0 && (
+          <details
             class="agenda-blocks"
             aria-label="Bloqueos de Google Calendar"
           >
-            <h2>Bloqueos de Google Calendar</h2>
+            <summary>
+              <h2>
+                Google Calendar · {state.blocks.length}{" "}
+                {state.blocks.length === 1
+                  ? "horario ocupado"
+                  : "horarios ocupados"}
+              </h2>
+            </summary>
             <ul>
               {state.blocks.map((block) => (
                 <li key={block.googleEventId}>
                   <strong>
+                    {futureDepositMode.value && (
+                      <small>
+                        {formatBusinessDate(new Date(block.startsAt), {
+                          day: "numeric",
+                          month: "short",
+                        })}
+                        {" · "}
+                      </small>
+                    )}
                     {block.allDay ? (
                       "Todo el día"
                     ) : (
@@ -775,10 +940,10 @@ export default component$(() => {
               Vienen de un evento creado a mano en Google Calendar. Ocupan el
               horario, pero no son turnos de pacientes.
             </small>
-          </section>
+          </details>
         )}
 
-        <div class="agenda-list">
+        <div class="agenda-list" aria-busy={state.loading}>
           <div class="agenda-label">
             <span>
               {visibleAppointments.length}{" "}
@@ -787,12 +952,12 @@ export default component$(() => {
             <i />
           </div>
           {state.loading ? (
-            <div class="section-empty">
-              <span class="small-spinner" />
+            <div class="section-empty" role="status">
+              <span class="small-spinner" aria-hidden="true" />
               <p>Cargando turnos…</p>
             </div>
           ) : state.error ? (
-            <div class="section-empty">
+            <div class="section-empty" role="alert">
               <Icon name="alert" size={23} />
               <p>No pudimos cargar la agenda.</p>
               <button type="button" onClick$={() => (reloadVersion.value += 1)}>
@@ -834,7 +999,7 @@ export default component$(() => {
                   key={appointment.id}
                   onClick$={() => (selectedId.value = appointment.id)}
                 >
-                  <time>
+                  <time dateTime={appointment.startsAt}>
                     {futureDepositMode.value && (
                       <small>
                         {formatBusinessDate(new Date(appointment.startsAt), {
@@ -851,6 +1016,12 @@ export default component$(() => {
                         hour12: false,
                       })}
                     </strong>
+                    <small class="agenda-end-time">
+                      hasta{" "}
+                      {formatBusinessDate(new Date(appointment.endsAt), {
+                        timeStyle: "short",
+                      })}
+                    </small>
                   </time>
                   <span class="agenda-avatar">
                     {appointment.contactName
@@ -861,6 +1032,9 @@ export default component$(() => {
                   </span>
                   <span class="agenda-copy">
                     <strong>{appointment.contactName}</strong>
+                    <span class="agenda-service">
+                      {appointment.serviceName}
+                    </span>
                     <small>
                       {coverageAndDuration(
                         appointment.coverage,
@@ -1047,6 +1221,21 @@ export default component$(() => {
                   </div>
                 </dl>
               </section>
+
+              {selectedAppointmentActive && (
+                <section class="detail-section" aria-live="polite">
+                  <h3>Google Calendar</h3>
+                  <p class="detail-hint">
+                    {detailCalendar.value === "loading"
+                      ? "Comprobando este turno…"
+                      : detailCalendar.value === "synced"
+                        ? "Este turno está guardado en Google Calendar."
+                        : detailCalendar.value === "conflict"
+                          ? "Hay un conflicto de horario. Revisá Google Calendar antes de confirmar este turno al paciente."
+                          : "La reserva está en el sistema, pero su sincronización con Google todavía no está verificada."}
+                  </p>
+                </section>
+              )}
 
               <section class="detail-section">
                 <h3>Atención</h3>

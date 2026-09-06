@@ -35,7 +35,12 @@ function confirmationClient(options?: {
   };
 
   return {
-    async rpc() {
+    async rpc(name: string) {
+      if (name === "appointment_google_calendar_projection")
+        return {
+          data: { state: "synced", projectionStage: "confirmed" },
+          error: null,
+        };
       return { data: null, error: options?.rpcFails ? new Error("RPC") : null };
     },
     from() {

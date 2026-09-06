@@ -116,7 +116,9 @@ export function formatBusinessDate(
   options: Intl.DateTimeFormatOptions,
   timeZone = BUSINESS_CONFIG.timezone,
 ): string {
-  return new Intl.DateTimeFormat("es-AR", { ...options, timeZone }).format(
-    date,
-  );
+  return new Intl.DateTimeFormat("es-AR", {
+    hourCycle: "h23",
+    ...options,
+    timeZone,
+  }).format(date);
 }

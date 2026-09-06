@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  verifyAppointmentCalendar,
+  type CalendarProjectionState,
+} from "./calendar-projection.ts";
 import { BUSINESS_CONFIG } from "../config/business.ts";
 
 function formatPart(startsAt: string, options: Intl.DateTimeFormatOptions) {
@@ -33,11 +37,21 @@ export async function confirmDepositAndNotify(
     startsAt: string;
     conversationId?: string;
   },
-): Promise<{ confirmed: boolean; notified: boolean }> {
+): Promise<{
+  confirmed: boolean;
+  notified: boolean;
+  calendarState?: CalendarProjectionState;
+}> {
   const { error } = await client.rpc("confirm_appointment_deposit", {
     p_appointment_id: input.appointmentId,
   });
   if (error) return { confirmed: false, notified: false };
+  const calendarState = await verifyAppointmentCalendar(
+    client,
+    input.appointmentId,
+  );
+  if (calendarState !== "synced")
+    return { confirmed: true, notified: false, calendarState };
 
   // Todo lo que sigue es best-effort: la confirmación ya está auditada y un
   // problema de WhatsApp no debe deshacerla ni informarla como fallida.

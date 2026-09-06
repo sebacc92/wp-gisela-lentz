@@ -16,6 +16,10 @@ import type {
   ServiceOption,
 } from "~/lib/inbox-types";
 import { getSupabaseClient } from "~/lib/supabase/client";
+import {
+  calendarProjectionNotice,
+  verifyAppointmentCalendar,
+} from "~/lib/calendar-projection";
 import type { CalendarBlock } from "~/lib/supabase/data";
 import { Icon } from "../ui/Icon";
 
@@ -171,10 +175,18 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                   error.value = describeBlockConversionError(result.error);
                   return;
                 }
+                const calendarState = result.appointmentId
+                  ? await verifyAppointmentCalendar(
+                      getSupabaseClient(),
+                      result.appointmentId,
+                    )
+                  : "unavailable";
                 await props.onConverted$(
-                  result.created
-                    ? "Listo. El bloqueo pasó a ser un turno y el evento original se retira de Google."
-                    : "Ese bloqueo ya se había convertido en un turno.",
+                  calendarState !== "synced"
+                    ? calendarProjectionNotice(calendarState)
+                    : result.created
+                      ? "Listo. El bloqueo pasó a ser un turno y el evento original se retira de Google."
+                      : "Ese bloqueo ya se había convertido en un turno.",
                 );
               } catch {
                 error.value =

@@ -19,6 +19,10 @@ import type {
 } from "~/lib/inbox-types";
 import { normalizePhoneE164 } from "~/lib/phone";
 import { getSupabaseClient } from "~/lib/supabase/client";
+import {
+  calendarBookingError,
+  calendarProjectionNotice,
+} from "~/lib/calendar-projection";
 import { loadAvailableSlots } from "~/lib/supabase/data";
 import { Icon } from "../ui/Icon";
 
@@ -302,6 +306,18 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                   }
                   if (createError || !created) throw createError;
                   contactId = created.id as string;
+                  // Keep the new contact if Calendar rejects the booking, so
+                  // retrying only reserves a slot and never creates it twice.
+                  state.patients.push({
+                    id: contactId,
+                    name,
+                    phone_e164: phone,
+                    coverage: selectedCoverage.value,
+                    is_existing_patient: newPatientIsExisting.value,
+                  });
+                  patientId.value = contactId;
+                  patientSearch.value = name;
+                  patientMode.value = "existing";
                 }
 
                 const { data: appointmentData, error: appointmentError } =
@@ -314,15 +330,15 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     p_internal_note: note.value.trim() || null,
                   });
                 if (appointmentError) {
-                  error.value = appointmentError.message.includes(
-                    "SLOT_UNAVAILABLE",
-                  )
-                    ? "Ese horario acaba de ocuparse. Elegí otro disponible."
-                    : "No pudimos reservar el horario.";
+                  error.value = calendarBookingError(appointmentError.message);
                   return;
                 }
                 const createdAppointment =
                   createdAppointmentFromRpc(appointmentData);
+                if (!createdAppointment) {
+                  await props.onSaved$(calendarProjectionNotice("unavailable"));
+                  return;
+                }
                 const notification = createdAppointment
                   ? await requestDepositAndNotify(client, {
                       appointmentId: createdAppointment.id,
@@ -331,11 +347,13 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     })
                   : { required: true, notified: false };
                 await props.onSaved$(
-                  notification.notified
-                    ? "Horario reservado y pedido de seña enviado por WhatsApp."
-                    : notification.required
-                      ? "Horario reservado. No pudimos enviar el pedido de seña por WhatsApp."
-                      : "Turno guardado y confirmado. La seña está desactivada.",
+                  notification.calendarState
+                    ? calendarProjectionNotice(notification.calendarState)
+                    : notification.notified
+                      ? "Horario reservado y pedido de seña enviado por WhatsApp."
+                      : notification.required
+                        ? "Horario reservado. No pudimos enviar el pedido de seña por WhatsApp."
+                        : "Turno guardado y confirmado. La seña está desactivada.",
                 );
               } catch {
                 error.value =

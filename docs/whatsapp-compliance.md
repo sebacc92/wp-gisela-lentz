@@ -1,6 +1,6 @@
 # Cumplimiento y protección del número de WhatsApp
 
-Revisión operativa: **12 de agosto de 2026**. Este documento resume controles del
+Revisión operativa: **6 de septiembre de 2026**. Este documento resume controles del
 producto; no reemplaza asesoramiento jurídico argentino ni garantiza decisiones
 futuras de Meta. Ante una regla dudosa o una política aún no revisada, el
 comportamiento esperado es **no enviar**.
@@ -8,6 +8,7 @@ comportamiento esperado es **no enviar**.
 Fuentes oficiales revisadas:
 
 - [WhatsApp Business Messaging Policy](https://whatsappbusiness.com/policy/)
+- [Precios oficiales de la plataforma](https://whatsappbusiness.com/products/platform-pricing/)
 - [WhatsApp Messaging Guidelines](https://www.whatsapp.com/legal/messaging-guidelines)
 - [WhatsApp Business Terms](https://www.whatsapp.com/legal/business-terms)
 - [Documentación de WhatsApp Business Platform](https://developers.facebook.com/docs/whatsapp/)
@@ -43,10 +44,10 @@ aprobados por la responsable del consultorio.
 1. **Ventana de servicio:** texto libre e interacciones sólo antes de
    `último mensaje entrante + 24 horas`. Un mensaje saliente o un estado de
    entrega no extiende esa ventana.
-2. **Mensajes proactivos:** sólo plantillas que Health sincroniza como
+2. **Mensajes proactivos a pacientes fuera de ventana:** sólo plantillas que Health sincroniza como
    `APPROVED`, categoría real `UTILITY`, calidad aceptable y vinculadas a un
    turno del mismo contacto.
-3. **Consentimiento:** plantilla o recordatorio requiere un evento de opt-in para
+3. **Consentimiento de pacientes:** plantilla o recordatorio requiere un evento de opt-in para
    `appointment_updates`, con fuente, versión del aviso y evidencia. Un “hola” o
    pedido de turno no crea permiso permanente.
 4. **Baja:** `BAJA`, `STOP` y frases inequívocas se procesan antes del bot. La
@@ -83,6 +84,56 @@ aprobados por la responsable del consultorio.
 La autoridad final de mensajería es el backend compartido y el trigger
 `enforce_whatsapp_outbound_policy`. El ledger `whatsapp_consent_events` es
 append-only; el resumen de consentimiento del contacto no se edita manualmente.
+
+## Agenda privada de Gisela y resumen de las 21:00
+
+El acceso privado usa exactamente un teléfono personal E.164 en el secreto
+`WHATSAPP_OWNER_NUMBERS`. No se acepta un nombre de perfil, un mensaje diciendo
+“soy Gisela”, el teléfono público del consultorio ni un número agregado desde la
+UI. Una lista ausente o con varios teléfonos falla cerrada. La aplicación está
+pensada únicamente para esta profesional.
+
+El webhook comprueba la firma de Meta y registra el teléfono del remitente
+observado en ese evento. El backend revalida esa evidencia, su vigencia de
+24 horas y el destinatario real justo antes de enviar. El navegador no puede
+editar `messages.metadata`; el número editable de un contacto no concede acceso
+privado. Si Meta sólo comparte un identificador sin teléfono, la respuesta
+privada se bloquea hasta contar con identidad telefónica verificable.
+
+Desde ese teléfono Gisela puede pedir “turnos de hoy”, “turnos de mañana”,
+“turnos de la semana” o “datos de Ana Pérez”. Las respuestas contienen datos
+administrativos necesarios y quedan registradas. No se exportan notas libres,
+motivos de consulta, tratamientos, odontogramas ni historias clínicas. Los
+adjuntos del teléfono autorizado no se envían a IA para interpretar consultas
+privadas; los pedidos privados se hacen por texto.
+
+Con `WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED=true`, el worker de recordatorios
+prepara una única agenda de mañana a las **21:00 de Buenos Aires**. El cron se
+invoca cada cinco minutos; permite reintentos hasta las 21:15. Después omite ese
+día. Incluye turnos activos del sistema y horarios ocupados importados desde
+Google Calendar, sin copiar títulos libres de esos eventos. Excluye
+pre-reservas vencidas e indica si Calendar carece de una revisión reciente.
+
+Este resumen se envía sólo en texto libre dentro de las 24 horas desde un
+mensaje entrante verificado de Gisela. Una salida, eco del teléfono comercial,
+confirmación de entrega o importación de historial no abre ni renueva esa
+ventana. La baja, una pausa de conversación o los interruptores del bot frenan
+el resumen. Si no hay ventana, se registra la omisión y **no se usa una plantilla
+como alternativa**. Los recordatorios a pacientes conservan su configuración y
+consentimiento separados.
+
+La tabla privada `whatsapp_owner_daily_summaries` conserva fecha, estado, motivo
+de omisión, destinatario y texto del primer intento. La fecha es única; los
+reintentos no cambian el contenido ni crean otro despacho lógico. La autorización
+y la hora se controlan otra vez en SQL y antes de Graph. No se persiste la agenda
+si el resumen ya se omite por falta de ventana.
+
+La página oficial de precios consultada el 6/9/2026 indica que los mensajes de
+servicio dentro de la ventana son gratuitos. El código garantiza que este
+resumen no usa plantillas; el costo final depende de las condiciones vigentes
+de Meta, que deben revisarse si cambian. Esto es una revisión de controles del
+producto, no una certificación de cumplimiento de la cuenta ni de obligaciones
+locales sobre datos de salud.
 
 ## Texto de consentimiento sugerido
 

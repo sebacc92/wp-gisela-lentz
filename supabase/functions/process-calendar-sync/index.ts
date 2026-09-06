@@ -15,6 +15,7 @@ import {
   safeGoogleErrorCode,
   upsertGoogleCalendarEvent,
 } from "../_shared/google-calendar.ts";
+import { assertGoogleCalendarSlotAvailable } from "../_shared/google-calendar-slot.ts";
 import { jsonResponse, optionsResponse } from "../_shared/http.ts";
 import { secretMatches } from "../_shared/recovery-auth.ts";
 import { authorizeUser, createServiceClient } from "../_shared/supabase.ts";
@@ -927,13 +928,43 @@ export async function handleCalendarSyncRequest(
           automaticGate?.automation_epoch ?? null,
         );
         const eventId = job.google_event_id;
-        const beforeMutation = () =>
-          assertCalendarJobStillAuthorized({
+        const beforeMutation = async () => {
+          await assertCalendarJobStillAuthorized({
             client,
             job,
             calendarId,
             generation,
           });
+          if (job.operation === "upsert") {
+            const { data: settings, error: settingsError } = await client
+              .from("app_settings")
+              .select("appointment_buffer_minutes")
+              .eq("id", true)
+              .maybeSingle();
+            if (settingsError || !settings) {
+              throw calendarWorkerFailure("CALENDAR_SLOT_SETTINGS_UNAVAILABLE");
+            }
+            await assertGoogleCalendarSlotAvailable({
+              accessToken,
+              calendarId: job.authorized_google_calendar_id,
+              calendarTimeZone,
+              startsAt: job.starts_at,
+              endsAt: job.ends_at,
+              bufferMinutes: settings.appointment_buffer_minutes,
+              ownEventId: eventId,
+              appointmentId: job.appointment_id,
+              automationEpoch: job.automation_epoch,
+              fetcher,
+            });
+            // The extra network read must not outlive the job authorization.
+            await assertCalendarJobStillAuthorized({
+              client,
+              job,
+              calendarId,
+              generation,
+            });
+          }
+        };
         let externalUpsertOperation: "inserted" | "patched" | "adopted" | null =
           null;
         let projectedEtag: string | null = null;

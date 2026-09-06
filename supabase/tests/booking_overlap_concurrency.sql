@@ -6,11 +6,13 @@ create extension if not exists pgtap with schema extensions;
 create extension if not exists dblink with schema extensions;
 set local search_path = public, extensions;
 select plan(11);
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+select set_config('request.jwt.claim.role', 'service_role', true);
 
 select extensions.dblink_connect(
   'booking_overlap_setup',
   'host=host.docker.internal port=55322 dbname=postgres ' ||
-  'user=supabase_admin password=postgres'
+  'user=postgres password=postgres'
 );
 select extensions.dblink_exec(
   'booking_overlap_setup',
@@ -20,6 +22,8 @@ select extensions.dblink_exec(
            ioma_duration_minutes, private_duration_minutes,
            deposit_enabled, booking_hold_minutes
     from public.app_settings where id = true;
+    create table public.booking_overlap_calendar_backup as
+    select * from public.google_calendar_connections;
     update public.app_settings
     set appointment_buffer_minutes = 15,
         minimum_booking_notice_minutes = 0,
@@ -51,6 +55,24 @@ select extensions.dblink_exec(
       ('92400000-0000-4000-8000-000000000011', '+12025550121', 'Concurrent B', 'ioma')
   $setup$
 );
+
+-- Read the shared fixture without retaining uncommitted Calendar locks in
+-- this session. Install it in the committed setup connection so both booking
+-- transactions observe exactly the same authorized snapshot.
+savepoint calendar_fixture_definition;
+\ir _support/calendar-ready.inc
+select regexp_replace(
+  pg_get_functiondef('pg_temp.calendar_ready(timestamptz)'::regprocedure),
+  'pg_temp_[0-9]+\.', 'pg_temp.', 'g'
+) as calendar_ready_definition
+\gset
+rollback to savepoint calendar_fixture_definition;
+select extensions.dblink_exec('booking_overlap_setup', :'calendar_ready_definition');
+select extensions.dblink_exec('booking_overlap_setup', $$set request.jwt.claims = '{"role":"service_role"}'$$);
+select extensions.dblink_exec('booking_overlap_setup', $$set request.jwt.claim.role = 'service_role'$$);
+select * from extensions.dblink(
+  'booking_overlap_setup', 'select pg_temp.calendar_ready()::text'
+) as calendar_fixture(result text);
 
 select extensions.dblink_connect(
   'booking_overlap_a',
@@ -582,6 +604,21 @@ select extensions.dblink_exec(
   $cleanup$
     begin;
     set local session_replication_role = replica;
+    delete from public.reminders
+    where appointment_id in (
+      select id from public.appointments
+      where professional_id = '92400000-0000-4000-8000-000000000001'
+    );
+    delete from public.audit_logs
+    where entity_id in (
+      select id from public.appointments
+      where professional_id = '92400000-0000-4000-8000-000000000001'
+    );
+    delete from public.google_calendar_sync_jobs
+    where appointment_id in (
+      select id from public.appointments
+      where professional_id = '92400000-0000-4000-8000-000000000001'
+    );
     delete from public.appointments
     where professional_id = '92400000-0000-4000-8000-000000000001';
     delete from public.contacts
@@ -605,6 +642,14 @@ select extensions.dblink_exec(
     from public.booking_overlap_settings_backup backup
     where settings.id = true;
     drop table public.booking_overlap_settings_backup;
+    -- Restore the complete prior scope and remove only this synthetic token.
+    delete from vault.secrets
+    where id = (select refresh_token_secret_id from public.google_calendar_connections where id = true)
+      and id is distinct from (select refresh_token_secret_id from public.booking_overlap_calendar_backup where id = true);
+    delete from public.google_calendar_connections where id = true;
+    insert into public.google_calendar_connections
+    select * from public.booking_overlap_calendar_backup;
+    drop table public.booking_overlap_calendar_backup;
     commit
   $cleanup$
 );

@@ -1,5 +1,6 @@
 import {
   component$,
+  useContext,
   useSignal,
   useStore,
   useVisibleTask$,
@@ -8,14 +9,12 @@ import type { DocumentHead } from "@qwik.dev/router";
 import { Link } from "@qwik.dev/router";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
+import "./dashboard.css";
 import { BotAutomationControl } from "~/components/app/BotAutomationControl";
 import { GoogleCalendarStatusBlock } from "~/components/app/GoogleCalendarStatusBlock";
 import { Icon } from "~/components/ui/Icon";
-import {
-  APP_DESCRIPTION,
-  BUSINESS_CONFIG,
-  getPageTitle,
-} from "~/config/business";
+import { APP_DESCRIPTION, getPageTitle } from "~/config/business";
 import {
   businessDateInput,
   formatBusinessDate,
@@ -143,6 +142,7 @@ function agendaHref(options: {
 }
 
 export default component$(() => {
+  const appUser = useContext(APP_USER_CONTEXT);
   const reloadVersion = useSignal(0);
   const state = useStore<{
     appointments: DashboardAppointment[];
@@ -158,8 +158,12 @@ export default component$(() => {
     error: false,
   });
 
-  useVisibleTask$(async ({ track }) => {
+  useVisibleTask$(async ({ track, cleanup }) => {
     track(() => reloadVersion.value);
+    let current = true;
+    cleanup(() => {
+      current = false;
+    });
     state.loading = true;
     state.error = false;
 
@@ -178,6 +182,7 @@ export default component$(() => {
       ]);
 
       if (conversations.error) throw conversations.error;
+      if (!current) return;
 
       state.appointments = appointments;
       state.unreadMessages = (conversations.data ?? []).reduce(
@@ -186,10 +191,24 @@ export default component$(() => {
       );
       state.loadedAt = reference.toISOString();
     } catch {
-      state.error = true;
+      if (current) state.error = true;
     } finally {
-      state.loading = false;
+      if (current) state.loading = false;
     }
+  });
+
+  // Refresh only while the browser tab is visible, and release the listeners.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const refresh = () => {
+      if (!document.hidden) reloadVersion.value += 1;
+    };
+    const interval = window.setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    cleanup(() => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+    });
   });
 
   const now = state.loadedAt ? new Date(state.loadedAt) : new Date();
@@ -214,6 +233,16 @@ export default component$(() => {
   const nextAppointment = upcomingAppointments[0];
   const todayDate = businessDateInput(now);
   const todayAgendaHref = agendaHref({ date: todayDate });
+  const tomorrow = new Date(`${todayDate}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const tomorrowAgendaHref = agendaHref({
+    date: tomorrow.toISOString().slice(0, 10),
+  });
+  const hour = Number(
+    formatBusinessDate(now, { hour: "numeric", hourCycle: "h23" }),
+  );
+  const greeting =
+    hour < 12 ? "Buen día" : hour < 20 ? "Buenas tardes" : "Buenas noches";
   const nextAppointmentHref = nextAppointment
     ? agendaHref({
         date: businessDateInput(new Date(nextAppointment.startsAt)),
@@ -239,8 +268,10 @@ export default component$(() => {
         <header class="section-page-header dashboard-header dashboard-welcome">
           <div class="dashboard-welcome-copy">
             <span class="eyebrow">Tu consultorio hoy</span>
-            <h1>Buen día, {BUSINESS_CONFIG.name.split(" ")[0]}</h1>
-            <p>{todayLabel}. Acá tenés todo lo importante, sin vueltas.</p>
+            <h1>
+              {greeting}, {appUser.fullName.split(" ")[0]}
+            </h1>
+            <p>{todayLabel} · Consultorio de Gisela Lentz</p>
             <BotAutomationControl variant="home" />
             <nav class="dashboard-quick-actions" aria-label="Acciones rápidas">
               <Link class="primary-button" href={todayAgendaHref}>
@@ -249,13 +280,40 @@ export default component$(() => {
               <Link class="secondary-button" href="/app/inbox">
                 <Icon name="message" size={17} /> Ver mensajes
               </Link>
+              <Link class="secondary-button" href={tomorrowAgendaHref}>
+                <Icon name="clock" size={17} /> Agenda de mañana
+              </Link>
             </nav>
           </div>
         </header>
 
         <GoogleCalendarStatusBlock variant="home" />
 
-        {state.loading ? (
+        <div class="dashboard-refresh">
+          <span>
+            {state.loadedAt ? (
+              <>
+                Última actualización:{" "}
+                <time dateTime={state.loadedAt}>
+                  {formatBusinessDate(new Date(state.loadedAt), {
+                    timeStyle: "short",
+                  })}
+                </time>
+              </>
+            ) : (
+              "Resumen del consultorio"
+            )}
+          </span>
+          <button
+            type="button"
+            disabled={state.loading}
+            onClick$={() => (reloadVersion.value += 1)}
+          >
+            {state.loading ? "Actualizando…" : "Actualizar"}
+          </button>
+        </div>
+
+        {state.loading && !state.loadedAt ? (
           <div class="dashboard-state" aria-live="polite">
             <span class="small-spinner" aria-hidden="true" />
             <p>Preparando tu día…</p>
@@ -297,7 +355,9 @@ export default component$(() => {
                       : "—"}
                   </strong>
                   <em>
-                    {nextAppointment?.patientName ?? "Sin próximos turnos"}
+                    {nextAppointment
+                      ? `${businessDateInput(new Date(nextAppointment.startsAt)) === todayDate ? "Hoy" : formatBusinessDate(new Date(nextAppointment.startsAt), { day: "numeric", month: "short" })} · ${nextAppointment.patientName}`
+                      : "Sin próximos turnos"}
                   </em>
                 </span>
               </Link>
@@ -347,7 +407,7 @@ export default component$(() => {
                 <span>
                   <small>Mensajes sin leer</small>
                   <strong>{state.unreadMessages}</strong>
-                  <em>sin responder</em>
+                  <em>por leer</em>
                 </span>
               </Link>
             </section>

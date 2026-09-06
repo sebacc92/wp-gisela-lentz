@@ -1,9 +1,82 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ensureAppointmentCalendarProjection,
+  isSyncedAppointmentCalendarProjection,
   isCompleteCalendarAvailabilityRefresh,
   refreshCalendarAvailabilityBeforeBooking,
 } from "./calendar-booking-availability.ts";
+
+test("sólo un estado synced con etapa proyectada válida prueba guardado en Google", () => {
+  assert.equal(
+    isSyncedAppointmentCalendarProjection({
+      state: "synced",
+      projectionStage: "confirmed",
+    }),
+    true,
+  );
+  for (const value of [
+    null,
+    {},
+    { state: "synced" },
+    { state: "pending", projectionStage: "confirmed" },
+    { state: "synced", projectionStage: "absent" },
+  ]) {
+    assert.equal(isSyncedAppointmentCalendarProjection(value), false);
+  }
+});
+
+test("un worker exitoso que procesó otros turnos no autoriza confirmar éste", async () => {
+  let reads = 0;
+  assert.equal(
+    await ensureAppointmentCalendarProjection({
+      readProjection: () => {
+        reads += 1;
+        return Promise.resolve({ state: "pending" });
+      },
+      refresh: () => Promise.resolve(true),
+    }),
+    false,
+  );
+  assert.equal(reads, 2);
+});
+
+test("una respuesta perdida se recupera sólo leyendo la proyección exacta confirmada", async () => {
+  let reads = 0;
+  assert.equal(
+    await ensureAppointmentCalendarProjection({
+      readProjection: () =>
+        Promise.resolve(
+          ++reads === 1
+            ? { state: "pending" }
+            : { state: "synced", projectionStage: "pre_reservation" },
+        ),
+      refresh: () => Promise.resolve(false),
+    }),
+    true,
+  );
+});
+
+test("conflicto, desconexión o error conservan el turno sin enviar confirmación", async () => {
+  for (const state of ["conflict", "unavailable"]) {
+    assert.equal(
+      await ensureAppointmentCalendarProjection({
+        readProjection: () => Promise.resolve({ state }),
+        refresh: () => {
+          throw new Error("must not run");
+        },
+      }),
+      false,
+    );
+  }
+  assert.equal(
+    await ensureAppointmentCalendarProjection({
+      readProjection: () => Promise.reject(new Error("database unavailable")),
+      refresh: () => Promise.resolve(true),
+    }),
+    false,
+  );
+});
 
 const completed = {
   processed: true,

@@ -1176,6 +1176,8 @@ export async function handleWhatsAppWebhookRequest(
                 body: content.body,
                 metadata: {
                   ...content.metadata,
+                  sender_identity_source: "signed_meta_webhook",
+                  verified_sender_phone_e164: contactPhone,
                   whatsapp_user_id: contactUserId,
                   username: contact?.profile?.username ?? null,
                   country_code: contact?.profile?.country_code ?? null,

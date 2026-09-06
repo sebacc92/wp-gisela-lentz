@@ -1,3 +1,4 @@
+import { processOwnerDailySummary } from "./owner-daily-summary.ts";
 import {
   jsonResponse,
   optionsResponse,
@@ -91,6 +92,13 @@ Deno.serve(async (request) => {
     typeof appSettings?.timezone === "string" && appSettings.timezone.trim()
       ? appSettings.timezone.trim()
       : DEFAULT_BUSINESS_TIMEZONE;
+
+  // Independiente de las plantillas y del consentimiento para avisos a pacientes.
+  // Una falla del resumen privado no interrumpe expiraciones ni otros avisos.
+  const ownerSummary = await processOwnerDailySummary({ client }).catch(() => {
+    console.error("process-reminders", "OWNER_SUMMARY_FAILED");
+    return { status: "failed", reason: "OWNER_SUMMARY_FAILED" };
+  });
 
   const holdExpirationMessage =
     typeof appSettings?.booking_hold_expired_message_template === "string"
@@ -402,6 +410,7 @@ Deno.serve(async (request) => {
   }
 
   return jsonResponse(request, {
+    owner_summary: ownerSummary,
     expired_holds: expiredHolds,
     expired_notifications_sent: expiredNotificationsSent,
     expired_notifications_failed: expiredNotificationsFailed,
