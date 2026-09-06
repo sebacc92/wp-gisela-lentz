@@ -1403,3 +1403,111 @@
     gap: 2px;
   }
 }
+
+/* Escala de lectura en pantalla; conserva los tamaños de impresión. */
+@media screen {
+  .odontogram-select-wrap select,
+  .odontogram-page .odontogram-search input,
+  .odontogram-page .odontogram-note-field textarea,
+  .odontogram-surface-field select,
+  .odontogram-quick-select select {
+    font-size: 16px;
+  }
+
+  .odontogram-patient-summary strong,
+  .odontogram-page .odontogram-form-heading h3,
+  .odontogram-page .odontogram-history-heading h3,
+  .odontogram-detail-empty strong {
+    font-size: 16px;
+  }
+
+  .odontogram-current strong,
+  .odontogram-page .odontogram-save-button,
+  .odontogram-page .odontogram-history li strong,
+  .odontogram-page .odontogram-history p {
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .odontogram-picker-heading p,
+  .odontogram-chart-heading p,
+  .odontogram-form-heading p,
+  .odontogram-error strong,
+  .odontogram-legend summary,
+  .odontogram-page .odontogram-dentition h3,
+  .odontogram-page .odontogram-condition-field > span:first-child,
+  .odontogram-page .odontogram-note-field > span:first-child,
+  .odontogram-page .odontogram-surfaces legend,
+  .odontogram-surface-field,
+  .odontogram-whole-tooth-note,
+  .odontogram-draft-status,
+  .odontogram-history-empty,
+  .odontogram-detail-empty p,
+  .odontogram-dentition-toggle button,
+  .odontogram-quick-select {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .odontogram-results,
+  .odontogram-error small,
+  .odontogram-record-count,
+  .odontogram-legend-grid > span,
+  .odontogram-scroll-hint,
+  .odontogram-surfaces > p,
+  .odontogram-page .odontogram-history li small,
+  .odontogram-page .odontogram-privacy {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .odontogram-patient-summary small,
+  .odontogram-detail-heading small,
+  .odontogram-current small,
+  .odontogram-surfaces legend small,
+  .odontogram-note-count,
+  .odontogram-history-heading > span,
+  .odontogram-history li small em {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .odontogram-orientation,
+  .odontogram-arch-label,
+  .odontogram-tooth-code {
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .odontogram-tooth-number {
+    font-size: 14px;
+  }
+
+  .odontogram-page .odontogram-arch {
+    grid-template-columns: 52px minmax(max-content, 1fr);
+  }
+
+  .odontogram-midline {
+    width: calc(100% - 59px);
+  }
+
+  .odontogram-page .odontogram-tooth {
+    min-height: 90px;
+    padding-top: 16px;
+  }
+
+  .odontogram-tooth-check {
+    top: 2px;
+    right: 2px;
+    width: 14px;
+    height: 14px;
+  }
+
+  .odontogram-page .odontogram-note-field textarea {
+    padding-bottom: 30px;
+  }
+
+  .odontogram-page .odontogram-surfaces legend {
+    flex-wrap: wrap;
+  }
+}

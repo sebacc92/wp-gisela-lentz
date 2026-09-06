@@ -5,6 +5,66 @@
  * improved controls do not alter shared buttons elsewhere in the application.
  */
 
+/* Reading sizes stay local to the inbox, including shared base components. */
+.inbox-conversation-panel .conversation-row strong,
+.inbox-conversation-panel .conversation-preview,
+.inbox-conversation-panel .list-empty p,
+.inbox-chat-panel .message-attachment-copy strong,
+.inbox-chat-panel .message-attachment-open,
+.inbox-chat-panel .send-button {
+  font-size: 15px;
+}
+
+.inbox-conversation-panel .conversation-preview,
+.inbox-chat-panel .message-bubble p {
+  line-height: 1.5;
+}
+
+.inbox-conversation-panel .search-field input,
+.inbox-chat-panel .chat-contact strong,
+.inbox-chat-panel .message-bubble p,
+.inbox-chat-panel .composer textarea,
+.inbox-contact-drawer input,
+.inbox-contact-drawer select,
+.inbox-contact-drawer textarea {
+  font-size: 16px;
+}
+
+.inbox-conversation-panel .filter-pill,
+.inbox-conversation-panel .header-user,
+.inbox-conversation-panel .list-empty span:not(.sr-only),
+.inbox-chat-panel .chat-contact span,
+.inbox-chat-panel .header-action-button,
+.inbox-chat-panel .chat-context-actions button,
+.inbox-chat-panel .system-message,
+.inbox-chat-panel .composer-tool,
+.inbox-chat-panel .composer-policy,
+.inbox-chat-panel .composer-policy strong,
+.inbox-chat-panel .message-attachment-copy small,
+.inbox-chat-panel .message-attachment-error,
+.inbox-chat-panel .message-attachment-late {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.inbox-conversation-panel .eyebrow,
+.inbox-conversation-panel .conversation-row time,
+.inbox-conversation-panel .attention-label,
+.inbox-conversation-panel .unread-count,
+.inbox-chat-panel .automation-chip,
+.inbox-chat-panel .date-divider span,
+.inbox-chat-panel .message-meta,
+.inbox-chat-panel .composer-policy small,
+.inbox-chat-panel .composer-hint {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.inbox-chat-panel .composer textarea {
+  min-height: 44px;
+  line-height: 24px;
+}
+
 /* Conversation list ------------------------------------------------------- */
 
 .inbox-conversation-panel .conversation-panel-header {
@@ -18,6 +78,7 @@
 }
 
 .inbox-conversation-panel .search-field {
+  height: 44px;
   border-color: #dce5e4;
   border-radius: 12px;
   background: #f7f9f9;
@@ -95,7 +156,7 @@
 }
 
 .inbox-conversation-panel .conversation-item {
-  min-height: 86px;
+  min-height: 94px;
   border-bottom-color: #edf1f0;
   transition: background-color 140ms ease;
 }
@@ -311,7 +372,7 @@
 .conversation-bot-heading h2 {
   margin: 0;
   color: var(--ink-900);
-  font-size: 0.91rem;
+  font-size: 16px;
 }
 
 .conversation-bot-heading p,
@@ -319,7 +380,7 @@
 .conversation-bot-error {
   margin: 2px 0 0;
   color: var(--ink-600);
-  font-size: 0.78rem;
+  font-size: 15px;
   line-height: 1.42;
 }
 
@@ -338,7 +399,7 @@
 
 .conversation-bot-statuses dt {
   color: var(--ink-500);
-  font-size: 0.7rem;
+  font-size: 12px;
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -347,7 +408,7 @@
 .conversation-bot-statuses dd {
   margin: 0;
   color: var(--ink-900);
-  font-size: 0.82rem;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -369,7 +430,8 @@
 }
 
 .conversation-bot-actions button {
-  min-height: 34px;
+  min-height: 40px;
+  font-size: 13px;
 }
 
 .inbox-chat-panel .chat-context-actions .confirm-deposit-action {
@@ -412,7 +474,7 @@
 }
 
 .inbox-chat-panel .human-notice p {
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1.45;
 }
 
@@ -431,7 +493,7 @@
   padding-inline: 14px;
   background: rgb(255 255 255 / 88%);
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: 13px;
   box-shadow: 0 2px 8px rgb(75 52 66 / 7%);
 }
 
@@ -480,12 +542,12 @@
 .inbox-chat-panel .message-location-copy strong {
   overflow-wrap: anywhere;
   color: var(--ink-900);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-chat-panel .message-location-copy small {
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -493,7 +555,7 @@
   width: fit-content;
   margin-top: 3px;
   color: var(--brand-800);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 750;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -689,12 +751,12 @@
 
 .inbox-chat-panel .popover-title strong {
   color: var(--ink-900);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-chat-panel .popover-title span {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .inbox-chat-panel .popover-close {
@@ -742,23 +804,23 @@
   border-radius: 6px;
   padding: 3px 6px;
   background: var(--brand-50);
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
 .inbox-chat-panel .quick-reply-option strong {
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .inbox-chat-panel .quick-reply-option small {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .inbox-chat-panel .quick-replies-empty {
   margin: 0;
   padding: 22px 16px;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1.45;
   text-align: center;
 }
@@ -779,7 +841,7 @@
   display: block;
   margin: 0 0 9px 2px;
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -856,7 +918,7 @@
 
 .inbox-contact-drawer .contact-overview p,
 .inbox-contact-drawer .contact-overview small {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .consent-card {
@@ -866,22 +928,22 @@
 
 .inbox-contact-drawer .consent-card strong {
   margin-bottom: 4px;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .consent-card p,
 .inbox-contact-drawer .consent-readonly-note {
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
 .inbox-contact-drawer .consent-details > div {
   padding-block: 9px;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .inbox-contact-drawer .section-heading h3 {
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .inbox-contact-drawer .text-button {
@@ -889,7 +951,7 @@
   padding-inline: 8px;
   border: 1px solid transparent;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .text-button:hover {
@@ -897,12 +959,29 @@
   background: #f3f8f7;
 }
 
+.inbox-contact-drawer .appointment-card-footer {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inbox-contact-drawer .status-badge {
+  min-height: 26px;
+  height: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.inbox-contact-drawer .appointment-proof-notice {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .inbox-contact-drawer .appointment-card-footer button {
   min-height: 40px;
   padding-inline: 9px;
   border: 1px solid transparent;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .appointment-card-footer button:hover {
@@ -911,30 +990,30 @@
 }
 
 .inbox-contact-drawer .appointment-date-block strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .appointment-date-block span,
 .inbox-contact-drawer .appointment-doctor {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .inbox-contact-drawer .empty-appointment .secondary-button {
   min-height: 40px;
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .empty-appointment p,
 .inbox-contact-drawer .muted-copy {
-  font-size: 12px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .previous-item strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .previous-item span {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .inbox-contact-drawer .contact-actions {
@@ -981,11 +1060,11 @@
 }
 
 .inbox-contact-drawer .contact-actions strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .inbox-contact-drawer .contact-actions small {
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -1029,7 +1108,7 @@
   }
 
   .inbox-conversation-panel .conversation-item {
-    min-height: 88px;
+    min-height: 96px;
   }
 
   .inbox-chat-panel .chat-header {
@@ -1069,7 +1148,7 @@
   }
 
   .inbox-chat-panel .composer-policy small {
-    line-height: 1.3;
+    line-height: 1.45;
   }
 
   .inbox-chat-panel .composer-actions {

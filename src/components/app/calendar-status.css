@@ -1,3 +1,30 @@
+.calendar-operational-status .calendar-operational-heading strong {
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.calendar-operational-status .calendar-operational-heading small,
+.calendar-operational-status .calendar-operational-feedback {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.calendar-operational-status .calendar-operational-details dt {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.calendar-operational-status .calendar-operational-details dd {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.calendar-operational-status .calendar-operational-actions .secondary-button,
+.calendar-operational-status .calendar-operational-link {
+  font-size: 15px;
+  line-height: 1.4;
+}
+
 .section-shell .calendar-operational-status {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px 16px;
@@ -21,7 +48,7 @@
   align-content: center;
   padding: 8px 0;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 .calendar-status-disclosure summary:focus-visible {
@@ -53,6 +80,6 @@
     margin-top: 8px;
   }
   .calendar-status-disclosure summary {
-    font-size: 11px;
+    font-size: 13px;
   }
 }

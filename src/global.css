@@ -88,13 +88,13 @@
 }
 
 .legal-brand strong {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   letter-spacing: 0.12em;
 }
 
 .legal-brand small {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   letter-spacing: 0.02em;
 }
 
@@ -108,7 +108,7 @@
   border-radius: 9px;
   padding: 9px 12px;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 650;
   text-decoration: none;
   transition:
@@ -144,7 +144,7 @@
 
 .legal-eyebrow {
   color: var(--brand-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 800;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -171,7 +171,7 @@
 .legal-updated {
   margin-top: 18px;
   color: var(--ink-400);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 600;
 }
 
@@ -204,7 +204,7 @@
 .legal-document p,
 .legal-document li {
   color: var(--ink-700);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.78;
 }
 
@@ -273,7 +273,7 @@
 .legal-callout-label {
   margin-bottom: 8px !important;
   color: var(--brand-700) !important;
-  font-size: 10px !important;
+  font-size: var(--app-text-micro, 10px) !important;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -301,7 +301,7 @@
   max-width: 560px;
   margin: 0;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   line-height: 1.6;
 }
 
@@ -312,7 +312,7 @@
 }
 
 .legal-footer a {
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 @media (max-width: 720px) {
@@ -354,7 +354,7 @@
   }
 
   .legal-lead {
-    font-size: 15px;
+    font-size: var(--app-text-body, 15px);
   }
 
   .legal-document {
@@ -499,7 +499,7 @@ body {
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -586,7 +586,7 @@ button {
 }
 
 .brand-name {
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 750;
   letter-spacing: 0.13em;
 }
@@ -620,7 +620,7 @@ button {
 .nav-link span {
   overflow: hidden;
   max-width: 48px;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-weight: 600;
   line-height: 1.1;
   text-overflow: ellipsis;
@@ -688,7 +688,7 @@ button {
   border-radius: 50%;
   background: var(--brand-700);
   color: #fff;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
@@ -736,7 +736,7 @@ button {
   display: block;
   margin-bottom: 3px;
   color: var(--brand-600);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 750;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -756,7 +756,7 @@ button {
   align-items: center;
   gap: 6px;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 600;
 }
 
@@ -808,7 +808,7 @@ button {
   border: 0;
   outline: 0;
   background: transparent;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .search-field input::placeholder {
@@ -848,7 +848,7 @@ button {
   border-radius: 999px;
   background: transparent;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
 }
 
@@ -924,7 +924,7 @@ button {
   flex: 0 0 auto;
   place-items: center;
   border-radius: 50%;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 750;
   letter-spacing: 0.01em;
 }
@@ -943,7 +943,7 @@ button {
 .contact-avatar.large {
   width: 54px;
   height: 54px;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
 }
 
 .avatar-teal {
@@ -987,7 +987,7 @@ button {
 .conversation-row strong {
   overflow: hidden;
   color: #24373b;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -996,7 +996,7 @@ button {
 .conversation-row time {
   flex: 0 0 auto;
   color: #8b9698;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .conversation-preview-row {
@@ -1007,7 +1007,7 @@ button {
 .conversation-preview {
   overflow: hidden;
   color: #6c797b;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1022,7 +1022,7 @@ button {
   border-radius: 10px;
   background: var(--brand-600);
   color: #fff;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 750;
 }
 
@@ -1032,7 +1032,7 @@ button {
   gap: 5px;
   margin-top: 5px;
   color: #9b621a;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
@@ -1075,7 +1075,7 @@ button {
 }
 
 .list-empty span {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .chat-panel {
@@ -1120,7 +1120,7 @@ button {
 
 .chat-contact strong {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1128,7 +1128,7 @@ button {
 
 .chat-contact span {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .chat-header-actions {
@@ -1147,7 +1147,7 @@ button {
   border-radius: 7px;
   background: #edf7f2;
   color: #33775f;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 650;
   white-space: nowrap;
 }
@@ -1179,7 +1179,7 @@ button {
   border-radius: 8px;
   background: #fff;
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
 }
 
@@ -1220,7 +1220,7 @@ button {
 
 .human-notice p {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   line-height: 1.4;
 }
 
@@ -1273,7 +1273,7 @@ button {
   border-radius: 999px;
   background: rgb(255 255 255 / 88%);
   color: #718083;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 650;
 }
 
@@ -1306,7 +1306,7 @@ button {
 .message-bubble p {
   margin: 0;
   color: #283a3e;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.48;
   white-space: pre-wrap;
 }
@@ -1318,7 +1318,7 @@ button {
   gap: 3px;
   margin-top: 3px;
   color: #849092;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .message-status {
@@ -1355,7 +1355,7 @@ button {
   border-radius: 8px;
   background: #f9fbfa;
   color: #728083;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   text-align: center;
 }
 
@@ -1376,7 +1376,7 @@ button {
   padding: 7px 9px;
   border: 1px solid;
   border-radius: 8px;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .composer-policy > svg {
@@ -1391,11 +1391,11 @@ button {
 }
 
 .composer-policy strong {
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .composer-policy small {
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   line-height: 1.35;
 }
 
@@ -1428,7 +1428,7 @@ button {
   border-radius: 7px;
   background: transparent;
   color: #718083;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 620;
 }
 
@@ -1475,7 +1475,7 @@ button {
   outline: 0;
   padding: 8px 5px;
   background: transparent;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 20px;
 }
 
@@ -1515,7 +1515,7 @@ button {
   border-radius: 8px;
   background: var(--brand-700);
   color: #fff;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
@@ -1540,7 +1540,7 @@ button {
   width: min(820px, 100%);
   margin: 5px auto 0;
   color: #9aa4a6;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   text-align: right;
 }
 
@@ -1566,12 +1566,12 @@ button {
 }
 
 .popover-title strong {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .popover-title span {
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .quick-replies-popover > button {
@@ -1597,19 +1597,19 @@ button {
 .quick-replies-popover > button span {
   grid-row: 1 / span 2;
   color: var(--brand-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
 .quick-replies-popover > button strong {
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .quick-replies-popover > button small {
   overflow: hidden;
   color: var(--ink-500);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1665,13 +1665,13 @@ button {
 
 .contact-overview h3 {
   margin: 0 0 4px;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
 }
 
 .contact-overview p {
   margin: 0;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .consent-card {
@@ -1683,13 +1683,13 @@ button {
 .consent-card strong {
   display: block;
   margin-bottom: 3px;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .consent-card p,
 .consent-readonly-note {
   margin: 0;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   line-height: 1.45;
 }
 
@@ -1721,7 +1721,7 @@ button {
   gap: 12px;
   padding: 7px 0;
   border-bottom: 1px solid #edf0ef;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .consent-details dt {
@@ -1764,7 +1764,7 @@ button {
 .section-heading h3 {
   margin: 0;
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 700;
 }
 
@@ -1785,7 +1785,7 @@ button {
   cursor: pointer;
   background: transparent;
   color: var(--brand-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
@@ -1810,7 +1810,7 @@ button {
 
 .appointment-date-block strong {
   color: var(--ink-900);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .appointment-date-block span {
@@ -1818,14 +1818,14 @@ button {
   align-items: center;
   gap: 4px;
   color: var(--brand-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
 .appointment-doctor {
   padding: 0 14px 12px;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .appointment-card-footer {
@@ -1841,7 +1841,7 @@ button {
   cursor: pointer;
   background: transparent;
   color: var(--brand-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
@@ -1851,7 +1851,7 @@ button {
   align-items: center;
   padding: 0 8px;
   border-radius: 999px;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-weight: 750;
 }
 
@@ -1894,7 +1894,7 @@ button {
 
 .empty-appointment p {
   margin: 8px 0;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .secondary-button,
@@ -1907,7 +1907,7 @@ button {
   padding: 0 14px;
   cursor: pointer;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
@@ -1924,7 +1924,7 @@ button {
 .secondary-button.small {
   height: 31px;
   padding: 0 10px;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .primary-button {
@@ -1962,12 +1962,12 @@ button {
 
 .previous-item strong {
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .previous-item span {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .previous-item svg {
@@ -1977,7 +1977,7 @@ button {
 .muted-copy {
   margin: 0;
   color: var(--ink-400);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .contact-actions > .section-heading {
@@ -2008,12 +2008,12 @@ button {
 
 .contact-actions strong {
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .contact-actions small {
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   line-height: 1.35;
 }
 
@@ -2066,12 +2066,12 @@ button {
 .patient-summary span,
 .patient-summary small {
   color: var(--ink-500);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .patient-summary strong {
   color: var(--ink-900);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .form-field {
@@ -2084,14 +2084,14 @@ button {
 .form-field > span,
 .slot-picker legend {
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
 .form-field em {
   margin-left: 5px;
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-style: normal;
   font-weight: 500;
 }
@@ -2121,7 +2121,7 @@ button {
   border: 0;
   outline: 0;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .select-wrap select {
@@ -2170,7 +2170,7 @@ button {
   border-radius: 8px;
   background: #fff;
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
 }
 
@@ -2185,7 +2185,7 @@ button {
   display: block;
   margin-top: 7px;
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .form-field textarea {
@@ -2194,7 +2194,7 @@ button {
   border-radius: 9px;
   outline: 0;
   padding: 10px 11px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .form-field textarea::placeholder {
@@ -2214,7 +2214,7 @@ button {
 
 .appointment-preview p {
   margin: 1px 0 0;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   line-height: 1.45;
 }
 
@@ -2241,7 +2241,7 @@ button {
   background: #fff;
   box-shadow: 0 10px 26px rgb(22 50 54 / 13%);
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   animation: toast-in 180ms ease both;
 }
 
@@ -2389,7 +2389,7 @@ button {
     justify-content: center;
     gap: 3px;
     color: #7d898b;
-    font-size: 9px;
+    font-size: var(--app-text-micro, 9px);
     font-weight: 650;
     text-decoration: none;
   }
@@ -2462,7 +2462,7 @@ button {
   .chat-header .contact-avatar {
     width: 36px;
     height: 36px;
-    font-size: 11px;
+    font-size: var(--app-text-caption, 11px);
   }
 
   .chat-contact span {
@@ -2482,7 +2482,7 @@ button {
   }
 
   .human-notice p {
-    font-size: 10px;
+    font-size: var(--app-text-micro, 10px);
   }
 
   .human-notice p strong {
@@ -2567,14 +2567,14 @@ button {
 .coverage-picker legend {
   margin-bottom: 9px;
   color: var(--ink-800);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 750;
 }
 
 .coverage-picker > p {
   margin: -3px 0 10px;
   color: var(--ink-500);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.45;
 }
 
@@ -2592,7 +2592,7 @@ button {
   padding: 9px 12px;
   background: #fff;
   color: var(--ink-700);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 720;
   line-height: 1.3;
   text-align: center;
@@ -2631,12 +2631,12 @@ button {
 
 .booking-coverage-summary strong {
   color: var(--brand-800);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .booking-coverage-summary span {
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .chat-context-actions {
@@ -2664,7 +2664,7 @@ button {
   padding: 7px 11px;
   background: #fff;
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 720;
 }
 
@@ -2717,12 +2717,12 @@ button {
 
 .message-attachment-copy strong {
   overflow-wrap: anywhere;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .message-attachment-copy small {
   color: inherit;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   line-height: 1.4;
   opacity: 0.78;
 }
@@ -2737,7 +2737,7 @@ button {
   background: rgb(255 255 255 / 72%);
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 750;
 }
 
@@ -2786,7 +2786,7 @@ button {
   display: block;
   margin-top: 3px;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .appointment-proof-notice {
@@ -2795,7 +2795,7 @@ button {
   padding: 9px 10px;
   background: #fff7e8;
   color: #7d591b;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   line-height: 1.4;
 }
 
@@ -2813,14 +2813,14 @@ button {
 
 .future-deposit-mode .agenda-item time small {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
   text-transform: capitalize;
 }
 
 .future-deposit-mode .agenda-item time strong {
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .settings-message-options {
@@ -2835,7 +2835,7 @@ button {
   padding: 13px 15px;
   cursor: pointer;
   color: var(--brand-800);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 730;
 }
 
@@ -2872,12 +2872,12 @@ button {
 
   .chat-context-actions button {
     min-height: 44px;
-    font-size: 13px;
+    font-size: var(--app-text-secondary, 13px);
   }
 
   .message-attachment-open {
     min-height: 44px;
-    font-size: 14px;
+    font-size: var(--app-text-body, 14px);
   }
 
   .future-deposit-mode .agenda-item time {
@@ -2927,7 +2927,7 @@ button {
 
 .business-logo-copy small {
   color: var(--logo-descriptor);
-  font-size: 9.5px;
+  font-size: var(--app-text-micro, 9.5px);
   font-weight: 760;
   letter-spacing: 0.16em;
   line-height: 1.2;
@@ -2968,7 +2968,7 @@ button {
 }
 
 .app-nav .brand-mark .business-logo-copy small {
-  font-size: 8.5px;
+  font-size: var(--app-text-micro, 8.5px);
   letter-spacing: 0.11em;
 }
 
@@ -3011,12 +3011,12 @@ button {
 
 .nav-user-copy small {
   color: #cfb7c3;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .nav-user-copy strong {
   color: #fff;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 700;
 }
 
@@ -3030,7 +3030,7 @@ button {
 }
 
 .login-brand .business-logo-copy small {
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .legal-brand .business-logo {
@@ -3070,7 +3070,7 @@ button {
   }
 
   .app-nav .brand-mark .business-logo-copy small {
-    font-size: 8px;
+    font-size: var(--app-text-micro, 8px);
     letter-spacing: 0.075em;
   }
 }
@@ -3141,7 +3141,7 @@ button {
 
 .appointment-detail-content dt {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -3303,7 +3303,7 @@ button {
 .section-page-header p {
   margin: 7px 0 0;
   color: var(--ink-500);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.5;
 }
 
@@ -3322,7 +3322,7 @@ button {
 
 .login-form > label > span {
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
@@ -3335,7 +3335,7 @@ button {
   outline: 0;
   padding: 0 12px;
   background: #fff;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .login-form input:focus,
@@ -3376,7 +3376,7 @@ button {
   border-radius: 7px;
   background: transparent;
   color: var(--brand-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
@@ -3396,7 +3396,7 @@ button {
   gap: 7px;
   margin-top: 22px;
   color: var(--ink-400);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .login-help svg,
@@ -3453,7 +3453,7 @@ button {
 
 .context-kicker {
   color: #9fd2cf;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 750;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -3472,7 +3472,7 @@ button {
   max-width: 520px;
   margin: 0;
   color: #b9ccce;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.65;
 }
 
@@ -3490,7 +3490,7 @@ button {
   align-items: center;
   gap: 9px;
   color: #dce8e8;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .login-context li svg {
@@ -3501,7 +3501,7 @@ button {
   position: absolute;
   bottom: 30px;
   color: #789b9e;
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -3571,7 +3571,7 @@ button {
   border-bottom: 1px solid var(--line);
   background: #fbfcfc;
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -3607,7 +3607,7 @@ button {
 .agenda-item time {
   width: 50px;
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 730;
 }
 
@@ -3619,7 +3619,7 @@ button {
   border-radius: 50%;
   background: var(--brand-50);
   color: var(--brand-700);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-weight: 750;
 }
 
@@ -3635,18 +3635,18 @@ button {
 .agenda-copy strong,
 .template-copy strong {
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .agenda-copy small,
 .template-copy small {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .template-copy .template-sync-copy {
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .simple-tabs {
@@ -3663,7 +3663,7 @@ button {
   cursor: pointer;
   background: transparent;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 680;
 }
 
@@ -3725,7 +3725,7 @@ button {
   align-items: center;
   gap: 6px;
   color: var(--success);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
@@ -3760,7 +3760,7 @@ button {
   border-radius: 8px;
   background: transparent;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
   text-align: left;
 }
@@ -3787,13 +3787,13 @@ button {
 
 .settings-block h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
 }
 
 .settings-block p {
   margin: 4px 0 0;
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .settings-block .form-field {
@@ -3834,12 +3834,12 @@ button {
 }
 
 .integration-summary strong {
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .integration-summary small {
   color: var(--ink-500);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .whatsapp-policy-summary {
@@ -3861,12 +3861,12 @@ button {
 
 .whatsapp-policy-summary span {
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .whatsapp-policy-summary strong {
   color: var(--ink-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .quality-green {
@@ -3901,11 +3901,11 @@ button {
 }
 
 .settings-policy-alert strong {
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .settings-policy-alert small {
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   line-height: 1.4;
 }
 
@@ -3990,7 +3990,7 @@ button {
     min-width: 44px;
     min-height: 44px;
     padding: 0 13px;
-    font-size: 12px;
+    font-size: var(--app-text-small, 12px);
     white-space: nowrap;
   }
 
@@ -4010,7 +4010,7 @@ button {
 
   .agenda-item time {
     width: 44px;
-    font-size: 13px;
+    font-size: var(--app-text-secondary, 13px);
   }
 
   .agenda-avatar {
@@ -4068,7 +4068,7 @@ button {
 .brand-mark .brand-name {
   max-width: 66px;
   color: #f7fbfa;
-  font-size: 8px;
+  font-size: var(--app-text-micro, 8px);
   letter-spacing: 0.035em;
   line-height: 1.12;
   text-align: center;
@@ -4084,7 +4084,7 @@ button {
 
 .app-nav .nav-link span {
   max-width: 64px;
-  font-size: 8px;
+  font-size: var(--app-text-micro, 8px);
 }
 
 .login-brand .business-mark {
@@ -4100,13 +4100,13 @@ button {
 }
 
 .login-brand .login-brand-copy strong {
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
   letter-spacing: -0.01em;
 }
 
 .login-brand-copy small {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 600;
 }
 
@@ -4159,12 +4159,12 @@ button {
 
 .dashboard-state strong {
   color: var(--ink-900);
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
 }
 
 .dashboard-state p {
   margin: 0 0 4px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .dashboard-state .secondary-button {
@@ -4227,7 +4227,7 @@ button {
 .dashboard-card small {
   min-height: 27px;
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -4248,7 +4248,7 @@ button {
   overflow: hidden;
   margin-top: 8px;
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-style: normal;
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -4281,7 +4281,7 @@ button {
 
 .dashboard-upcoming > header a {
   color: var(--brand-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
   text-decoration: none;
 }
@@ -4305,7 +4305,7 @@ button {
   border-bottom: 1px solid #edf0f0;
   background: #fbfcfc;
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-weight: 750;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -4335,19 +4335,19 @@ button {
 
 .dashboard-appointment-list time strong {
   color: var(--ink-900);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .dashboard-appointment-list time small,
 .dashboard-service {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .dashboard-patient {
   overflow: hidden;
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 680;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4365,7 +4365,7 @@ button {
   padding: 5px 8px;
   background: #f1f4f4;
   color: var(--ink-500);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-weight: 700;
   white-space: nowrap;
 }
@@ -4409,12 +4409,12 @@ button {
 .dashboard-empty strong {
   margin-top: 11px;
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .dashboard-empty p {
   margin: 4px 0 0;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 @media (max-width: 980px) {
@@ -4446,7 +4446,7 @@ button {
   .mobile-nav-link span {
     overflow: hidden;
     width: 100%;
-    font-size: 8px;
+    font-size: var(--app-text-micro, 8px);
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -4566,7 +4566,7 @@ button {
   outline: 0;
   padding: 0 11px;
   background: #fff;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .settings-block .form-field > select {
@@ -4675,13 +4675,13 @@ button {
 
 .patient-main strong {
   color: var(--ink-900);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .patient-main small,
 .patient-appointment small {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .patient-appointment {
@@ -4691,7 +4691,7 @@ button {
 
 .patient-appointment strong {
   color: var(--ink-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 650;
 }
 
@@ -4714,7 +4714,7 @@ button {
 
 .patient-detail dt {
   color: var(--ink-500);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
   font-weight: 750;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -4724,7 +4724,7 @@ button {
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--ink-900);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 620;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -4747,7 +4747,7 @@ button {
 .patient-history h3 {
   margin: 0;
   color: var(--ink-800);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .patient-history ul {
@@ -4785,12 +4785,12 @@ button {
 
 .patient-history li strong {
   color: var(--ink-750);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .patient-history li small {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .patient-actions > :last-child,
@@ -4824,7 +4824,7 @@ button {
   width: 34px;
   flex: 0 0 auto;
   padding: 0;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .agenda-date-nav input {
@@ -4835,7 +4835,7 @@ button {
   padding: 0 10px;
   background: #fff;
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
 }
 
@@ -5057,7 +5057,7 @@ button {
   padding: 0 10px;
   background: #fff;
   color: var(--ink-700);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .service-settings-list input:focus {
@@ -5086,7 +5086,7 @@ button {
   border-radius: 9px;
   padding: 9px 11px;
   background: var(--surface-soft);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 650;
 }
 
@@ -5147,7 +5147,7 @@ button {
 .whatsapp-embedded-signup-heading h3 {
   margin: 0;
   color: var(--ink-800);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .whatsapp-embedded-signup-heading p {
@@ -5188,14 +5188,14 @@ button {
 
 .whatsapp-signup-status-grid dt {
   color: var(--ink-400);
-  font-size: 9px;
+  font-size: var(--app-text-micro, 9px);
 }
 
 .whatsapp-signup-status-grid dd {
   overflow-wrap: anywhere;
   margin: 4px 0 0;
   color: var(--ink-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
@@ -5210,7 +5210,7 @@ button {
   border-radius: 8px;
   background: #f5faf9;
   color: var(--ink-700);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
 }
 
 .whatsapp-signup-automation-lock.danger,
@@ -5679,7 +5679,7 @@ body {
   max-width: 420px;
   margin-top: 11px;
   color: var(--ink-700);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .dashboard-quick-actions {
@@ -5697,7 +5697,7 @@ body {
 .dashboard-section-title {
   margin: 0 0 13px;
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 760;
   letter-spacing: -0.01em;
 }
@@ -5905,7 +5905,7 @@ body {
   border-radius: 12px;
   padding: 0 14px;
   color: #f0dfe7;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
   font-weight: 680;
   line-height: 1.2;
 }
@@ -5919,7 +5919,7 @@ body {
   display: block;
   overflow: visible;
   max-width: none;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
   font-weight: 680;
   line-height: 1.2;
   text-overflow: clip;
@@ -5953,7 +5953,7 @@ body {
   width: 40px;
   height: 40px;
   margin-left: 7px;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .app-nav .logout-link {
@@ -5966,7 +5966,7 @@ body {
   border-radius: 12px;
   padding: 0 14px;
   color: #ead5df;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
   font-weight: 650;
 }
 
@@ -6022,7 +6022,7 @@ body {
     gap: 5px;
     padding: 7px 2px 6px;
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--app-text-caption, 11px);
     font-weight: 700;
     line-height: 1;
   }
@@ -6037,7 +6037,7 @@ body {
     overflow: visible;
     width: 100%;
     max-width: 100%;
-    font-size: 11px;
+    font-size: var(--app-text-caption, 11px);
     line-height: 1.1;
     text-align: center;
     text-overflow: clip;
@@ -6045,7 +6045,7 @@ body {
   }
 
   .mobile-nav.mobile-nav-has-manual .mobile-nav-link span {
-    font-size: 9px;
+    font-size: var(--app-text-micro, 9px);
   }
 
   .mobile-nav-link.active {
@@ -6083,7 +6083,7 @@ body {
 .settings-menu-heading {
   padding: 5px 12px 3px;
   color: var(--ink-400);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 750;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -6104,7 +6104,7 @@ body {
   padding: 8px 12px;
   cursor: pointer;
   color: var(--ink-600);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 700;
   list-style: none;
 }
@@ -6145,7 +6145,7 @@ body {
   min-height: 46px;
   height: auto;
   padding: 10px 14px;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.25;
 }
 
@@ -6164,7 +6164,7 @@ body {
 
 .google-calendar-settings > div:first-child p {
   max-width: 650px;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.55;
 }
 
@@ -6180,7 +6180,7 @@ body {
   padding: 11px 13px;
   background: #faf7f8;
   color: var(--ink-700);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.45;
 }
 
@@ -6244,7 +6244,7 @@ body {
 
 .google-calendar-card-heading small {
   color: var(--ink-500);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.4;
 }
 
@@ -6257,7 +6257,7 @@ body {
   padding: 5px 10px;
   background: #eef7f2;
   color: #35654d;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 750;
   white-space: nowrap;
 }
@@ -6306,7 +6306,7 @@ body {
 
 .google-calendar-details dt {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 650;
 }
 
@@ -6314,7 +6314,7 @@ body {
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 700;
   line-height: 1.4;
 }
@@ -6328,7 +6328,7 @@ body {
   padding: 12px;
   background: var(--surface-soft);
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.5;
 }
 
@@ -6373,7 +6373,7 @@ body {
 .google-calendar-empty p {
   max-width: 650px;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.55;
 }
 
@@ -6381,7 +6381,7 @@ body {
   max-width: 680px;
   margin: 0;
   color: var(--ink-600);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.55;
 }
 
@@ -6407,7 +6407,7 @@ body {
 .google-calendar-choice-fieldset legend {
   margin-bottom: 8px;
   color: var(--ink-800);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 750;
 }
 
@@ -6467,7 +6467,7 @@ body {
 
 .google-calendar-choice-list label > span > small {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   overflow-wrap: anywhere;
 }
 
@@ -6481,7 +6481,7 @@ body {
 
 .google-calendar-choice-name strong {
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   overflow-wrap: anywhere;
 }
 
@@ -6490,7 +6490,7 @@ body {
   padding: 3px 7px;
   background: var(--brand-100);
   color: var(--brand-800);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 750;
 }
 
@@ -6550,7 +6550,7 @@ body {
 
   .settings-section-picker small {
     color: var(--ink-500);
-    font-size: 12px;
+    font-size: var(--app-text-small, 12px);
     line-height: 1.4;
   }
 
@@ -6561,7 +6561,7 @@ body {
   .settings-menu button {
     min-height: 44px;
     padding-inline: 13px;
-    font-size: 14px;
+    font-size: var(--app-text-body, 14px);
   }
 
   .google-calendar-settings {
@@ -6592,7 +6592,7 @@ body {
 }
 
 .search-field input {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .search-clear {
@@ -6602,48 +6602,48 @@ body {
 
 .filter-pill {
   min-height: 36px;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .conversation-row strong {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .conversation-row time,
 .attention-label,
 .unread-count {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .conversation-preview,
 .list-empty span {
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .composer-policy {
   padding: 9px 11px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .composer-policy strong {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .composer-policy small,
 .composer-hint {
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .composer-tool {
   min-height: 40px;
   padding-inline: 11px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .composer textarea {
   min-height: 44px;
   padding-block: 11px;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .icon-button,
@@ -6653,16 +6653,16 @@ body {
 }
 
 .send-button {
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .form-field > span,
 .slot-picker legend {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .form-field em {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .select-wrap,
@@ -6680,28 +6680,28 @@ body {
 .settings-block .form-field > select,
 .form-field textarea,
 .service-settings-list input {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .slot-picker button {
   min-height: 44px;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .slot-picker small,
 .appointment-preview p,
 .patient-summary span,
 .patient-summary small {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .patient-summary strong {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .toast {
   min-height: 52px;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.4;
 }
 
@@ -6723,23 +6723,23 @@ body {
 
 .dashboard-card small,
 .dashboard-upcoming > header a {
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .dashboard-card em,
 .dashboard-list-head {
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
 }
 
 .dashboard-appointment-list time strong,
 .dashboard-patient {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .dashboard-appointment-list time small,
 .dashboard-service,
 .dashboard-status {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .dashboard-status {
@@ -6749,30 +6749,30 @@ body {
 .status-badge {
   min-height: 28px;
   height: auto;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .agenda-copy strong,
 .patient-main strong {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .agenda-copy small,
 .patient-main small,
 .patient-appointment small,
 .patient-appointment strong {
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .patient-detail dt,
 .patient-history li small {
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .patient-detail dd,
 .patient-history li strong,
 .patient-history h3 {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .agenda-date-nav .secondary-button.small {
@@ -6782,7 +6782,7 @@ body {
 
 .agenda-date-nav input {
   min-height: 44px;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .settings-block h2 {
@@ -6793,7 +6793,7 @@ body {
 .integration-summary small,
 .whatsapp-policy-summary span,
 .settings-policy-alert small {
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.5;
 }
 
@@ -6801,13 +6801,13 @@ body {
 .whatsapp-policy-summary strong,
 .settings-policy-alert strong,
 .settings-block > .settings-checkbox {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .settings-record-list button,
 .record-actions button {
   min-height: 40px;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 @media (pointer: coarse) {
@@ -6841,7 +6841,7 @@ body {
 
   .mobile-nav-link,
   .mobile-nav-link span {
-    font-size: 12px;
+    font-size: var(--app-text-small, 12px);
   }
 
   .toast {
@@ -6862,7 +6862,7 @@ body {
 .patient-source-picker legend {
   margin-bottom: 9px;
   color: var(--ink-800);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 750;
 }
 
@@ -6883,7 +6883,7 @@ body {
   cursor: pointer;
   background: #fff;
   color: var(--ink-700);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 650;
 }
 
@@ -6930,7 +6930,7 @@ body {
 .selected-patient-card em {
   overflow: hidden;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6939,7 +6939,7 @@ body {
 .selected-patient-card strong {
   overflow: hidden;
   color: var(--ink-900);
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6956,7 +6956,7 @@ body {
   margin: 0;
   padding: 12px;
   color: var(--ink-500);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.45;
 }
 
@@ -6996,12 +6996,12 @@ body {
 }
 
 .patient-search-results li strong {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .patient-search-results li small {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .patient-search-empty {
@@ -7025,7 +7025,7 @@ body {
   padding: 11px;
   background: #fff9ef;
   color: #74501f;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.45;
 }
 
@@ -7034,7 +7034,7 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 650;
 }
 
@@ -7050,7 +7050,7 @@ body {
   padding: 10px 11px;
   background: #fff9ef;
   color: #77582b;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.45;
 }
 
@@ -7077,7 +7077,7 @@ body {
 
   .patient-source-options label {
     min-height: 48px;
-    font-size: 14px;
+    font-size: var(--app-text-body, 14px);
   }
 
   .agenda-status-filter {
@@ -7114,7 +7114,7 @@ body {
   padding: 7px 10px;
   background: var(--brand-50);
   color: var(--brand-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 720;
   line-height: 1.2;
   text-decoration: none;
@@ -7169,7 +7169,7 @@ body {
   padding: 7px 11px;
   background: #fff;
   color: var(--ink-600);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 680;
   text-decoration: none;
 }
@@ -7209,7 +7209,7 @@ body {
 }
 
 .manual-section h3 {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .manual-section > p,
@@ -7217,7 +7217,7 @@ body {
 .manual-section article p,
 .manual-section-heading p {
   color: var(--ink-600);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.62;
 }
 
@@ -7248,7 +7248,7 @@ body {
 .manual-checklist strong {
   display: block;
   color: var(--ink-800);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .manual-checklist p,
@@ -7256,7 +7256,7 @@ body {
 .manual-problems p {
   margin: 6px 0 0;
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.55;
 }
 
@@ -7346,14 +7346,14 @@ body {
 }
 
 .system-status-card h3 {
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.35;
 }
 
 .system-status-card p {
   margin: 5px 0 0;
   color: var(--ink-600);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   line-height: 1.48;
 }
 
@@ -7373,14 +7373,14 @@ body {
 
 .manual-status-details dt {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
 .manual-status-details dd {
   margin: 0;
   color: var(--ink-800);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 650;
 }
 
@@ -7455,7 +7455,7 @@ body {
 
 .odontogram-chart h2 {
   margin: 8px 0 0;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .odontogram-row {
@@ -7476,7 +7476,7 @@ body {
   border-radius: 8px;
   background: #fff;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
 }
 
@@ -7552,12 +7552,12 @@ body {
 .odontogram-detail h2,
 .odontogram-detail h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--app-text-body, 15px);
 }
 
 .odontogram-current {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 700;
 }
 
@@ -7573,7 +7573,7 @@ body {
 
 .odontogram-surfaces legend {
   padding: 0 4px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 700;
 }
 
@@ -7583,7 +7583,7 @@ body {
   gap: 10px;
   margin: 0;
   padding-left: 18px;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .odontogram-history small {
@@ -7660,7 +7660,7 @@ textarea::placeholder {
   padding: 10px 14px;
   background: var(--brand-900);
   color: #fff;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   font-weight: 760;
   text-decoration: none;
   box-shadow: 0 10px 28px rgb(52 43 49 / 24%);
@@ -7683,7 +7683,7 @@ textarea::placeholder {
   min-height: 44px;
   height: auto;
   padding: 10px 16px;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.2;
 }
 
@@ -7719,7 +7719,7 @@ textarea::placeholder {
   min-width: 42px;
   min-height: 39px;
   border-radius: 9px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .login-form input:hover:not(:disabled),
@@ -7743,7 +7743,7 @@ textarea::placeholder {
   margin-top: -6px;
   padding: 2px 0;
   color: var(--brand-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -7764,7 +7764,7 @@ textarea::placeholder {
   padding: 11px 13px;
   color: var(--ink-700);
   background: #f0fdf4;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   line-height: 1.45;
 }
 
@@ -7777,7 +7777,7 @@ textarea::placeholder {
   gap: 10px;
   margin-top: 30px;
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.5;
 }
 
@@ -7792,7 +7792,7 @@ textarea::placeholder {
 
 .form-field-help {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   line-height: 1.4;
 }
 
@@ -7808,14 +7808,14 @@ textarea::placeholder {
 .search-result-summary {
   margin: -7px 0 10px;
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 650;
 }
 
 .simple-tabs button {
   min-height: 44px;
   height: auto;
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .simple-tabs [role="tab"]:focus-visible {
@@ -7915,7 +7915,7 @@ textarea::placeholder {
   }
 
   .section-page-header p {
-    font-size: 14px;
+    font-size: var(--app-text-body, 14px);
   }
 
   .primary-button,
@@ -7952,7 +7952,7 @@ textarea::placeholder {
   }
 
   .mobile-nav-link span {
-    font-size: 11px;
+    font-size: var(--app-text-caption, 11px);
   }
 
   .mobile-more-layer {
@@ -8027,12 +8027,12 @@ textarea::placeholder {
 
   .mobile-more-profile small {
     color: var(--ink-500);
-    font-size: 11px;
+    font-size: var(--app-text-caption, 11px);
   }
 
   .mobile-more-profile strong {
     color: var(--ink-900);
-    font-size: 15px;
+    font-size: var(--app-text-body, 15px);
   }
 
   .mobile-more-header .icon-button {
@@ -8082,13 +8082,13 @@ textarea::placeholder {
   }
 
   .mobile-more-link strong {
-    font-size: 14px;
+    font-size: var(--app-text-body, 14px);
   }
 
   .mobile-more-link small {
     overflow: hidden;
     color: var(--ink-500);
-    font-size: 12px;
+    font-size: var(--app-text-small, 12px);
     line-height: 1.3;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -8104,7 +8104,7 @@ textarea::placeholder {
     border-radius: 11px;
     background: #fff7f7;
     color: var(--danger);
-    font-size: 13px;
+    font-size: var(--app-text-secondary, 13px);
     font-weight: 720;
   }
 
@@ -8260,14 +8260,14 @@ textarea::placeholder {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 740;
   line-height: 1.2;
 }
 
 .bot-toggle-copy small {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   line-height: 1.3;
 }
 
@@ -8289,7 +8289,7 @@ textarea::placeholder {
   display: block;
   margin-top: 6px;
   color: #ffe1e3;
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   line-height: 1.35;
 }
 
@@ -8301,7 +8301,7 @@ textarea::placeholder {
   padding: 5px 9px;
   background: transparent;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 720;
 }
 
@@ -8362,7 +8362,7 @@ textarea::placeholder {
 
   .dashboard-bot-control .bot-toggle-copy strong {
     color: var(--ink-900);
-    font-size: 14px;
+    font-size: var(--app-text-body, 14px);
   }
 
   .dashboard-bot-control .bot-toggle-track {
@@ -8376,7 +8376,7 @@ textarea::placeholder {
   .dashboard-bot-control .bot-toggle-feedback:not(.sr-only) {
     margin: 7px 3px 0;
     color: var(--danger);
-    font-size: 11px;
+    font-size: var(--app-text-caption, 11px);
   }
 
   .dashboard-bot-control .bot-toggle-retry {
@@ -8416,13 +8416,13 @@ textarea::placeholder {
 
 .calendar-operational-heading strong {
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   line-height: 1.25;
 }
 
 .calendar-operational-heading small {
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   line-height: 1.35;
 }
 
@@ -8465,14 +8465,14 @@ textarea::placeholder {
 
 .calendar-operational-details dt {
   color: var(--ink-500);
-  font-size: 10px;
+  font-size: var(--app-text-micro, 10px);
   font-weight: 700;
 }
 
 .calendar-operational-details dd {
   margin: 2px 0 0;
   color: var(--ink-900);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 720;
   line-height: 1.3;
 }
@@ -8487,7 +8487,7 @@ textarea::placeholder {
 
 .calendar-operational-link {
   color: var(--brand-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 720;
   text-decoration: none;
   white-space: nowrap;
@@ -8504,7 +8504,7 @@ textarea::placeholder {
   padding: 8px 10px;
   background: var(--sage-soft);
   color: #365747;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .calendar-operational-status.error .calendar-operational-feedback {
@@ -8600,7 +8600,7 @@ textarea::placeholder {
   padding: 3px 11px;
   background: var(--surface-soft);
   color: var(--ink-700);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 650;
   letter-spacing: 0.01em;
 }
@@ -8643,7 +8643,7 @@ textarea::placeholder {
 .detail-section > h3 {
   margin: 0;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -8667,7 +8667,7 @@ textarea::placeholder {
 
 .appointment-detail-content .detail-grid dt {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
   font-weight: 500;
   text-transform: none;
   letter-spacing: normal;
@@ -8677,7 +8677,7 @@ textarea::placeholder {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--ink-900);
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
   font-weight: 620;
   line-height: 1.45;
 }
@@ -8688,7 +8688,7 @@ textarea::placeholder {
   padding: 11px 13px;
   background: var(--surface-soft);
   color: var(--ink-800);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -8697,7 +8697,7 @@ textarea::placeholder {
 .detail-hint {
   margin: 0;
   color: var(--ink-500);
-  font-size: 12.5px;
+  font-size: var(--app-text-small, 12.5px);
   line-height: 1.5;
 }
 
@@ -8807,7 +8807,7 @@ textarea::placeholder {
 .agenda-blocks h2 {
   margin: 0;
   color: var(--ink-500);
-  font-size: 11px;
+  font-size: var(--app-text-caption, 11px);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -8827,7 +8827,7 @@ textarea::placeholder {
   align-items: baseline;
   gap: 4px 10px;
   color: var(--ink-800);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .agenda-blocks li strong {
@@ -8840,7 +8840,7 @@ textarea::placeholder {
 
 .agenda-blocks small {
   color: var(--ink-500);
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 /* Primera importación y conflictos de Google Calendar. */
@@ -8862,14 +8862,14 @@ textarea::placeholder {
 .calendar-first-import h3,
 .calendar-conflicts h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .calendar-first-import > p,
 .calendar-conflicts > p {
   margin: 0;
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   line-height: 1.55;
 }
 
@@ -8880,7 +8880,7 @@ textarea::placeholder {
   padding: 0;
   list-style: none;
   color: var(--ink-700);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
 }
 
 .calendar-first-import-actions {
@@ -8918,7 +8918,7 @@ textarea::placeholder {
 
 .calendar-conflicts li span {
   color: var(--ink-600);
-  font-size: 13px;
+  font-size: var(--app-text-secondary, 13px);
   overflow-wrap: anywhere;
 }
 
@@ -8947,7 +8947,7 @@ textarea::placeholder {
   padding: 9px 11px;
   background: var(--surface-soft);
   color: var(--ink-600);
-  font-size: 12.5px;
+  font-size: var(--app-text-small, 12.5px);
   line-height: 1.45;
 }
 
@@ -8955,7 +8955,7 @@ textarea::placeholder {
   min-height: 34px;
   margin-left: auto;
   padding: 5px 11px;
-  font-size: 12px;
+  font-size: var(--app-text-small, 12px);
 }
 
 .convert-block-summary {
@@ -8976,11 +8976,26 @@ textarea::placeholder {
 }
 
 .convert-block-summary strong {
-  font-size: 14px;
+  font-size: var(--app-text-body, 14px);
 }
 
 .convert-block-summary span {
   overflow-wrap: anywhere;
   color: var(--ink-500);
-  font-size: 12.5px;
+  font-size: var(--app-text-small, 12.5px);
+}
+
+/* Internal screens inherit a readable scale; public pages and print keep the
+   original values declared as fallbacks above. */
+@media screen {
+  .section-shell,
+  .app-shell {
+    --app-text-micro: 0.75rem;
+    --app-text-caption: 0.8125rem;
+    --app-text-small: 0.875rem;
+    --app-text-secondary: 0.9375rem;
+    --app-text-body: 1rem;
+    font-size: var(--app-text-body);
+    line-height: 1.5;
+  }
 }
