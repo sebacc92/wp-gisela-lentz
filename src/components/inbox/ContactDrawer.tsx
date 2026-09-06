@@ -1,3 +1,4 @@
+import { ORTHODONTIC_VISIT_LABELS } from "~/lib/orthodontics";
 import {
   component$,
   type QRL,
@@ -241,6 +242,21 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                     )}
                   </span>
                 </div>
+                {appointment.orthodonticVisitType && (
+                  <p class="appointment-proof-notice">
+                    Ortodoncia ·{" "}
+                    {ORTHODONTIC_VISIT_LABELS[appointment.orthodonticVisitType]}
+                  </p>
+                )}
+                {appointment.depositStatus === "not_required" && (
+                  <p class="appointment-proof-notice">
+                    Seña no requerida
+                    {appointment.orthodonticVisitType === "in_treatment"
+                      ? " · en tratamiento con Gisela"
+                      : ""}
+                    .
+                  </p>
+                )}
                 {appointment.depositStatus === "proof_received" && (
                   <p class="appointment-proof-notice">
                     Comprobante recibido: falta que Gisela confirme la seña.

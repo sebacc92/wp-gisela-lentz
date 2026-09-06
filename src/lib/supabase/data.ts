@@ -1,3 +1,4 @@
+import { orthodonticVisitType } from "~/lib/orthodontics";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { BUSINESS_CONFIG } from "~/config/business";
 import {
@@ -12,6 +13,7 @@ import type {
   Conversation,
   DepositStatus,
   PatientCoverage,
+  OrthodonticVisitType,
   ProfessionalOption,
   QuickReply,
   ServiceOption,
@@ -61,6 +63,7 @@ interface AppointmentRow {
   coverage: PatientCoverage | null;
   duration_minutes: number;
   deposit_status: DepositStatus;
+  orthodontic_visit_type: OrthodonticVisitType | null;
   hold_expires_at: string | null;
   deposit_proof_message_id: string | null;
   deposit_confirmation_actor: "automatic_system" | null;
@@ -87,6 +90,7 @@ export interface AppointmentListItem {
   coverage: PatientCoverage | null;
   durationMinutes: number;
   depositStatus: DepositStatus;
+  orthodonticVisitType: OrthodonticVisitType | null;
   holdExpiresAt: string | null;
   depositProofMessageId: string | null;
   depositConfirmationActor: "automatic_system" | null;
@@ -158,6 +162,8 @@ function mapAppointment(row: AppointmentRow): AppointmentSummary {
     coverage: row.coverage ?? undefined,
     durationMinutes: row.duration_minutes,
     depositStatus,
+    orthodonticVisitType:
+      orthodonticVisitType(row.orthodontic_visit_type) ?? undefined,
     holdExpiresAt: row.hold_expires_at ?? undefined,
     depositProofMessageId: row.deposit_proof_message_id ?? undefined,
     depositConfirmationActor: row.deposit_confirmation_actor ?? undefined,
@@ -195,7 +201,7 @@ export async function loadInboxData(client: SupabaseClient): Promise<{
       ? client
           .from("appointments")
           .select(
-            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
           )
           .in("contact_id", contactIds)
           .order("starts_at", { ascending: true })
@@ -300,7 +306,9 @@ export async function loadServices(
 ): Promise<ServiceOption[]> {
   let query = client
     .from("services")
-    .select("id,name,description,duration_minutes,active,sort_order")
+    .select(
+      "id,name,description,duration_minutes,requires_orthodontic_intake,active,sort_order",
+    )
     .order("sort_order")
     .order("name");
   if (!includeInactive) query = query.eq("active", true);
@@ -311,6 +319,7 @@ export async function loadServices(
     name: row.name as string,
     description: (row.description as string | null) ?? undefined,
     durationMinutes: row.duration_minutes as number,
+    requiresOrthodonticIntake: row.requires_orthodontic_intake === true,
   }));
 }
 
@@ -337,7 +346,7 @@ export async function loadAppointments(
   let query = client
     .from("appointments")
     .select(
-      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,internal_note,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,internal_note,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
     )
     .gte("starts_at", fromIso);
   if (toIso) query = query.lt("starts_at", toIso);
@@ -359,6 +368,7 @@ export async function loadAppointments(
       coverage: PatientCoverage | null;
       duration_minutes: number;
       deposit_status: DepositStatus;
+      orthodontic_visit_type: OrthodonticVisitType | null;
       hold_expires_at: string | null;
       deposit_proof_message_id: string | null;
       deposit_confirmation_actor: "automatic_system" | null;
@@ -404,6 +414,7 @@ export async function loadAppointments(
       coverage: row.coverage,
       durationMinutes: row.duration_minutes,
       depositStatus,
+      orthodonticVisitType: orthodonticVisitType(row.orthodontic_visit_type),
       holdExpiresAt: row.hold_expires_at,
       depositProofMessageId: row.deposit_proof_message_id,
       depositConfirmationActor: row.deposit_confirmation_actor,

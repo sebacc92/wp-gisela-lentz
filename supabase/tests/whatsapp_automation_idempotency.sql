@@ -1181,7 +1181,7 @@ select ok(
   )
   and not has_function_privilege(
     'authenticated',
-    'public.create_whatsapp_automation_appointment(uuid,uuid,uuid,uuid,uuid,timestamptz)',
+    'public.create_whatsapp_automation_appointment(uuid,uuid,uuid,uuid,uuid,timestamptz,public.orthodontic_visit_type)',
     'EXECUTE'
   )
   and not has_function_privilege(

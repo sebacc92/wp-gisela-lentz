@@ -296,6 +296,7 @@ test("todo envío automático nuevo queda detrás del kill switch", () => {
   assert.equal(isAutomaticWhatsAppSource("reminder"), true);
   assert.equal(isAutomaticWhatsAppSource("deposit_request"), true);
   assert.equal(isAutomaticWhatsAppSource("deposit_confirmation"), true);
+  assert.equal(isAutomaticWhatsAppSource("appointment_confirmation"), true);
   assert.equal(isAutomaticWhatsAppSource("proof_acknowledgement"), true);
   assert.equal(isAutomaticWhatsAppSource("late_proof_acknowledgement"), true);
   assert.equal(isAutomaticWhatsAppSource("business_location"), true);
@@ -309,6 +310,10 @@ test("todo envío automático nuevo queda detrás del kill switch", () => {
 });
 
 test("sólo la automatización causal exige un lease de ejecución", () => {
+  assert.equal(
+    requiresWhatsAppAutomationExecutionLease("appointment_confirmation"),
+    true,
+  );
   assert.equal(requiresWhatsAppAutomationExecutionLease("automation"), true);
   assert.equal(requiresWhatsAppAutomationExecutionLease("handoff"), true);
   assert.equal(

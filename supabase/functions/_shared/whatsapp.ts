@@ -482,6 +482,7 @@ export function isAutomaticWhatsAppSource(value: string | null): boolean {
     value === "reminder" ||
     value === "deposit_request" ||
     value === "deposit_confirmation" ||
+    value === "appointment_confirmation" ||
     value === "proof_acknowledgement" ||
     value === "late_proof_acknowledgement" ||
     value === "business_location" ||
@@ -500,6 +501,7 @@ export function requiresWhatsAppAutomationExecutionLease(
     value === "owner_access" ||
     value === "deposit_request" ||
     value === "deposit_confirmation" ||
+    value === "appointment_confirmation" ||
     value === "proof_acknowledgement" ||
     value === "late_proof_acknowledgement" ||
     value === "business_location"
@@ -893,6 +895,7 @@ export async function assertOutboundPolicy(args: {
   appointmentId: string | null;
   source: string | null;
   automationOwnerMessageId: string | null;
+  appointmentSnapshot?: { startsAt: string; endsAt: string } | null;
 }): Promise<OutboundPolicyContext> {
   const {
     client,
@@ -904,6 +907,7 @@ export async function assertOutboundPolicy(args: {
     appointmentId,
     source,
     automationOwnerMessageId,
+    appointmentSnapshot = null,
   } = args;
   const [conversationResult, contactResult, settingsResult] = await Promise.all(
     [
@@ -1005,6 +1009,12 @@ export async function assertOutboundPolicy(args: {
     }
   }
 
+  // A no-deposit confirmation responds to the inbound booking execution.
+  // It never falls back to an outbound template after the service window.
+  if (source === "appointment_confirmation" && type === "template") {
+    throw new WhatsAppPolicyError("APPOINTMENT_CONFIRMATION_CONTEXT_INVALID");
+  }
+
   if (type !== "template") {
     if (
       !isCustomerServiceWindowOpen(freshConversation.last_inbound_message_at)
@@ -1028,6 +1038,7 @@ export async function assertOutboundPolicy(args: {
     if (
       source === "deposit_request" ||
       source === "deposit_confirmation" ||
+      source === "appointment_confirmation" ||
       source === "proof_acknowledgement" ||
       source === "late_proof_acknowledgement" ||
       source === "hold_expiration" ||
@@ -1040,13 +1051,33 @@ export async function assertOutboundPolicy(args: {
       const { data: appointment, error: appointmentError } = await client
         .from("appointments")
         .select(
-          "id,contact_id,status,deposit_status,deposit_proof_late,deposit_proof_message_id,hold_expires_at,hold_expired_notification_status",
+          "id,contact_id,status,deposit_status,starts_at,ends_at,deposit_proof_late,deposit_proof_message_id,hold_expires_at,hold_expired_notification_status",
         )
         .eq("id", appointmentId)
         .eq("contact_id", contact.id)
         .maybeSingle();
       if (appointmentError || !appointment) {
         throw new WhatsAppPolicyError("APPOINTMENT_CONTEXT_INVALID");
+      }
+      if (source === "appointment_confirmation") {
+        const startsAt = new Date(appointment.starts_at).getTime();
+        const endsAt = new Date(appointment.ends_at).getTime();
+        if (
+          !automationOwnerMessageId ||
+          !appointmentSnapshot ||
+          appointment.id !== appointmentId ||
+          appointment.contact_id !== contact.id ||
+          appointment.status !== "confirmed" ||
+          appointment.deposit_status !== "not_required" ||
+          !Number.isFinite(startsAt) ||
+          !Number.isFinite(endsAt) ||
+          startsAt <= Date.now() ||
+          endsAt <= startsAt ||
+          startsAt !== new Date(appointmentSnapshot.startsAt).getTime() ||
+          endsAt !== new Date(appointmentSnapshot.endsAt).getTime()
+        ) {
+          throw new WhatsAppPolicyError("APPOINTMENT_CONFIRMATION_STALE");
+        }
       }
       if (
         (source === "deposit_request" ||
@@ -1096,6 +1127,7 @@ export async function assertOutboundPolicy(args: {
       if (
         source === "deposit_request" ||
         source === "deposit_confirmation" ||
+        source === "appointment_confirmation" ||
         source === "operator_deposit_request" ||
         source === "operator_deposit_confirmation"
       ) {
@@ -1105,6 +1137,7 @@ export async function assertOutboundPolicy(args: {
         );
         const expectedStage =
           source === "deposit_confirmation" ||
+          source === "appointment_confirmation" ||
           source === "operator_deposit_confirmation"
             ? "confirmed"
             : "pre_reservation";
@@ -1556,11 +1589,28 @@ export async function sendAndRecordMessage(args: {
     typeof metadata.inbound_message_id === "string"
       ? metadata.inbound_message_id
       : null;
+  const appointmentSnapshot =
+    typeof metadata.appointment_starts_at === "string" &&
+    typeof metadata.appointment_ends_at === "string"
+      ? {
+          startsAt: metadata.appointment_starts_at,
+          endsAt: metadata.appointment_ends_at,
+        }
+      : null;
   if (
     requiresWhatsAppAutomationExecutionLease(source) &&
     !automationExecution
   ) {
     throw new WhatsAppPolicyError("AUTOMATION_EXECUTION_REQUIRED");
+  }
+  if (
+    source === "appointment_confirmation" &&
+    (!automationOwnerMessageId ||
+      automationExecution?.messageId !== automationOwnerMessageId ||
+      !appointmentId ||
+      metadata.appointment_id !== appointmentId)
+  ) {
+    throw new WhatsAppPolicyError("APPOINTMENT_CONFIRMATION_CONTEXT_INVALID");
   }
   assertAdministrativePayload(bodyPreview, outboundPayload);
   if (!validIdempotencyKey(idempotencyKey)) {
@@ -1649,6 +1699,10 @@ export async function sendAndRecordMessage(args: {
       (rowMetadata.source ?? null) !== source ||
       (appointmentId !== null &&
         rowMetadata.appointment_id !== appointmentId) ||
+      (source === "appointment_confirmation" &&
+        (rowMetadata.inbound_message_id !== automationOwnerMessageId ||
+          rowMetadata.appointment_starts_at !== appointmentSnapshot?.startsAt ||
+          rowMetadata.appointment_ends_at !== appointmentSnapshot?.endsAt)) ||
       (type === "template" &&
         (rowMetadata.template_key !== templateKey ||
           rowMetadata.appointment_id !== appointmentId))
@@ -1697,6 +1751,7 @@ export async function sendAndRecordMessage(args: {
     appointmentId,
     source,
     automationOwnerMessageId,
+    appointmentSnapshot,
   });
   if (automationExecution) {
     await assertWhatsAppAutomationSendEligible({
@@ -1802,17 +1857,20 @@ export async function sendAndRecordMessage(args: {
   try {
     // Re-evaluate immediately before the external side effect. This protects
     // delayed automation/retries and changes to consent or the service window.
-    await assertOutboundPolicy({
-      client,
-      conversation,
-      contact,
-      type,
-      templateName,
-      templateKey,
-      appointmentId,
-      source,
-      automationOwnerMessageId,
-    });
+    if (source !== "appointment_confirmation") {
+      await assertOutboundPolicy({
+        client,
+        conversation,
+        contact,
+        type,
+        templateName,
+        templateKey,
+        appointmentId,
+        source,
+        automationOwnerMessageId,
+        appointmentSnapshot,
+      });
+    }
     await assertTestRecipientAllowed({
       client,
       conversation,
@@ -1872,6 +1930,22 @@ export async function sendAndRecordMessage(args: {
         client,
         conversationId: conversation.id,
         execution: automationExecution,
+      });
+    }
+    if (source === "appointment_confirmation") {
+      // Keep the persisted appointment and exact confirmed projection check
+      // after credential/recipient reads, immediately before the Graph call.
+      await assertOutboundPolicy({
+        client,
+        conversation,
+        contact,
+        type,
+        templateName,
+        templateKey,
+        appointmentId,
+        source,
+        automationOwnerMessageId,
+        appointmentSnapshot,
       });
     }
     const dispatched = await dispatchWhatsAppPayload({

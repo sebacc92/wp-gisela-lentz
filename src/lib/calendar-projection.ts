@@ -70,6 +70,10 @@ export function calendarProjectionNotice(
 }
 
 export function calendarBookingError(message: string): string {
+  if (message.includes("ORTHODONTIC_VISIT_TYPE_REQUIRED"))
+    return "Elegí Primera vez o En tratamiento con Gisela para este turno de ortodoncia.";
+  if (message.includes("ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE"))
+    return "El tipo de visita sólo corresponde a ortodoncia. Volvé a elegir el servicio.";
   if (
     message.includes("SLOT_UNAVAILABLE") ||
     message.includes("SLOT_NO_LONGER_AVAILABLE")

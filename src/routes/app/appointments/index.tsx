@@ -1,3 +1,4 @@
+import { ORTHODONTIC_VISIT_LABELS } from "~/lib/orthodontics";
 import {
   $,
   component$,
@@ -592,7 +593,7 @@ export default component$(() => {
     : selectedAppointment.depositStatus === "confirmed"
       ? "Seña confirmada"
       : selectedAppointment.depositStatus === "not_required"
-        ? "Sin seña"
+        ? "Seña no requerida"
         : selectedAppointment.depositStatus === "expired"
           ? "Seña vencida"
           : selectedAppointment.depositStatus === "proof_received"
@@ -1244,6 +1245,18 @@ export default component$(() => {
                     <dt>Servicio</dt>
                     <dd>{selectedAppointment.serviceName}</dd>
                   </div>
+                  {selectedAppointment.orthodonticVisitType && (
+                    <div>
+                      <dt>Visita de ortodoncia</dt>
+                      <dd>
+                        {
+                          ORTHODONTIC_VISIT_LABELS[
+                            selectedAppointment.orthodonticVisitType
+                          ]
+                        }
+                      </dd>
+                    </div>
+                  )}
                   <div>
                     <dt>Cobertura y duración</dt>
                     <dd>
@@ -1265,7 +1278,14 @@ export default component$(() => {
                 <dl class="detail-grid">
                   <div>
                     <dt>Estado de la seña</dt>
-                    <dd>{depositBadgeLabel}</dd>
+                    <dd>
+                      {depositBadgeLabel}
+                      {selectedAppointment.depositStatus === "not_required" &&
+                      selectedAppointment.orthodonticVisitType ===
+                        "in_treatment"
+                        ? " · en tratamiento con Gisela"
+                        : ""}
+                    </dd>
                   </div>
                   {selectedReview && (
                     <div>

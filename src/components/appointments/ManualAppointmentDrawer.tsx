@@ -1,8 +1,10 @@
+import { OrthodonticVisitPicker } from "./OrthodonticVisitPicker";
 import {
   component$,
   type QRL,
   useSignal,
   useStore,
+  useTask$,
   useVisibleTask$,
 } from "@qwik.dev/core";
 import { businessDateInput } from "~/lib/date-time";
@@ -14,6 +16,7 @@ import type {
   AppointmentSlot,
   BookingDurationSettings,
   PatientCoverage,
+  OrthodonticVisitType,
   ProfessionalOption,
   ServiceOption,
 } from "~/lib/inbox-types";
@@ -57,6 +60,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
     const drawerRef = useSignal<HTMLElement>();
     const professionalId = useSignal(props.professionals[0]?.id ?? "");
     const serviceId = useSignal(props.services[0]?.id ?? "");
+    const orthodonticVisit = useSignal<OrthodonticVisitType | "">("");
     const patientId = useSignal("");
     const patientMode = useSignal<"existing" | "new">("existing");
     const patientSearch = useSignal("");
@@ -174,6 +178,15 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
       }
     });
 
+    useTask$(({ track }) => {
+      track(() => patientId.value);
+      track(() => patientMode.value);
+      orthodonticVisit.value = "";
+    });
+    const selectedService = props.services.find(
+      (service) => service.id === serviceId.value,
+    );
+
     const selectedPatient = state.patients.find(
       (patient) => patient.id === patientId.value,
     );
@@ -270,6 +283,14 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                 return;
               }
 
+              const visitType = selectedService?.requiresOrthodonticIntake
+                ? orthodonticVisit.value || null
+                : null;
+              if (selectedService?.requiresOrthodonticIntake && !visitType) {
+                error.value =
+                  "Elegí Primera vez o En tratamiento con Gisela para este turno de ortodoncia.";
+                return;
+              }
               saving.value = true;
               error.value = "";
               const client = getSupabaseClient();
@@ -328,6 +349,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     p_starts_at: selectedStartsAt.value,
                     p_source: "manual",
                     p_internal_note: note.value.trim() || null,
+                    p_orthodontic_visit_type: visitType,
                   });
                 if (appointmentError) {
                   error.value = calendarBookingError(appointmentError.message);
@@ -353,7 +375,7 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                       ? "Horario reservado y pedido de seña enviado por WhatsApp."
                       : notification.required
                         ? "Horario reservado. No pudimos enviar el pedido de seña por WhatsApp."
-                        : "Turno guardado y confirmado. La seña está desactivada.",
+                        : "Turno guardado y confirmado. No requiere seña.",
                 );
               } catch {
                 error.value =
@@ -691,9 +713,10 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     <select
                       value={serviceId.value}
                       disabled={busy}
-                      onChange$={(_, element) =>
-                        (serviceId.value = element.value)
-                      }
+                      onChange$={(_, element) => {
+                        serviceId.value = element.value;
+                        orthodonticVisit.value = "";
+                      }}
                     >
                       {props.services.map((service) => (
                         <option key={service.id} value={service.id}>
@@ -704,6 +727,17 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     <Icon name="chevron-down" size={17} />
                   </div>
                 </label>
+
+                {selectedService?.requiresOrthodonticIntake && (
+                  <OrthodonticVisitPicker
+                    value={orthodonticVisit.value}
+                    disabled={busy}
+                    onChange$={(value) => {
+                      orthodonticVisit.value = value;
+                      error.value = "";
+                    }}
+                  />
+                )}
 
                 <label class="form-field">
                   <span>Fecha</span>
@@ -812,6 +846,8 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
                     state.slotLoadError ||
                     !selectedStartsAt.value ||
                     !serviceId.value ||
+                    (selectedService?.requiresOrthodonticIntake &&
+                      !orthodonticVisit.value) ||
                     !selectedCoverage.value
                   }
                 >

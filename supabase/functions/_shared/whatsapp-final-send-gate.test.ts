@@ -15,6 +15,7 @@ const CONTACT_ID = "33333333-3333-4333-8333-333333333333";
 const INBOUND_ID = "44444444-4444-4444-8444-444444444444";
 const OUTBOUND_ID = "55555555-5555-4555-8555-555555555555";
 const LEASE_TOKEN = "66666666-6666-4666-8666-666666666666";
+const APPOINTMENT_ID = "77777777-7777-4777-8777-777777777777";
 
 function queryResult(data: unknown) {
   const query = {
@@ -35,6 +36,9 @@ function finalGateClient(input: {
   eligibilityCalls: string[];
   failedMessages: Array<Record<string, unknown>>;
   insertedMessages?: Array<Record<string, unknown>>;
+  readAppointment?: () => Record<string, unknown>;
+  readProjection?: () => Record<string, unknown>;
+  eligibility?: (call: number) => boolean;
 }): SupabaseClient {
   const freshConversation = {
     id: CONVERSATION_ID,
@@ -89,7 +93,9 @@ function finalGateClient(input: {
       }
       if (name === "check_whatsapp_automation_send_eligibility") {
         input.eligibilityCalls.push(name);
-        const stillEligible = input.eligibilityCalls.length === 1;
+        const stillEligible =
+          input.eligibility?.(input.eligibilityCalls.length) ??
+          input.eligibilityCalls.length === 1;
         return {
           data: {
             eligible: stillEligible,
@@ -103,6 +109,12 @@ function finalGateClient(input: {
           },
           error: null,
         };
+      }
+      if (
+        name === "appointment_google_calendar_projection" &&
+        input.readProjection
+      ) {
+        return { data: input.readProjection(), error: null };
       }
       throw new Error(`unexpected RPC: ${name}`);
     },
@@ -139,6 +151,9 @@ function finalGateClient(input: {
           select: () =>
             queryResult({ sending_paused: false, quality_rating: "GREEN" }),
         };
+      }
+      if (table === "appointments" && input.readAppointment) {
+        return { select: () => queryResult(input.readAppointment!()) };
       }
       throw new Error(`unexpected table: ${table}`);
     },
@@ -223,6 +238,175 @@ test("revocation after reservation is rechecked at the last pre-Graph gate", asy
     } else {
       process.env.WHATSAPP_RECIPIENT_FINGERPRINT_SECRET = previousFingerprint;
     }
+  }
+});
+
+test("la confirmación sin seña revalida el turno y Calendar después de resolver credenciales y antes de Graph", async () => {
+  const keys = [
+    "WHATSAPP_AUTOMATIONS_ENABLED",
+    "WHATSAPP_TEST_MODE",
+    "WHATSAPP_GRAPH_API_VERSION",
+    "WHATSAPP_RECIPIENT_FINGERPRINT_SECRET",
+  ];
+  const saved = new Map(keys.map((key) => [key, process.env[key]]));
+  process.env.WHATSAPP_AUTOMATIONS_ENABLED = "true";
+  process.env.WHATSAPP_TEST_MODE = "false";
+  process.env.WHATSAPP_GRAPH_API_VERSION = "v26.0";
+  process.env.WHATSAPP_RECIPIENT_FINGERPRINT_SECRET =
+    "synthetic-no-deposit-secret";
+  try {
+    for (const change of [
+      "none",
+      "cancelled",
+      "rescheduled",
+      "calendar_pending",
+      "lease_revoked",
+    ] as const) {
+      const startsAt = new Date(Date.now() + 86400000).toISOString();
+      const endsAt = new Date(Date.now() + 90000000).toISOString();
+      let status = "confirmed";
+      let currentStartsAt = startsAt;
+      let projectionState = "synced";
+      let graphCalls = 0;
+      let projectionReads = 0;
+      const eligibilityCalls: string[] = [];
+      const failedMessages: Array<Record<string, unknown>> = [];
+      const insertedMessages: Array<Record<string, unknown>> = [];
+      const send = () =>
+        sendAndRecordMessage({
+          client: finalGateClient({
+            eligibilityCalls,
+            failedMessages,
+            insertedMessages,
+            readAppointment: () => ({
+              id: APPOINTMENT_ID,
+              contact_id: CONTACT_ID,
+              status,
+              deposit_status: "not_required",
+              starts_at: currentStartsAt,
+              ends_at: endsAt,
+            }),
+            readProjection: () => {
+              projectionReads += 1;
+              return { state: projectionState, projectionStage: "confirmed" };
+            },
+            eligibility: (call) => {
+              if (call === 2) {
+                if (change === "cancelled") status = "cancelled";
+                if (change === "rescheduled")
+                  currentStartsAt = new Date(
+                    Date.now() + 172800000,
+                  ).toISOString();
+                if (change === "calendar_pending") projectionState = "pending";
+              }
+              return !(call === 2 && change === "lease_revoked");
+            },
+          }),
+          conversation: {
+            id: CONVERSATION_ID,
+            contact_id: CONTACT_ID,
+            coexistence_account_id: ACCOUNT_ID,
+            last_inbound_message_at: new Date().toISOString(),
+            automation_mode: "auto",
+            needs_human: false,
+          },
+          contact: {
+            id: CONTACT_ID,
+            phone_e164: "+5491100000001",
+            whatsapp_id: "5491100000001",
+            whatsapp_user_id: null,
+            name: "Paciente",
+          },
+          payload: textPayload("Tu turno quedó confirmado. Sin seña."),
+          bodyPreview: "Tu turno quedó confirmado. Sin seña.",
+          idempotencyKey: `automation:${INBOUND_ID}:0`,
+          appointmentId: APPOINTMENT_ID,
+          coexistenceAccountId: ACCOUNT_ID,
+          metadata: {
+            source: "appointment_confirmation",
+            inbound_message_id: INBOUND_ID,
+            appointment_id: APPOINTMENT_ID,
+            appointment_starts_at: startsAt,
+            appointment_ends_at: endsAt,
+          },
+          automationExecution: {
+            messageId: INBOUND_ID,
+            leaseToken: LEASE_TOKEN,
+          },
+          fetchImpl: async () => {
+            graphCalls += 1;
+            return new Response(
+              JSON.stringify({ messages: [{ id: "wamid.synthetic-exempt" }] }),
+              { status: 200 },
+            );
+          },
+        });
+      if (change === "none") {
+        assert.equal((await send()).status, "sent");
+        assert.equal(graphCalls, 1);
+        assert.equal(projectionReads, 2);
+      } else {
+        const code =
+          change === "calendar_pending"
+            ? "CALENDAR_PROJECTION_PENDING"
+            : change === "lease_revoked"
+              ? "AUTOMATIONS_DISABLED"
+              : "APPOINTMENT_CONFIRMATION_STALE";
+        await assert.rejects(send(), { message: `WHATSAPP_POLICY:${code}` });
+        assert.equal(graphCalls, 0);
+        assert.equal(failedMessages.at(-1)?.status, "failed");
+      }
+      assert.equal(eligibilityCalls.length, 2);
+      assert.equal(insertedMessages.length, 1);
+    }
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("la confirmación exenta no acepta una ejecución ausente ni de otro mensaje", async () => {
+  for (const execution of [
+    null,
+    { messageId: "different-inbound", leaseToken: LEASE_TOKEN },
+  ]) {
+    await assert.rejects(
+      sendAndRecordMessage({
+        client: {} as SupabaseClient,
+        conversation: {
+          id: CONVERSATION_ID,
+          contact_id: CONTACT_ID,
+          automation_mode: "auto",
+          last_inbound_message_at: new Date().toISOString(),
+          needs_human: false,
+        },
+        contact: {
+          id: CONTACT_ID,
+          name: "Paciente",
+          phone_e164: "+5491100000001",
+          whatsapp_id: null,
+          whatsapp_user_id: null,
+        },
+        payload: textPayload("Turno confirmado"),
+        bodyPreview: "Turno confirmado",
+        idempotencyKey: "synthetic:exempt",
+        appointmentId: APPOINTMENT_ID,
+        metadata: {
+          source: "appointment_confirmation",
+          inbound_message_id: INBOUND_ID,
+          appointment_id: APPOINTMENT_ID,
+        },
+        automationExecution: execution,
+        fetchImpl: async () => {
+          throw new Error("must not send");
+        },
+      }),
+      {
+        message: `WHATSAPP_POLICY:${execution ? "APPOINTMENT_CONFIRMATION_CONTEXT_INVALID" : "AUTOMATION_EXECUTION_REQUIRED"}`,
+      },
+    );
   }
 });
 

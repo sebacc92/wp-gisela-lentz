@@ -1,3 +1,4 @@
+import { OrthodonticVisitPicker } from "./OrthodonticVisitPicker";
 import {
   component$,
   type QRL,
@@ -11,6 +12,7 @@ import type {
   BookingDurationSettings,
   Conversation,
   PatientCoverage,
+  OrthodonticVisitType,
   ProfessionalOption,
   ServiceOption,
 } from "~/lib/inbox-types";
@@ -32,6 +34,7 @@ interface AppointmentDrawerProps {
       serviceName: string,
       startsAt: string,
       note: string,
+      orthodonticVisitType: OrthodonticVisitType | null,
     ) => void
   >;
 }
@@ -42,6 +45,7 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const professionalId = useSignal(props.professionals[0]?.id ?? "");
   const serviceId = useSignal(props.services[0]?.id ?? "");
+  const orthodonticVisit = useSignal<OrthodonticVisitType | "">("");
   const date = useSignal(businessDateInput(tomorrow));
   const selectedStartsAt = useSignal("");
   const saving = useSignal(false);
@@ -160,10 +164,18 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
           class="appointment-form"
           preventdefault:submit
           onSubmit$={async () => {
-            if (saving.value) return;
+            if (
+              saving.value ||
+              savingCoverage.value ||
+              state.loading ||
+              state.error
+            )
+              return;
             if (
               !selectedProfessional ||
               !selectedService ||
+              (selectedService.requiresOrthodonticIntake &&
+                !orthodonticVisit.value) ||
               !selectedStartsAt.value
             )
               return;
@@ -176,6 +188,9 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                 selectedService.name,
                 selectedStartsAt.value,
                 note.value.trim(),
+                selectedService.requiresOrthodonticIntake
+                  ? orthodonticVisit.value || null
+                  : null,
               );
             } finally {
               saving.value = false;
@@ -252,9 +267,11 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                 <div class="select-wrap">
                   <select
                     value={serviceId.value}
-                    onChange$={(_, element) =>
-                      (serviceId.value = element.value)
-                    }
+                    disabled={busy}
+                    onChange$={(_, element) => {
+                      serviceId.value = element.value;
+                      orthodonticVisit.value = "";
+                    }}
                   >
                     {props.services.map((service) => (
                       <option key={service.id} value={service.id}>
@@ -266,6 +283,16 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                 </div>
               </label>
 
+              {selectedService?.requiresOrthodonticIntake && (
+                <OrthodonticVisitPicker
+                  value={orthodonticVisit.value}
+                  disabled={busy}
+                  onChange$={(value) => {
+                    orthodonticVisit.value = value;
+                  }}
+                />
+              )}
+
               <label class="form-field">
                 <span>Fecha</span>
                 <div class="input-with-icon">
@@ -274,6 +301,7 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                     type="date"
                     min={businessDateInput()}
                     value={date.value}
+                    disabled={busy}
                     onInput$={(_, element) => (date.value = element.value)}
                   />
                 </div>
@@ -289,6 +317,7 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                       class={{
                         selected: selectedStartsAt.value === slot.startsAt,
                       }}
+                      disabled={busy}
                       onClick$={() => (selectedStartsAt.value = slot.startsAt)}
                     >
                       {slot.label}
@@ -318,6 +347,7 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                 <textarea
                   rows={3}
                   value={note.value}
+                  disabled={busy}
                   placeholder="Visible solo para Gisela"
                   onInput$={(_, element) => (note.value = element.value)}
                 />
@@ -329,8 +359,14 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                   <p>
                     Se reservará el horario de{" "}
                     <strong>{selectedSlot.label}</strong> para{" "}
-                    <strong>{selectedService.name}</strong>. Quedará esperando
-                    la seña del paciente.
+                    <strong>{selectedService.name}</strong>.{" "}
+                    {selectedService.requiresOrthodonticIntake &&
+                    !orthodonticVisit.value
+                      ? "Elegí el tipo de visita para continuar."
+                      : orthodonticVisit.value === "in_treatment" &&
+                          selectedService.requiresOrthodonticIntake
+                        ? "No requiere seña. La reserva se verifica en Google Calendar antes de confirmar."
+                        : "Se aplicará la configuración habitual de seña después de verificar Google Calendar."}
                   </p>
                 </div>
               )}
@@ -351,7 +387,11 @@ export const AppointmentDrawer = component$<AppointmentDrawerProps>((props) => {
                   class="primary-button"
                   type="submit"
                   disabled={
-                    saving.value ||
+                    busy ||
+                    state.loading ||
+                    Boolean(state.error) ||
+                    (selectedService?.requiresOrthodonticIntake &&
+                      !orthodonticVisit.value) ||
                     !selectedStartsAt.value ||
                     !selectedProfessional ||
                     !selectedService

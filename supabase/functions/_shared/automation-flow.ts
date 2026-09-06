@@ -745,6 +745,8 @@ export function resolveAppointmentConfirmation(
   if (value === "appointment:other") return "other";
   if (value === "appointment:cancel") return "menu";
   const input = normalizeUserInput(value);
+  if (/^(reservar turno|pre reservar)$/.test(input) && !/[¿?]/.test(value))
+    return "confirm";
   if (AFFIRMATIVE.test(input)) return "confirm";
   if (
     /^(otro|otra opcion|elegir otro|otro horario|cambiar horario)$/.test(input)

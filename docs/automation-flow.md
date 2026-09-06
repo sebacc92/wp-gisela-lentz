@@ -11,9 +11,11 @@ confirmar la seña.
 idle
  ├─ Sacar turno ─► collecting_patient_profile (sólo datos faltantes)
  │                  └─ perfil completo ─► selecting_service
- │                  └─ servicio ─► selecting_slot
+ │                  └─ servicio ─► ortodoncia: primera vez / en tratamiento con Gisela
+ │                                   └─ selecting_slot
  │                                   └─ horario ─► confirming_appointment
- │                                                    ├─ confirmar ─► pre-reserva + mensaje de seña
+ │                                                    ├─ confirmar sin seña ─► turno confirmado + Calendar
+ │                                                    ├─ pre-reservar ─► pre-reserva + mensaje de seña
  │                                                    │                 └─ imagen/PDF ─► validación básica
  │                                                    │                                      ├─ válido ─► turno confirmado
  │                                                    │                                      └─ no válido/tardío ─► human_handoff
@@ -50,15 +52,26 @@ Estados adicionales:
    atendió con ella antes, teléfono de contacto y cobertura. Si el teléfono del
    remitente está disponible, puede confirmarlo con **Este WhatsApp**; si no,
    escribe otro número con código de área.
-2. Se muestran únicamente servicios activos; el servicio expresa el motivo.
+2. Se muestran únicamente servicios activos. Los marcados con
+   `requires_orthodontic_intake=true` preguntan **Primera vez** o **En tratamiento
+   con Gisela** antes de ofrecer horarios. La elección se guarda en el turno
+   (`orthodontic_visit_type=first_visit|in_treatment`) y no se infiere de
+   `is_existing_patient` ni de una consulta anterior por otro motivo.
 3. IOMA usa inicialmente 30 minutos y Particular 60. Ambos valores se leen de
    configuración y `get_available_slots_for_coverage` los aplica realmente.
-4. Al confirmar el horario, `create_service_appointment` toma un lock, vuelve a
-   validar y recién entonces crea una pre-reserva temporal.
-5. La pre-reserva guarda una copia del monto, alias y titular vigentes, y esos
+4. Al confirmar el horario, `create_service_appointment` toma un lock y vuelve a
+   validar la disponibilidad local y de Google Calendar. **En tratamiento con
+   Gisela** crea `confirmed/not_required`, sin vencimiento ni datos de seña. El
+   resto conserva la política configurada: con seña activa crea una pre-reserva
+   temporal. Ambas ramas verifican la proyección exacta en Google antes de
+   enviar una confirmación o un pedido de seña; una proyección pendiente deriva
+   a revisión humana y conserva el turno guardado.
+5. Una pre-reserva con seña guarda una copia del monto, alias y titular vigentes, y esos
    mismos datos se envían en el mensaje configurable. Un cambio posterior en
    Configuración no altera lo que se le pidió transferir a ese paciente. El
    turno continúa en “Esperando seña”.
+   Un turno de ortodoncia en tratamiento confirma **Sin seña** y vuelve a `idle`,
+   sin ingresar en `waiting_deposit` ni solicitar comprobantes.
 6. Una imagen JPEG/PNG o un PDF sólo se interpreta como comprobante cuando la
    sesión está en `waiting_deposit` y tiene una pre-reserva asociada. La IA
    transcribe legibilidad, monto, moneda, fecha, alias o destino, titular e
@@ -84,9 +97,13 @@ revive ni confirma una reserva vencida.
 - El turno original se conserva hasta confirmar el nuevo horario.
 - Si era una pre-reserva pendiente, conserva monto, alias, titular y vencimiento
   ya informados, y continúa en `waiting_deposit` para poder leer el comprobante.
+- Conserva también la elección de ortodoncia y su condición de seña: un turno
+  en tratamiento sigue confirmado sin seña al reprogramarse.
 - Una cancelación siempre requiere confirmación inequívoca.
 - Los botones de un recordatorio validan que el turno siga activo y pertenezca al
   contacto antes de cambiarlo.
+- Los turnos confirmados sin seña participan de los mismos recordatorios y del
+  resumen privado para Gisela que los demás turnos confirmados.
 
 ## Atención humana y urgencias
 
@@ -109,6 +126,14 @@ puede habilitarlo. El cooldown evita repetir el aviso ante cada mensaje, pero no
 impide que el flujo procese las entradas posteriores.
 
 ## Controles globales
+
+- La confirmación sin seña usa el propósito `appointment_confirmation`, que
+  exige la ejecución causal del mensaje entrante y conserva los controles de
+  automatización, pausa humana y ventana de servicio de 24 horas. Justo antes
+  de enviar comprueba otra vez paciente, estado `confirmed/not_required`,
+  horarios originales y proyección `confirmed` en Google Calendar. Un cambio
+  concurrente bloquea el mensaje obsoleto. No sustituye este mensaje por una
+  plantilla paga ni usa la confirmación de un depósito como evidencia.
 
 - `app_settings.automations_enabled=false`: apaga las respuestas del bot desde
   la aplicación. Es la posición operativa por defecto; una persona `ADMIN` puede

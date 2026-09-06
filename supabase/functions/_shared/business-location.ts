@@ -29,6 +29,8 @@ export const INFORMATION_FOLLOW_UP_BUTTONS = [
 
 const INFORMATION_FLOW_RESUME_PROMPTS: Record<string, string> = {
   selecting_service: "Seguimos con tu turno 😊 ¿Qué tipo de turno necesitás?",
+  selecting_orthodontic_visit_type:
+    "Seguimos con tu turno 😊 ¿Es tu primera consulta de ortodoncia con Gisela o ya estás en tratamiento con ella?",
   selecting_slot:
     "Seguimos con tu turno 😊 Elegí uno de los horarios disponibles.",
   confirming_appointment:
@@ -160,6 +162,12 @@ export function informationFlowResumePrompt(
   state: string,
   context: object = {},
 ): string | null {
+  if (
+    state === "confirming_appointment" &&
+    (context as { depositRequired?: unknown }).depositRequired === false
+  ) {
+    return "Seguimos con tu turno 😊 ¿Querés reservar el horario que elegiste? Este turno no requiere seña.";
+  }
   if (state === "collecting_patient_profile") {
     const expectedProfileField = (context as { expectedProfileField?: unknown })
       .expectedProfileField;

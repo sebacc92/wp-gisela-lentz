@@ -51,7 +51,7 @@ select ok(
 select ok(
   not has_function_privilege(
     'anon',
-    'public.create_service_appointment(uuid, uuid, uuid, timestamptz, public.appointment_source, text)',
+    'public.create_service_appointment(uuid, uuid, uuid, timestamptz, public.appointment_source, text, public.orthodontic_visit_type)',
     'EXECUTE'
   ),
   'anonymous users cannot create appointments through the RPC'

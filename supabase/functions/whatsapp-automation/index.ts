@@ -1,3 +1,11 @@
+import {
+  bookingConfirmationCopy,
+  ORTHODONTIC_VISIT_OPTIONS,
+  ORTHODONTIC_VISIT_PROMPT,
+  type OrthodonticVisitType,
+  orthodonticVisitType,
+  parseOrthodonticVisitReply,
+} from "../_shared/orthodontic-booking.ts";
 import { loadOwnerAgenda } from "../_shared/owner-agenda.ts";
 import {
   ACCEPTED_COVERAGE_MESSAGE,
@@ -177,6 +185,7 @@ interface AppSettingsSnapshot {
   out_of_hours_message?: string | null;
   out_of_hours_cooldown_minutes?: number;
   timezone?: string | null;
+  deposit_enabled?: boolean;
   deposit_amount_ars?: number;
   deposit_alias?: string | null;
   deposit_holder?: string | null;
@@ -460,6 +469,7 @@ interface AutomationSlot {
   professionalName: string;
   serviceId: string;
   serviceName: string;
+  orthodonticVisitType?: OrthodonticVisitType | null;
 }
 
 interface AutomationContext {
@@ -469,6 +479,8 @@ interface AutomationContext {
   professionalPage?: number;
   serviceId?: string;
   serviceName?: string;
+  orthodonticVisitType?: OrthodonticVisitType | null;
+  depositRequired?: boolean;
   appointmentId?: string;
   slots?: AutomationSlot[];
   expectedProfileField?: PatientProfileField;
@@ -1202,7 +1214,9 @@ Deno.serve(async (request) => {
           });
         }
         const template = appSettings.deposit_confirmed_message_template?.trim();
-        const defaultConfirmationMessage = `¡Listo! Recibimos el comprobante y tu turno quedó confirmado para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)}.`;
+        const defaultConfirmationMessage = `¡Listo! Recibimos el comprobante y tu turno quedó confirmado para el ${formatDate(
+          proof.startsAt,
+        )} a las ${formatTime(proof.startsAt)}.`;
         const renderedConfirmationMessage = template
           ? renderConfiguredMessage(template, {
               date: formatDate(proof.startsAt),
@@ -1217,7 +1231,9 @@ Deno.serve(async (request) => {
           ? validRenderedConfirmation
             ? renderedConfirmationMessage
             : defaultConfirmationMessage
-          : `Tu turno para el ${formatDate(proof.startsAt)} a las ${formatTime(proof.startsAt)} ya estaba confirmado.`;
+          : `Tu turno para el ${formatDate(proof.startsAt)} a las ${formatTime(
+              proof.startsAt,
+            )} ya estaba confirmado.`;
         await send(
           textPayload(message),
           message,
@@ -1988,13 +2004,25 @@ Deno.serve(async (request) => {
         );
         return false;
       }
-      const slots = await findSlots(
-        professionalId,
-        professionalName,
-        serviceId,
-        serviceName,
-        slotCoverage,
-      );
+      const visitType =
+        state === "selecting_slot"
+          ? orthodonticVisitType(
+              Object.hasOwn(context, "orthodonticVisitType")
+                ? context.orthodonticVisitType
+                : session.context.serviceId === serviceId
+                  ? session.context.orthodonticVisitType
+                  : null,
+            )
+          : null;
+      const slots = (
+        await findSlots(
+          professionalId,
+          professionalName,
+          serviceId,
+          serviceName,
+          slotCoverage,
+        )
+      ).map((slot) => ({ ...slot, orthodonticVisitType: visitType }));
       if (!slots.length) {
         await handoff("No encontramos horarios disponibles.");
         return false;
@@ -2026,6 +2054,7 @@ Deno.serve(async (request) => {
         professionalName,
         serviceId,
         serviceName,
+        orthodonticVisitType: visitType,
         slots,
         invalidAttempts,
       });
@@ -2045,13 +2074,30 @@ Deno.serve(async (request) => {
       return resolveTypedServiceOption(value, serviceOptions);
     };
 
+    const askOrthodonticVisit = async (
+      serviceId: string,
+      serviceName: string,
+      invalidAttempts = 0,
+    ) => {
+      await send(
+        buttonsPayload(ORTHODONTIC_VISIT_PROMPT, ORTHODONTIC_VISIT_OPTIONS),
+        ORTHODONTIC_VISIT_PROMPT,
+      );
+      await saveSession("selecting_orthodontic_visit_type", {
+        serviceId,
+        serviceName,
+        invalidAttempts,
+      });
+    };
+
     const selectServiceAndShowSlots = async (
       serviceId: string,
-    ): Promise<"shown" | "handoff" | "missing"> => {
+      requestedVisitType: OrthodonticVisitType | null = null,
+    ): Promise<"shown" | "intake" | "handoff" | "missing"> => {
       const [serviceResult, professionalResult] = await Promise.all([
         client
           .from("services")
-          .select("id,name")
+          .select("id,name,requires_orthodontic_intake")
           .eq("id", serviceId)
           .eq("active", true)
           .maybeSingle(),
@@ -2073,12 +2119,20 @@ Deno.serve(async (request) => {
       if (!selection.service || !selection.professional) {
         return "missing";
       }
+      const visitType = selection.service.requires_orthodontic_intake
+        ? orthodonticVisitType(requestedVisitType)
+        : null;
+      if (selection.service.requires_orthodontic_intake && !visitType) {
+        await askOrthodonticVisit(selection.service.id, selection.service.name);
+        return "intake";
+      }
       const shown = await showSlots(
         selection.professional.id as string,
         selection.professional.name as string,
         selection.service.id as string,
         selection.service.name as string,
         "selecting_slot",
+        { orthodonticVisitType: visitType },
       );
       return shown ? "shown" : "handoff";
     };
@@ -2254,7 +2308,9 @@ Deno.serve(async (request) => {
       invalidAttempts = 0,
     ) => {
       const message =
-        `Vas a cancelar este turno:\n\n📅 ${formatDate(appointment.startsAt)}\n` +
+        `Vas a cancelar este turno:\n\n📅 ${formatDate(
+          appointment.startsAt,
+        )}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n` +
         `${appointment.serviceName}\n\n¿Confirmás la cancelación?`;
       await send(
@@ -2289,11 +2345,9 @@ Deno.serve(async (request) => {
       }
       const rows = appointments.map((appointment) => ({
         id: `turn:${action}:${appointment.id}`,
-        title:
-          `${compactDate(appointment.startsAt)} · ${formatTime(appointment.startsAt)}`.slice(
-            0,
-            24,
-          ),
+        title: `${compactDate(appointment.startsAt)} · ${formatTime(
+          appointment.startsAt,
+        )}`.slice(0, 24),
         description: appointment.serviceName.slice(0, 72),
       }));
       if (rows.length < 10) {
@@ -2335,7 +2389,9 @@ Deno.serve(async (request) => {
           : "Tus próximos turnos son:",
         ...appointments.map(
           (appointment, index) =>
-            `\n${index + 1}. ${formatDate(appointment.startsAt)} a las ${formatTime(appointment.startsAt)}\n${appointment.serviceName}`,
+            `\n${index + 1}. ${formatDate(appointment.startsAt)} a las ${formatTime(
+              appointment.startsAt,
+            )}\n${appointment.serviceName}`,
         ),
         "\n¿Qué querés hacer?",
       ].join("\n");
@@ -2417,6 +2473,14 @@ Deno.serve(async (request) => {
           information_resume: true,
           resumed_state: session.state,
         };
+        if (session.state === "selecting_orthodontic_visit_type") {
+          await send(
+            buttonsPayload(ORTHODONTIC_VISIT_PROMPT, ORTHODONTIC_VISIT_OPTIONS),
+            ORTHODONTIC_VISIT_PROMPT,
+            metadata,
+          );
+          return;
+        }
         const appointmentAction =
           session.state === "selecting_appointment_to_reschedule"
             ? "reschedule"
@@ -2428,11 +2492,9 @@ Deno.serve(async (request) => {
           if (appointments.length) {
             const rows = appointments.map((appointment) => ({
               id: `turn:${appointmentAction}:${appointment.id}`,
-              title:
-                `${compactDate(appointment.startsAt)} · ${formatTime(appointment.startsAt)}`.slice(
-                  0,
-                  24,
-                ),
+              title: `${compactDate(appointment.startsAt)} · ${formatTime(
+                appointment.startsAt,
+              )}`.slice(0, 24),
               description: appointment.serviceName.slice(0, 72),
             }));
             await send(
@@ -2741,15 +2803,18 @@ Deno.serve(async (request) => {
       slot: AutomationSlot,
       invalidAttempts = 0,
     ) => {
-      const message =
-        `Revisá los datos antes de pre-reservar:\n\n${slot.serviceName}\n` +
-        `📅 ${formatDate(slot.startsAt)}\n` +
-        `🕐 ${formatTime(slot.startsAt)}\n\n` +
-        "⚠️ Este horario todavía no está reservado.\n" +
-        "Tocá “Pre-reservar” para guardarlo mientras enviás la seña.";
+      const visitType = orthodonticVisitType(slot.orthodonticVisitType);
+      const { message, confirmLabel, depositRequired } =
+        bookingConfirmationCopy({
+          serviceName: slot.serviceName,
+          date: formatDate(slot.startsAt),
+          time: formatTime(slot.startsAt),
+          depositEnabled: appSettings.deposit_enabled !== false,
+          visitType,
+        });
       await send(
         buttonsPayload(message, [
-          { id: "appointment:confirm", title: "Pre-reservar" },
+          { id: "appointment:confirm", title: confirmLabel },
           { id: "appointment:other", title: "Cambiar horario" },
           { id: "appointment:cancel", title: "Salir sin reservar" },
         ]),
@@ -2760,6 +2825,8 @@ Deno.serve(async (request) => {
         professionalName: session.context.professionalName,
         serviceId: slot.serviceId,
         serviceName: slot.serviceName,
+        orthodonticVisitType: visitType,
+        depositRequired,
         slots: [slot],
         invalidAttempts,
       });
@@ -2972,7 +3039,15 @@ Deno.serve(async (request) => {
       await showMainMenu();
       return await finish({ processed: true, state: "idle" });
     }
-    if (requestedIntent === "info") {
+    if (
+      requestedIntent === "info" &&
+      !(
+        (session.state === "confirming_appointment" &&
+          resolveAppointmentConfirmation(inputValue) !== null) ||
+        (session.state === "confirming_new_slot" &&
+          resolveRescheduleConfirmation(inputValue) !== null)
+      )
+    ) {
       const resumePrompt = informationFlowResumePrompt(
         session.state,
         session.context,
@@ -3038,8 +3113,12 @@ Deno.serve(async (request) => {
         serviceId: session.context.serviceId,
         serviceName: session.context.serviceName,
       };
-      let requestedServiceOutcome: "shown" | "handoff" | "missing" | null =
-        null;
+      let requestedServiceOutcome:
+        | "shown"
+        | "intake"
+        | "handoff"
+        | "missing"
+        | null = null;
       if (!parsed) {
         await invalid(async (attempts) => {
           await askForMissingProfile(
@@ -3074,9 +3153,11 @@ Deno.serve(async (request) => {
             ? "selecting_appointment_to_reschedule"
             : requestedServiceOutcome === "shown"
               ? "selecting_slot"
-              : requestedServiceOutcome === "handoff"
-                ? "human_handoff"
-                : "selecting_service",
+              : requestedServiceOutcome === "intake"
+                ? "selecting_orthodontic_visit_type"
+                : requestedServiceOutcome === "handoff"
+                  ? "human_handoff"
+                  : "selecting_service",
       });
     }
 
@@ -3092,7 +3173,13 @@ Deno.serve(async (request) => {
           : "selecting_service",
       });
     }
-    if (requestedIntent === "human") {
+    if (
+      requestedIntent === "human" &&
+      !(
+        session.state === "selecting_orthodontic_visit_type" &&
+        parseOrthodonticVisitReply(inputValue) !== null
+      )
+    ) {
       await handoff();
       return await finish({ processed: true, state: "human_handoff" });
     }
@@ -3146,6 +3233,27 @@ Deno.serve(async (request) => {
               showServices(session.context.professionalPage ?? 0, attempts),
             );
           }
+        }
+      }
+    } else if (session.state === "selecting_orthodontic_visit_type") {
+      if (inputValue === "ortho:back") {
+        await showServices();
+      } else {
+        const visitType = parseOrthodonticVisitReply(inputValue);
+        const serviceId = session.context.serviceId;
+        if (!serviceId) {
+          await showServices();
+        } else if (!visitType) {
+          await invalid((attempts) =>
+            askOrthodonticVisit(
+              serviceId,
+              session.context.serviceName ?? "Ortodoncia",
+              attempts,
+            ),
+          );
+        } else {
+          const outcome = await selectServiceAndShowSlots(serviceId, visitType);
+          if (outcome === "missing") await showServices();
         }
       }
     } else if (session.state === "selecting_slot") {
@@ -3211,6 +3319,9 @@ Deno.serve(async (request) => {
             p_professional_id: slot.professionalId,
             p_service_id: slot.serviceId,
             p_starts_at: slot.startsAt,
+            p_orthodontic_visit_type: orthodonticVisitType(
+              slot.orthodonticVisitType,
+            ),
           },
         );
         const appointment = Array.isArray(createdAppointment)
@@ -3238,6 +3349,11 @@ Deno.serve(async (request) => {
               session.context.serviceName ?? "Consulta",
               "selecting_slot",
             );
+          } else if (
+            effectError === "ORTHODONTIC_VISIT_TYPE_REQUIRED" ||
+            error?.message.includes("ORTHODONTIC_VISIT_TYPE_REQUIRED")
+          ) {
+            await selectServiceAndShowSlots(slot.serviceId);
           } else if (
             effectError === "CALENDAR_AVAILABILITY_UNAVAILABLE" ||
             error?.message.includes("CALENDAR_AVAILABILITY_UNAVAILABLE")
@@ -3384,14 +3500,23 @@ Deno.serve(async (request) => {
             appointment.deposit_status === "not_required"
           ) {
             const message =
-              `¡Listo! Tu turno quedó confirmado.\n\n📅 ${formatDate(slot.startsAt)}\n` +
-              `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName}`;
+              `¡Listo! Tu turno quedó confirmado.\n\n📅 ${formatDate(
+                appointment.starts_at,
+              )}\n` +
+              `🕐 ${formatTime(appointment.starts_at)}\n${slot.serviceName}` +
+              (appointment.orthodontic_visit_type === "in_treatment"
+                ? "\n\nEn tratamiento con Gisela. No tenés que abonar seña."
+                : "\n\nEste turno no requiere seña.");
             await send(
               textPayload(message),
-              "¡Listo! Tu turno quedó confirmado.",
+              message,
               {
                 appointment_id: appointmentId,
+                appointment_starts_at: appointment.starts_at,
+                appointment_ends_at: appointment.ends_at,
               },
+              "appointment_confirmation",
+              appointmentId,
             );
             await saveSession("idle");
           } else {
@@ -3600,7 +3725,9 @@ Deno.serve(async (request) => {
               holdExpiresAt !== null &&
               Number.isFinite(new Date(holdExpiresAt).getTime());
             const message =
-              `¡Listo! Tu turno quedó reprogramado.\n\n📅 ${formatDate(slot.startsAt)}\n` +
+              `¡Listo! Tu turno quedó reprogramado.\n\n📅 ${formatDate(
+                slot.startsAt,
+              )}\n` +
               `🕐 ${formatTime(slot.startsAt)}\n${slot.serviceName}` +
               (waitingForDeposit
                 ? "\n\nLa pre-reserva sigue esperando la seña. Enviá el comprobante como imagen o PDF. Si se leen el monto exacto y el destinatario, te confirmamos el turno."

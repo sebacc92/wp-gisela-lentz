@@ -220,6 +220,14 @@ test("resuelve todas las opciones de confirmación de una reserva", () => {
   assert.equal(resolveAppointmentConfirmation("appointment:other"), "other");
   assert.equal(resolveAppointmentConfirmation("appointment:cancel"), "menu");
   assert.equal(resolveAppointmentConfirmation("sí"), "confirm");
+  assert.equal(resolveAppointmentConfirmation("Reservar turno"), "confirm");
+  assert.equal(resolveAppointmentConfirmation("Pre-reservar"), "confirm");
+  assert.equal(resolveAppointmentConfirmation("¿Reservar turno?"), null);
+  assert.equal(resolveAppointmentConfirmation("Pre-reservar?"), null);
+  assert.equal(
+    resolveAppointmentConfirmation("No quiero reservar turno"),
+    null,
+  );
   assert.equal(resolveAppointmentConfirmation("otro horario"), "other");
   assert.equal(resolveAppointmentConfirmation("cambiar horario"), "other");
   assert.equal(resolveAppointmentConfirmation("volver"), "menu");

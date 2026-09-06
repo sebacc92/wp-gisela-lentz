@@ -7,6 +7,7 @@ export type MessageStatus =
 
 export type WhatsAppConsentStatus = "unknown" | "opted_in" | "opted_out";
 export type PatientCoverage = "ioma" | "particular";
+export type OrthodonticVisitType = "first_visit" | "in_treatment";
 export type DepositStatus =
   | "not_required"
   | "pending"
@@ -66,6 +67,7 @@ export interface AppointmentSummary {
   coverage?: PatientCoverage;
   durationMinutes?: number;
   depositStatus?: DepositStatus;
+  orthodonticVisitType?: OrthodonticVisitType;
   holdExpiresAt?: string;
   depositProofMessageId?: string;
   depositConfirmationActor?: "automatic_system";
@@ -122,6 +124,7 @@ export interface ServiceOption {
   name: string;
   description?: string;
   durationMinutes: number;
+  requiresOrthodonticIntake: boolean;
 }
 
 export interface AppointmentSlot {

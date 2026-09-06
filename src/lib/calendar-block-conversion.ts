@@ -1,3 +1,4 @@
+import type { OrthodonticVisitType } from "./inbox-types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type BlockConversionError =
@@ -9,6 +10,8 @@ export type BlockConversionError =
   | "SLOT_UNAVAILABLE"
   | "COVERAGE_REQUIRED"
   | "SERVICE_NOT_AVAILABLE"
+  | "ORTHODONTIC_VISIT_TYPE_REQUIRED"
+  | "ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE"
   | "UNKNOWN";
 
 export interface BlockConversionResult {
@@ -19,6 +22,10 @@ export interface BlockConversionResult {
 
 export function blockConversionError(message: unknown): BlockConversionError {
   const text = typeof message === "string" ? message : "";
+  if (text.includes("ORTHODONTIC_VISIT_TYPE_REQUIRED"))
+    return "ORTHODONTIC_VISIT_TYPE_REQUIRED";
+  if (text.includes("ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE"))
+    return "ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE";
   if (text.includes("ADMIN_REQUIRED")) return "ADMIN_REQUIRED";
   if (text.includes("CALENDAR_NOT_CONNECTED")) return "CALENDAR_NOT_CONNECTED";
   if (text.includes("CALENDAR_BLOCK_NOT_FOUND")) {
@@ -38,6 +45,10 @@ export function describeBlockConversionError(
   error: BlockConversionError,
 ): string {
   switch (error) {
+    case "ORTHODONTIC_VISIT_TYPE_REQUIRED":
+      return "Elegí Primera vez o En tratamiento con Gisela para este turno de ortodoncia.";
+    case "ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE":
+      return "El tipo de visita sólo corresponde a ortodoncia. Volvé a elegir el servicio.";
     case "ADMIN_REQUIRED":
       return "Convertir un bloqueo en turno lo hace la persona administradora.";
     case "CALENDAR_NOT_CONNECTED":
@@ -72,6 +83,7 @@ export async function convertCalendarBlock(
     serviceId: string;
     startsAt?: string | null;
     internalNote?: string | null;
+    orthodonticVisitType?: OrthodonticVisitType | null;
   },
 ): Promise<BlockConversionResult> {
   const { data, error } = await client.rpc(
@@ -83,6 +95,7 @@ export async function convertCalendarBlock(
       p_service_id: input.serviceId,
       p_starts_at: input.startsAt ?? null,
       p_internal_note: input.internalNote?.trim() || null,
+      p_orthodontic_visit_type: input.orthodonticVisitType ?? null,
     },
   );
   if (error) {

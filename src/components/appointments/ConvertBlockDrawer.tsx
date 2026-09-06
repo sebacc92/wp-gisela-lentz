@@ -1,3 +1,4 @@
+import { OrthodonticVisitPicker } from "./OrthodonticVisitPicker";
 import {
   component$,
   type QRL,
@@ -12,6 +13,7 @@ import {
 import { formatBusinessDate } from "~/lib/date-time";
 import type {
   PatientCoverage,
+  OrthodonticVisitType,
   ProfessionalOption,
   ServiceOption,
 } from "~/lib/inbox-types";
@@ -48,6 +50,7 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
     const patientId = useSignal("");
     const professionalId = useSignal(props.professionals[0]?.id ?? "");
     const serviceId = useSignal(props.services[0]?.id ?? "");
+    const orthodonticVisit = useSignal<OrthodonticVisitType | "">("");
     const note = useSignal("");
     const saving = useSignal(false);
     const patientReloadVersion = useSignal(0);
@@ -105,12 +108,16 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
     const selectedPatient = state.patients.find(
       (patient) => patient.id === patientId.value,
     );
+    const selectedService = props.services.find(
+      (service) => service.id === serviceId.value,
+    );
     const ready = Boolean(
       !state.loading &&
       !state.loadError &&
       selectedPatient?.coverage &&
       professionalId.value &&
-      serviceId.value,
+      serviceId.value &&
+      (!selectedService?.requiresOrthodonticIntake || orthodonticVisit.value),
     );
 
     return (
@@ -170,6 +177,10 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                   serviceId: serviceId.value,
                   startsAt: props.block.startsAt,
                   internalNote: note.value,
+                  orthodonticVisitType:
+                    selectedService?.requiresOrthodonticIntake
+                      ? orthodonticVisit.value || null
+                      : null,
                 });
                 if (result.error) {
                   error.value = describeBlockConversionError(result.error);
@@ -222,7 +233,10 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                 <select
                   value={patientId.value}
                   disabled={state.loading || state.loadError || saving.value}
-                  onChange$={(_, element) => (patientId.value = element.value)}
+                  onChange$={(_, element) => {
+                    patientId.value = element.value;
+                    orthodonticVisit.value = "";
+                  }}
                 >
                   <option value="">
                     {state.loading
@@ -270,7 +284,10 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                 <select
                   value={serviceId.value}
                   disabled={saving.value}
-                  onChange$={(_, element) => (serviceId.value = element.value)}
+                  onChange$={(_, element) => {
+                    serviceId.value = element.value;
+                    orthodonticVisit.value = "";
+                  }}
                 >
                   {props.services.map((service) => (
                     <option key={service.id} value={service.id}>
@@ -281,6 +298,17 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
                 <Icon name="chevron-down" size={17} />
               </div>
             </label>
+
+            {selectedService?.requiresOrthodonticIntake && (
+              <OrthodonticVisitPicker
+                value={orthodonticVisit.value}
+                disabled={saving.value}
+                onChange$={(value) => {
+                  orthodonticVisit.value = value;
+                  error.value = "";
+                }}
+              />
+            )}
 
             <label class="form-field">
               <span>Profesional</span>

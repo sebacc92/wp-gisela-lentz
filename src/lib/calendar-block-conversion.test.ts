@@ -40,6 +40,50 @@ test("acepta respuestas válidas de creación e idempotencia", async () => {
   );
 });
 
+test("envía la selección de ortodoncia al RPC atómico y null si no corresponde", async () => {
+  for (const visitType of [undefined, "first_visit", "in_treatment"] as const) {
+    const client = {
+      async rpc(name: string, params: Record<string, unknown>) {
+        assert.equal(name, "convert_google_calendar_block_to_appointment");
+        assert.equal(params.p_orthodontic_visit_type, visitType ?? null);
+        assert.equal(params.p_google_event_id, input.googleEventId);
+        assert.equal(params.p_contact_id, input.contactId);
+        return {
+          data: { appointment_id: APPOINTMENT_ID, created: true },
+          error: null,
+        };
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await convertCalendarBlock(client, {
+      ...input,
+      orthodonticVisitType: visitType,
+    });
+    assert.equal(result.appointmentId, APPOINTMENT_ID);
+    assert.equal(result.error, null);
+  }
+});
+
+test("la validación de ortodoncia no se presenta como una conversión exitosa", async () => {
+  for (const error of [
+    "ORTHODONTIC_VISIT_TYPE_REQUIRED",
+    "ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE",
+  ] as const) {
+    assert.deepEqual(
+      await convertCalendarBlock(clientResult(null, { message: error }), input),
+      { appointmentId: null, created: false, error },
+    );
+  }
+  assert.match(
+    describeBlockConversionError("ORTHODONTIC_VISIT_TYPE_REQUIRED"),
+    /Primera vez.*En tratamiento con Gisela/,
+  );
+  assert.match(
+    describeBlockConversionError("ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE"),
+    /Volvé a elegir el servicio/,
+  );
+});
+
 test("una respuesta RPC nula o malformada nunca se anuncia como éxito", async () => {
   for (const malformed of [
     null,

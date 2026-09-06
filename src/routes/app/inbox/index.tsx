@@ -633,6 +633,7 @@ export default component$(() => {
 
       {appointmentDrawerOpen.value && selectedConversation && (
         <AppointmentDrawer
+          key={selectedConversation.contactId}
           conversation={selectedConversation}
           professionals={state.professionals}
           services={state.services}
@@ -645,6 +646,7 @@ export default component$(() => {
             serviceName,
             startsAt,
             internalNote,
+            orthodonticVisitType,
           ) => {
             const client = getSupabaseClient();
             const { data: appointmentData, error } = await client.rpc(
@@ -656,6 +658,7 @@ export default component$(() => {
                 p_starts_at: startsAt,
                 p_source: "manual",
                 p_internal_note: internalNote || null,
+                p_orthodontic_visit_type: orthodonticVisitType,
               },
             );
 
@@ -688,7 +691,7 @@ export default component$(() => {
                   ? `Horario de ${serviceName} reservado y pedido de seña enviado por WhatsApp.`
                   : notification.required
                     ? `Horario de ${serviceName} reservado. No pudimos enviar el pedido de seña por WhatsApp.`
-                    : `Turno de ${serviceName} guardado y confirmado. La seña está desactivada.`;
+                    : `Turno de ${serviceName} guardado y confirmado. No requiere seña.`;
             reloadVersion.value += 1;
           }}
         />

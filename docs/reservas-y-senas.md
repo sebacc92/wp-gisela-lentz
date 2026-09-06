@@ -18,19 +18,28 @@ atención particular antes de registrarlo con esa opción.
    anterior y cobertura **IOMA** o **Particular**.
 2. La cobertura calcula automáticamente la duración. Los valores iniciales son
    IOMA 30 minutos y Particular 60 minutos.
-3. Al elegir un horario, Postgres crea una pre-reserva temporal en estado
-   **Esperando seña**, guarda el monto, alias y titular vigentes y recién
-   después envía esos mismos datos de transferencia.
-4. Una imagen JPEG/PNG o un PDF recibido mientras la sesión está en
+3. Al elegir **Ortodoncia**, se pregunta **Primera vez** o **En tratamiento con
+   Gisela**. La respuesta corresponde a ese turno: haberse atendido antes por
+   otro motivo no elimina la seña.
+4. **En tratamiento con Gisela** se guarda directamente como **Confirmado · Sin
+   seña**. No se pide transferencia ni comprobante y no tiene vencimiento de
+   pre-reserva. **Primera vez** y los demás servicios conservan la política de
+   seña configurada: cuando está activa, Postgres crea una pre-reserva temporal
+   en **Esperando seña** y guarda el monto, alias y titular vigentes.
+5. Antes de informar una confirmación o enviar los datos de transferencia, el
+   sistema verifica que el mismo turno esté reflejado en Google Calendar. Si
+   falta esa verificación, conserva el turno y lo deriva a revisión humana sin
+   prometer la confirmación.
+6. Una imagen JPEG/PNG o un PDF recibido mientras la sesión está en
    `waiting_deposit` se asocia a esa pre-reserva. Fuera de ese estado no se
    interpreta automáticamente y pasa a revisión manual.
-5. La IA sólo transcribe legibilidad, monto, moneda, fecha, alias o destino,
+7. La IA sólo transcribe legibilidad, monto, moneda, fecha, alias o destino,
    titular e identificador de operación. No aprueba ni rechaza el pago.
-6. Una regla fija exige que sea legible, que el monto coincida exactamente y
+8. Una regla fija exige que sea legible, que el monto coincida exactamente y
    que coincida el alias o el titular guardado en esa pre-reserva. Moneda, fecha
    e identificador de operación quedan como datos auxiliares y no bloquean la
    confirmación.
-7. Si cumple, Postgres confirma el turno automáticamente y se envía la
+9. Si cumple, Postgres confirma el turno automáticamente y se envía la
    confirmación por WhatsApp. Si no cumple, no se puede leer, falla el
    procesamiento o llegó tarde, la conversación pasa a revisión manual.
 
@@ -38,6 +47,13 @@ El importe, alias, titular, minutos de reserva, duraciones y textos se editan en
 **Configuración → WhatsApp y reservas**. Un OPERADOR puede verlos, pero sólo un
 ADMIN puede modificarlos. Gisela conserva los controles manuales para confirmar
 o cancelar un turno si al revisar el comprobante detecta un problema.
+
+La elección de ortodoncia se guarda en el turno como
+`orthodontic_visit_type=first_visit|in_treatment`, para los servicios marcados
+con `requires_orthodontic_intake=true`. En tratamiento se guarda con
+`status=confirmed` y `deposit_status=not_required`, sin monto, alias, titular ni
+vencimiento de seña. El dato general `is_existing_patient` nunca concede esta
+exención.
 
 ## Vencimiento y concurrencia
 
@@ -58,6 +74,10 @@ Si el paciente reprograma una pre-reserva pendiente, se conservan el monto,
 alias, titular y vencimiento que ya se le informaron. El flujo sigue esperando
 el comprobante para el mismo turno, ahora en el nuevo horario.
 
+Una reprogramación de ortodoncia conserva la elección original y su condición
+de seña. Un turno **En tratamiento con Gisela** continúa confirmado y sin seña;
+no se vuelve a calcular la exención a partir del perfil del paciente.
+
 El procesamiento bloquea la pre-reserva exacta y es idempotente por mensaje:
 un reintento del webhook o del worker no vuelve a confirmar ni genera otra
 decisión. Se conserva el hash SHA-256 del archivo, la lectura estructurada, la
@@ -70,10 +90,17 @@ demuestra que el comprobante sea auténtico.
 
 - Las plantillas usan valores centralizados (`{deposit_amount}`,
   `{deposit_alias}`, `{deposit_holder}`, `{date}` y `{time}`).
-- Los recordatorios sólo toman turnos confirmados. Con la automatización de
+- Los recordatorios sólo toman turnos confirmados, incluidos los de ortodoncia
+  en tratamiento sin seña, con las mismas reglas de consentimiento y envío.
+  El resumen privado para Gisela también los incluye. Con la automatización de
   Calendar activa, las pre-reservas nuevas posteriores a la activación también
   se reflejan como pendientes de seña y luego se actualizan sobre el mismo
   evento.
+- La confirmación automática sin seña usa `appointment_confirmation`. Antes de
+  enviarse exige la ejecución del mensaje entrante, la ventana de 24 horas, el
+  mismo paciente, los horarios exactos guardados y la proyección confirmada en
+  Google. Si se cancela o cambia el turno, bloquea el aviso obsoleto. No utiliza
+  una plantilla paga como alternativa ni registra una seña inexistente.
 - `WHATSAPP_AUTOMATIONS_ENABLED=false` detiene también las respuestas de
   comprobante y vencimiento.
 - La lectura automática requiere simultáneamente `app_settings.ai_enabled=true`,
@@ -94,3 +121,6 @@ con números propios: alta de paciente, duración por cobertura, creación y
 vencimiento de pre-reserva, comprobante válido con confirmación automática,
 comprobante inválido o tardío con revisión manual, reintentos idempotentes,
 cancelación manual y recordatorio.
+Verificar además **Ortodoncia → Primera vez** con la política habitual,
+**Ortodoncia → En tratamiento con Gisela** confirmado sin seña, su
+reprogramación y que otro servicio no quede exento por ser paciente anterior.

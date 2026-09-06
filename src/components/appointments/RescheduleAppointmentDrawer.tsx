@@ -1,3 +1,4 @@
+import { ORTHODONTIC_VISIT_LABELS } from "~/lib/orthodontics";
 import {
   component$,
   type QRL,
@@ -222,6 +223,17 @@ export const RescheduleAppointmentDrawer = component$<Props>((props) => {
           <p class="settings-note">
             El turno actual se conserva hasta que confirmes un nuevo horario.
           </p>
+          {props.appointment.orthodonticVisitType && (
+            <p class="settings-note">
+              Ortodoncia ·{" "}
+              {ORTHODONTIC_VISIT_LABELS[props.appointment.orthodonticVisitType]}
+              .
+              {props.appointment.orthodonticVisitType === "in_treatment"
+                ? " Este turno sigue sin requerir seña al reprogramarlo."
+                : " Se conserva el tipo de visita al reprogramar."}
+            </p>
+          )}
+
           {!coverage.value && (
             <fieldset class="coverage-picker coverage-picker-required">
               <legend>Elegí solo la cobertura para continuar</legend>
