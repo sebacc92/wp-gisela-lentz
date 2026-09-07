@@ -61,7 +61,7 @@ cancelar después cualquier turno autoconfirmado.
 ## Marca
 
 La identidad visual usa el monograma propio **GL**, una curva de sonrisa y la
-frase **“Tu sonrisa, cuidada con calma.”**. Los SVG listos para usar están en
+frase **“Tu sonrisa, cuidada con dedicación.”**. Los SVG listos para usar están en
 [`public/brand`](public/brand/) y las reglas de color, tipografía y aplicación
 están en la [guía de marca](docs/brand-guide.md).
 

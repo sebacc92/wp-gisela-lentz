@@ -1,7 +1,7 @@
 export const BUSINESS_CONFIG = {
   name: "Gisela Lentz",
   subtitle: "Odontología",
-  tagline: "Tu sonrisa, cuidada con calma.",
+  tagline: "Tu sonrisa, cuidada con dedicación.",
   phone: "",
   email: "",
   address: "",

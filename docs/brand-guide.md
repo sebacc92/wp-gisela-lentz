@@ -2,7 +2,7 @@
 
 ## Idea central
 
-**Calma clínica:** una odontología cercana, serena y precisa. La identidad es
+**Atención clínica:** una odontología cercana, dedicada y precisa. La identidad es
 femenina por su calidez, sus curvas y su sensibilidad cromática, sin caer en una
 estética infantil ni de spa.
 
@@ -15,7 +15,7 @@ favicon y avatar.
 
 - Nombre: **Gisela Lentz**
 - Descriptor: **ODONTOLOGÍA**
-- Frase de marca: **Tu sonrisa, cuidada con calma.**
+- Frase de marca: **Tu sonrisa, cuidada con dedicación.**
 - Voz: breve, cálida y concreta. Preferir “Hoy”, “Mañana”, “Imprimir agenda” y
   “Enviar recordatorio”. Evitar términos técnicos si no son necesarios.
 
