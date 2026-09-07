@@ -61,10 +61,13 @@ facturación homologada por una obra social.
 | Extracción indicada | Dos líneas horizontales paralelas azules |
 | Pieza ausente       | Cruz azul                                |
 
-Las piezas muestran un esquema de cinco caras. Las marcas se ubican sólo en
-las caras expresamente registradas; si caries u obturación están anotadas
-únicamente como estado general, se identifican sin atribuirles una cara. Una
-caries oclusal y una obturación distal pueden verse simultáneamente.
+Las piezas muestran un esquema de cinco caras. Un hallazgo localizado se
+marca en la cara expresamente registrada: relleno azul para caries y círculo
+rojo para obturación. Cuando ese hallazgo no tiene caras especificadas, se
+dibuja sobre la pieza completa: un marco cuadrado azul para caries o un círculo
+rojo grande para obturación. Ese contorno indica un hallazgo general, sin
+atribuirlo a ninguna cara. Una caries oclusal y una obturación distal pueden
+verse simultáneamente, al igual que una caries general y una obturación distal.
 
 La orientación mantiene la vista de frente al paciente: mesial apunta hacia
 la línea media; vestibular queda hacia fuera de la arcada; palatina arriba y

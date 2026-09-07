@@ -1,7 +1,8 @@
 /* UI local del odontograma. Los selectores quedan bajo la página para no
  * modificar controles ni tarjetas de otros flujos de la aplicación. */
 .section-page.odontogram-page {
-  width: min(1280px, calc(100% - 48px));
+  width: min(1680px, calc(100% - 48px));
+  container: odontogram-page / inline-size;
 }
 
 .odontogram-page .section-page-header {
@@ -338,7 +339,7 @@
 
 .odontogram-page .odontogram-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(310px, 350px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -347,7 +348,8 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  container: odontogram-chart / inline-size;
   overflow: visible;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -422,9 +424,9 @@
 
 .odontogram-page .odontogram-arch {
   display: grid;
-  grid-template-columns: 47px minmax(max-content, 1fr);
+  grid-template-columns: minmax(max-content, 1fr);
   align-items: center;
-  gap: 7px;
+  gap: 3px;
 }
 
 .odontogram-arch-label {
@@ -432,7 +434,7 @@
   font-size: 9px;
   font-weight: 700;
   line-height: 1.2;
-  text-align: right;
+  text-align: left;
 }
 
 .odontogram-page .odontogram-row {
@@ -440,7 +442,7 @@
   display: flex;
   width: max-content;
   min-width: max-content;
-  gap: 4px;
+  gap: 2px;
 }
 
 .odontogram-page .odontogram-row::after {
@@ -456,11 +458,15 @@
 
 .odontogram-midline {
   display: block;
-  width: calc(100% - 54px);
-  min-width: 500px;
+  width: 100%;
+  min-width: 894px;
   height: 1px;
   align-self: flex-end;
   background: #eadde3;
+}
+
+.odontogram-scroll-primary .odontogram-midline {
+  min-width: 558px;
 }
 
 .odontogram-page .odontogram-tooth {
@@ -468,15 +474,15 @@
   display: flex;
   width: 54px;
   min-width: 54px;
-  min-height: 100px;
+  min-height: 94px;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 2px;
   cursor: pointer;
   border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 5px 3px;
+  border-radius: 7px;
+  padding: 6px 3px;
   background: transparent;
   color: var(--ink-700);
   font: inherit;
@@ -545,12 +551,12 @@
 }
 
 .odontogram-page .odontogram-detail {
-  position: sticky;
-  top: 22px;
+  position: static;
   display: flex;
+  container: odontogram-detail / inline-size;
   min-width: 0;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   scroll-margin-top: 14px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -600,12 +606,6 @@
   border-radius: 11px;
   padding: 10px 11px;
   background: var(--surface-soft);
-}
-
-.odontogram-current .condition-swatch {
-  width: 28px;
-  height: 31px;
-  border-radius: 8px 8px 10px 10px;
 }
 
 .odontogram-current > span {
@@ -895,7 +895,7 @@
 
 .odontogram-detail-empty {
   display: grid;
-  min-height: 280px;
+  min-height: 140px;
   place-content: center;
   justify-items: center;
   text-align: center;
@@ -951,24 +951,9 @@
 }
 
 .odontogram-search-clear:focus-visible,
-.odontogram-close-button:focus-visible,
-.odontogram-legend summary:focus-visible {
+.odontogram-close-button:focus-visible {
   outline: 3px solid rgb(147 106 127 / 28%);
   outline-offset: 2px;
-}
-
-@media (max-width: 1600px) {
-  .odontogram-page .odontogram-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .odontogram-page .odontogram-detail {
-    position: static;
-  }
-
-  .odontogram-detail-empty {
-    min-height: 160px;
-  }
 }
 
 @media (max-width: 760px) {
@@ -1016,18 +1001,6 @@
     flex-direction: column;
   }
 
-  .odontogram-legend summary {
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .odontogram-legend-grid {
-    position: static;
-    width: 100%;
-    margin-top: 7px;
-    box-shadow: none;
-  }
-
   .odontogram-orientation {
     grid-template-columns: 1fr 1fr;
     gap: 8px;
@@ -1039,10 +1012,6 @@
 
   .odontogram-orientation span:last-child {
     text-align: right;
-  }
-
-  .odontogram-page .odontogram-tooth {
-    min-height: 68px;
   }
 
   .odontogram-page .odontogram-note-field textarea,
@@ -1057,28 +1026,11 @@
   .odontogram-chart-heading > div {
     align-items: flex-start;
   }
-
-  .odontogram-legend-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .odontogram-page .odontogram-arch {
-    grid-template-columns: 42px minmax(max-content, 1fr);
-  }
-
-  .odontogram-arch-label {
-    font-size: 8px;
-  }
-
-  .odontogram-midline {
-    width: calc(100% - 49px);
-  }
 }
 
 @media (pointer: coarse) {
   .odontogram-search-clear,
-  .odontogram-close-button,
-  .odontogram-legend summary {
+  .odontogram-close-button {
     min-width: 44px;
     min-height: 44px;
   }
@@ -1090,8 +1042,7 @@
     animation-duration: 1.4s;
   }
 
-  .odontogram-page .odontogram-tooth,
-  .odontogram-legend summary::after {
+  .odontogram-page .odontogram-tooth {
     transition: none;
   }
 }
@@ -1103,8 +1054,8 @@
     outline-offset: 1px;
   }
 
-  .condition-swatch,
-  .odontogram-page .odontogram-tooth-state {
+  .tooth-diagram-map,
+  .odontogram-condition-symbol {
     forced-color-adjust: none;
   }
 }
@@ -1226,7 +1177,6 @@
   .odontogram-chart-heading p,
   .odontogram-form-heading p,
   .odontogram-error strong,
-  .odontogram-legend summary,
   .odontogram-page .odontogram-dentition h3,
   .odontogram-page .odontogram-condition-field > span:first-child,
   .odontogram-page .odontogram-note-field > span:first-child,
@@ -1245,7 +1195,6 @@
   .odontogram-results,
   .odontogram-error small,
   .odontogram-record-count,
-  .odontogram-legend-grid > span,
   .odontogram-scroll-hint,
   .odontogram-surfaces > p,
   .odontogram-page .odontogram-history li small,
@@ -1276,19 +1225,6 @@
     font-size: 14px;
   }
 
-  .odontogram-page .odontogram-arch {
-    grid-template-columns: 52px minmax(max-content, 1fr);
-  }
-
-  .odontogram-midline {
-    width: calc(100% - 59px);
-  }
-
-  .odontogram-page .odontogram-tooth {
-    min-height: 112px;
-    padding-top: 16px;
-  }
-
   .odontogram-tooth-check {
     top: 2px;
     right: 2px;
@@ -1305,25 +1241,25 @@
   }
 }
 
-/* Notación por caras: los símbolos clínicos viven en SVG, no en manchas de
- * color sobre una pieza entera. Los hallazgos sin localización quedan aparte. */
+/* La notación clínica se dibuja dentro del SVG. El espacio de la ficha depende
+ * del ancho útil después de la navegación, no del ancho de la ventana. */
 .odontogram-notation-legend {
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 12px;
+  padding: 10px 12px;
   background: #fafbfc;
 }
 
 .odontogram-notation-items {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 16px;
+  gap: 8px 16px;
 }
 
 .odontogram-notation-items > span {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   color: var(--ink-900);
   font-size: 14px;
   line-height: 1.45;
@@ -1338,7 +1274,7 @@
 
 .odontogram-notation-legend > p,
 .odontogram-surface-key {
-  margin: 11px 0 0;
+  margin: 8px 0 0;
   color: var(--ink-500);
   font-size: 13px;
   line-height: 1.5;
@@ -1360,41 +1296,6 @@
   height: auto;
   aspect-ratio: 1;
   overflow: visible;
-}
-
-.tooth-diagram-general {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  color: #596270;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.tooth-diagram-general .odontogram-condition-symbol {
-  width: 16px;
-  height: 16px;
-}
-
-.odontogram-page .odontogram-tooth {
-  justify-content: flex-start;
-  border-radius: 7px;
-}
-
-.odontogram-tooth > .tooth-diagram {
-  min-height: 66px;
-  justify-content: flex-start;
-}
-
-.odontogram-tooth .tooth-diagram-general {
-  gap: 1px;
-  font-size: 11px;
-}
-
-.odontogram-tooth .tooth-diagram-general .odontogram-condition-symbol {
-  width: 12px;
-  height: 12px;
 }
 
 .odontogram-tooth-code {
@@ -1454,10 +1355,20 @@
 
 .odontogram-preview-content {
   display: grid;
-  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
+  justify-items: center;
   gap: 12px;
   margin-top: 10px;
+}
+
+.odontogram-preview-content > .tooth-diagram {
+  width: min(176px, 100%);
+}
+
+.odontogram-preview-content > div {
+  width: 100%;
+  min-width: 0;
 }
 
 .odontogram-preview-content p {
@@ -1472,13 +1383,53 @@
   padding-top: 9px;
 }
 
-@media (max-width: 520px) {
-  .odontogram-notation-items {
-    grid-template-columns: minmax(0, 1fr);
+.odontogram-editor,
+.odontogram-editor-fields,
+.odontogram-editor-review {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 14px;
+}
+
+.odontogram-editor-review {
+  container: odontogram-review / inline-size;
+}
+
+@container odontogram-page (min-width: 1440px) {
+  .odontogram-page .odontogram-layout {
+    grid-template-columns: minmax(1020px, 1fr) 400px;
+  }
+}
+
+@container odontogram-chart (min-width: 720px) {
+  .odontogram-chart-tools {
+    grid-template-columns: minmax(350px, 1fr) minmax(0, 0.9fr);
+    align-items: center;
   }
 
+  .odontogram-notation-items {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container odontogram-chart (min-width: 916px) {
+  .odontogram-scroll-hint {
+    display: none;
+  }
+}
+
+@container odontogram-detail (min-width: 720px) {
+  .odontogram-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+  }
+}
+
+@container odontogram-review (min-width: 420px) {
   .odontogram-preview-content {
-    grid-template-columns: 110px minmax(0, 1fr);
-    gap: 8px;
+    grid-template-columns: 176px minmax(0, 1fr);
+    gap: 16px;
   }
 }

@@ -35,10 +35,7 @@ import {
   type ToothSurface,
 } from "~/lib/odontogram";
 import { getSupabaseClient } from "~/lib/supabase/client";
-import {
-  conditionNotation,
-  hasUnlocalizedFinding as isUnlocalized,
-} from "~/lib/odontogram-notation";
+import { hasUnlocalizedFinding as isUnlocalized } from "~/lib/odontogram-notation";
 import "./odontogram.css";
 
 interface PatientOption {
@@ -210,9 +207,15 @@ export default component$(() => {
     notice.value = "";
     window.requestAnimationFrame(() => {
       const detail = document.getElementById("odontogram-detail");
+      const chart = document.getElementById("chart-title")?.closest("section");
       detail?.focus({ preventScroll: true });
-      if (window.matchMedia("(max-width: 1600px)").matches) {
-        detail?.scrollIntoView({
+      if (
+        detail &&
+        chart &&
+        detail.getBoundingClientRect().top >=
+          chart.getBoundingClientRect().bottom - 1
+      ) {
+        detail.scrollIntoView({
           behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
             .matches
             ? "instant"
@@ -367,7 +370,7 @@ export default component$(() => {
               }}
               aria-label={`Pieza ${tooth}: ${toothSummary(entry)}${hasUnlocalizedFinding(entry) ? `. ${unlocalizedCaption(entry?.condition)}` : ""}${isSelected ? ". Seleccionada" : ""}`}
               aria-pressed={isSelected}
-              title={`Pieza ${tooth} · ${toothSummary(entry)}`}
+              title={`Pieza ${tooth} · ${toothSummary(entry)}${hasUnlocalizedFinding(entry) ? `. ${unlocalizedCaption(entry?.condition)}` : ""}`}
               id={`odontogram-tooth-${tooth}`}
               disabled={saving.value}
               onClick$={() => chooseTooth(tooth)}
@@ -626,15 +629,18 @@ export default component$(() => {
                     ).map((condition) => (
                       <span key={condition}>
                         <ConditionSymbol condition={condition} />
-                        <span>{conditionNotation(condition).description}</span>
+                        <span>
+                          {condition === "obturado"
+                            ? "Obturación"
+                            : CONDITION_LABELS[condition]}
+                        </span>
                       </span>
                     ))}
                   </div>
                   <p>
-                    Las marcas en el cuadrado corresponden a las caras
-                    registradas. Una marca <strong>General</strong> queda fuera
-                    del mapa cuando ese hallazgo no tiene una cara especificada.
-                    Los demás estados se indican por su nombre, en gris.
+                    <strong>Contorno completo:</strong> hallazgo general, sin
+                    caras especificadas. <strong>Marca en una cara:</strong>{" "}
+                    hallazgo localizado.
                   </p>
                 </section>
 
@@ -809,216 +815,229 @@ export default component$(() => {
                       </span>
                     </div>
 
-                    <div class="odontogram-form-heading">
-                      <h3>Nuevo registro</h3>
-                      <p>
-                        Para {selectedPatient?.name} · Pieza{" "}
-                        {selectedTooth.value}. Los registros anteriores se
-                        conservan.
-                      </p>
-                    </div>
+                    <div class="odontogram-editor">
+                      <div class="odontogram-editor-fields">
+                        <div class="odontogram-form-heading">
+                          <h3>Nuevo registro</h3>
+                          <p>
+                            Para {selectedPatient?.name} · Pieza{" "}
+                            {selectedTooth.value}. Los registros anteriores se
+                            conservan.
+                          </p>
+                        </div>
 
-                    <label class="form-field odontogram-condition-field">
-                      <span>Registrar estado</span>
-                      <span class="odontogram-select-wrap">
-                        <select
-                          value={draftCondition.value}
-                          disabled={saving.value}
-                          onChange$={(_, element) => {
-                            draftCondition.value =
-                              element.value as ToothCondition;
-                            draftDirty.value = true;
-                            if (!conditionAllowsSurfaces(draftCondition.value))
-                              for (const surface of ALL_SURFACES)
-                                draftSurfaces[surface] = "";
-                          }}
-                        >
-                          {(
-                            Object.keys(CONDITION_LABELS) as ToothCondition[]
-                          ).map((condition) => (
-                            <option
-                              key={condition}
-                              value={condition}
-                              selected={condition === draftCondition.value}
-                            >
-                              {CONDITION_LABELS[condition]}
-                            </option>
-                          ))}
-                        </select>
-                        <Icon name="chevron-down" size={17} />
-                      </span>
-                    </label>
-
-                    {conditionAllowsSurfaces(draftCondition.value) ? (
-                      <fieldset
-                        class="odontogram-surfaces"
-                        disabled={saving.value}
-                      >
-                        <legend>
-                          Hallazgos por cara{" "}
-                          <small>{selectedSurfaceCount} registradas</small>
-                        </legend>
-                        <p>
-                          Podés registrar un hallazgo diferente en cada cara. Si
-                          no indicás caras, se guarda el estado general sin
-                          marcar una cara específica.
-                        </p>
-                        <div class="odontogram-surface-fields">
-                          {ALL_SURFACES.map((surface) => (
-                            <label
-                              key={surface}
-                              class={{
-                                "odontogram-surface-field": true,
-                                "has-finding": Boolean(draftSurfaces[surface]),
+                        <label class="form-field odontogram-condition-field">
+                          <span>Registrar estado</span>
+                          <span class="odontogram-select-wrap">
+                            <select
+                              value={draftCondition.value}
+                              disabled={saving.value}
+                              onChange$={(_, element) => {
+                                draftCondition.value =
+                                  element.value as ToothCondition;
+                                draftDirty.value = true;
+                                if (
+                                  !conditionAllowsSurfaces(draftCondition.value)
+                                )
+                                  for (const surface of ALL_SURFACES)
+                                    draftSurfaces[surface] = "";
                               }}
                             >
-                              <span>
-                                {surfaceLabel(
-                                  selectedTooth.value ?? 11,
-                                  surface,
-                                )}
-                              </span>
-                              <select
-                                value={draftSurfaces[surface] || ""}
-                                onChange$={(_, element) => {
-                                  draftSurfaces[surface] = element.value as
-                                    | ToothCondition
-                                    | "";
-                                  draftDirty.value = true;
-                                }}
-                              >
+                              {(
+                                Object.keys(
+                                  CONDITION_LABELS,
+                                ) as ToothCondition[]
+                              ).map((condition) => (
                                 <option
-                                  value=""
-                                  selected={!draftSurfaces[surface]}
+                                  key={condition}
+                                  value={condition}
+                                  selected={condition === draftCondition.value}
                                 >
-                                  Sin hallazgo
+                                  {CONDITION_LABELS[condition]}
                                 </option>
-                                {SURFACE_CONDITIONS.map((condition) => (
-                                  <option
-                                    key={condition}
-                                    value={condition}
-                                    selected={
-                                      draftSurfaces[surface] === condition
-                                    }
-                                  >
-                                    {CONDITION_LABELS[condition]}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          ))}
-                        </div>
-                      </fieldset>
-                    ) : (
-                      <p class="odontogram-whole-tooth-note">
-                        Este estado se registra para la pieza completa, sin
-                        hallazgos por cara.
-                      </p>
-                    )}
+                              ))}
+                            </select>
+                            <Icon name="chevron-down" size={17} />
+                          </span>
+                        </label>
 
-                    <section
-                      class="odontogram-draft-preview"
-                      aria-label="Vista previa del nuevo registro"
-                    >
-                      <div class="odontogram-preview-heading">
-                        <strong>Vista previa</strong>
-                        <span>Nuevo registro · sin guardar</span>
-                      </div>
-                      <div class="odontogram-preview-content">
-                        <ToothDiagram
-                          tooth={selectedTooth.value}
-                          condition={draftCondition.value}
-                          surfaces={previewSurfaces}
-                          showSurfaceLabels
-                        />
-                        <div>
-                          <strong>
-                            {CONDITION_LABELS[draftCondition.value]}
-                          </strong>
-                          <p>
-                            {conditionAllowsSurfaces(draftCondition.value) &&
-                            selectedSurfaceCount
-                              ? ALL_SURFACES.filter(
-                                  (surface) => draftSurfaces[surface],
-                                )
-                                  .map(
-                                    (surface) =>
-                                      `${surfaceLabel(selectedTooth.value ?? 11, surface)}: ${CONDITION_LABELS[draftSurfaces[surface] as ToothCondition]}`,
-                                  )
-                                  .join(" · ")
-                              : "Estado general de la pieza."}
-                          </p>
-                          {isUnlocalized(
-                            draftCondition.value,
-                            previewSurfaces,
-                          ) && (
-                            <p class="odontogram-unlocalized">
-                              {unlocalizedCaption(draftCondition.value)}. La
-                              marca general queda fuera del mapa.
+                        {conditionAllowsSurfaces(draftCondition.value) ? (
+                          <fieldset
+                            class="odontogram-surfaces"
+                            disabled={saving.value}
+                          >
+                            <legend>
+                              Hallazgos por cara{" "}
+                              <small>{selectedSurfaceCount} registradas</small>
+                            </legend>
+                            <p>
+                              Indicá las caras afectadas si las conocés. Si las
+                              dejás vacías, se registra como hallazgo general.
                             </p>
-                          )}
-                        </div>
+                            <div class="odontogram-surface-fields">
+                              {ALL_SURFACES.map((surface) => (
+                                <label
+                                  key={surface}
+                                  class={{
+                                    "odontogram-surface-field": true,
+                                    "has-finding": Boolean(
+                                      draftSurfaces[surface],
+                                    ),
+                                  }}
+                                >
+                                  <span>
+                                    {surfaceLabel(
+                                      selectedTooth.value ?? 11,
+                                      surface,
+                                    )}
+                                  </span>
+                                  <select
+                                    value={draftSurfaces[surface] || ""}
+                                    onChange$={(_, element) => {
+                                      draftSurfaces[surface] = element.value as
+                                        | ToothCondition
+                                        | "";
+                                      draftDirty.value = true;
+                                    }}
+                                  >
+                                    <option
+                                      value=""
+                                      selected={!draftSurfaces[surface]}
+                                    >
+                                      Sin hallazgo
+                                    </option>
+                                    {SURFACE_CONDITIONS.map((condition) => (
+                                      <option
+                                        key={condition}
+                                        value={condition}
+                                        selected={
+                                          draftSurfaces[surface] === condition
+                                        }
+                                      >
+                                        {CONDITION_LABELS[condition]}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              ))}
+                            </div>
+                          </fieldset>
+                        ) : (
+                          <p class="odontogram-whole-tooth-note">
+                            Este estado se registra para la pieza completa, sin
+                            hallazgos por cara.
+                          </p>
+                        )}
                       </div>
-                      <p class="odontogram-surface-key">
-                        O: oclusal · M: mesial · D: distal · V: vestibular ·{" "}
-                        {isUpperTooth(selectedTooth.value)
-                          ? "P: palatina"
-                          : "L: lingual"}
-                        . Vista de frente al paciente.
-                      </p>
-                    </section>
 
-                    <label class="form-field odontogram-note-field">
-                      <span>
-                        Nota <em>Opcional</em>
-                      </span>
-                      <textarea
-                        rows={3}
-                        maxLength={2000}
-                        disabled={saving.value}
-                        value={draftNote.value}
-                        placeholder="Ej.: control, evolución o indicación clínica"
-                        aria-describedby="odontogram-note-count"
-                        onInput$={(_, element) => {
-                          draftNote.value = element.value;
-                          draftDirty.value = true;
-                        }}
-                      />
-                      <small
-                        id="odontogram-note-count"
-                        class="odontogram-note-count"
-                      >
-                        {draftNote.value.length} / 2000
-                      </small>
-                    </label>
+                      <div class="odontogram-editor-review">
+                        <section
+                          class="odontogram-draft-preview"
+                          aria-label="Vista previa del nuevo registro"
+                        >
+                          <div class="odontogram-preview-heading">
+                            <strong>Vista previa</strong>
+                            <span>Nuevo registro · sin guardar</span>
+                          </div>
+                          <div class="odontogram-preview-content">
+                            <ToothDiagram
+                              tooth={selectedTooth.value}
+                              condition={draftCondition.value}
+                              surfaces={previewSurfaces}
+                              showSurfaceLabels
+                            />
+                            <div>
+                              <strong>
+                                {CONDITION_LABELS[draftCondition.value]}
+                              </strong>
+                              <p>
+                                {conditionAllowsSurfaces(
+                                  draftCondition.value,
+                                ) && selectedSurfaceCount
+                                  ? ALL_SURFACES.filter(
+                                      (surface) => draftSurfaces[surface],
+                                    )
+                                      .map(
+                                        (surface) =>
+                                          `${surfaceLabel(selectedTooth.value ?? 11, surface)}: ${CONDITION_LABELS[draftSurfaces[surface] as ToothCondition]}`,
+                                      )
+                                      .join(" · ")
+                                  : "Estado general de la pieza."}
+                              </p>
+                              {isUnlocalized(
+                                draftCondition.value,
+                                previewSurfaces,
+                              ) && (
+                                <p class="odontogram-unlocalized">
+                                  {unlocalizedCaption(draftCondition.value)}. Se
+                                  muestra con un contorno sobre la pieza
+                                  completa.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <p class="odontogram-surface-key">
+                            O: oclusal · M: mesial · D: distal · V: vestibular ·{" "}
+                            {isUpperTooth(selectedTooth.value)
+                              ? "P: palatina"
+                              : "L: lingual"}
+                            . Vista de frente al paciente.
+                          </p>
+                        </section>
 
-                    {draftDirty.value && (
-                      <p class="odontogram-draft-status" role="status">
-                        Cambios sin guardar · Pieza {selectedTooth.value}
-                      </p>
-                    )}
-                    <button
-                      class="primary-button odontogram-save-button"
-                      type="button"
-                      disabled={saving.value}
-                      aria-busy={saving.value}
-                      onClick$={record}
-                    >
-                      {saving.value ? (
-                        <>
-                          <span
-                            class="odontogram-button-spinner"
-                            aria-hidden="true"
+                        <label class="form-field odontogram-note-field">
+                          <span>
+                            Nota <em>Opcional</em>
+                          </span>
+                          <textarea
+                            rows={3}
+                            maxLength={2000}
+                            disabled={saving.value}
+                            value={draftNote.value}
+                            placeholder="Ej.: control, evolución o indicación clínica"
+                            aria-describedby="odontogram-note-count"
+                            onInput$={(_, element) => {
+                              draftNote.value = element.value;
+                              draftDirty.value = true;
+                            }}
                           />
-                          Guardando registro…
-                        </>
-                      ) : (
-                        <>
-                          <Icon name="check" size={17} />
-                          Guardar pieza {selectedTooth.value}
-                        </>
-                      )}
-                    </button>
+                          <small
+                            id="odontogram-note-count"
+                            class="odontogram-note-count"
+                          >
+                            {draftNote.value.length} / 2000
+                          </small>
+                        </label>
+
+                        {draftDirty.value && (
+                          <p class="odontogram-draft-status" role="status">
+                            Cambios sin guardar · Pieza {selectedTooth.value}
+                          </p>
+                        )}
+                        <button
+                          class="primary-button odontogram-save-button"
+                          type="button"
+                          disabled={saving.value}
+                          aria-busy={saving.value}
+                          onClick$={record}
+                        >
+                          {saving.value ? (
+                            <>
+                              <span
+                                class="odontogram-button-spinner"
+                                aria-hidden="true"
+                              />
+                              Guardando registro…
+                            </>
+                          ) : (
+                            <>
+                              <Icon name="check" size={17} />
+                              Guardar pieza {selectedTooth.value}
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
 
                     <section
                       class="odontogram-history-section"

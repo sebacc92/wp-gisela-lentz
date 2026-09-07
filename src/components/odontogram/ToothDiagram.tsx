@@ -27,7 +27,7 @@ export const ConditionSymbol = component$<{ condition: ToothCondition }>(
         fill="none"
       >
         {notation.symbol === "caries" && (
-          <path d="M5 5H19V19H5Z" fill={color} />
+          <path d="M5 5H19V19H5Z" stroke={color} stroke-width="2.5" />
         )}
         {notation.symbol === "restoration" && (
           <circle cx="12" cy="12" r="8" stroke={color} stroke-width="2.5" />
@@ -134,6 +134,45 @@ export const ToothDiagram = component$<{
             )}
           </g>
         ))}
+        {unlocalized && (
+          <g
+            class="tooth-mark-general"
+            data-general-condition={props.condition}
+            fill="none"
+          >
+            {props.condition === "caries" ? (
+              <>
+                <rect
+                  x="10"
+                  y="10"
+                  width="80"
+                  height="80"
+                  stroke="#fff"
+                  stroke-width="8"
+                />
+                <rect
+                  x="10"
+                  y="10"
+                  width="80"
+                  height="80"
+                  stroke={NOTATION_COLORS.blue}
+                  stroke-width="5"
+                />
+              </>
+            ) : (
+              <>
+                <circle cx="50" cy="50" r="40" stroke="#fff" stroke-width="8" />
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="40"
+                  stroke={NOTATION_COLORS.red}
+                  stroke-width="5"
+                />
+              </>
+            )}
+          </g>
+        )}
         {notation.symbol === "extraction" && (
           <g class="tooth-mark-extraction" fill="none">
             <path d="M5 40H95M5 60H95" stroke="#fff" stroke-width="8" />
@@ -155,12 +194,6 @@ export const ToothDiagram = component$<{
           </g>
         )}
       </svg>
-      {unlocalized && props.condition && (
-        <span class="tooth-diagram-general" title={generalLabel}>
-          <ConditionSymbol condition={props.condition} />
-          <span>General</span>
-        </span>
-      )}
     </span>
   );
 });
