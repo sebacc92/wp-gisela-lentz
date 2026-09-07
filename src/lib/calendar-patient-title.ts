@@ -2,4 +2,4 @@ export {
   parseCalendarPatientTitle,
   matchCalendarPatientContact,
   matchCalendarPatientService,
-} from "../../supabase/functions/_shared/calendar-patient-title";
+} from "../../shared/calendar-patient-title";

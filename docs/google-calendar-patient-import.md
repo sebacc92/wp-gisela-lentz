@@ -50,10 +50,12 @@ de pacientes que requieren completar datos, sin incluir nombres o teléfonos.
 
 ## Publicación y verificaciones
 
-La migración `20260907160000_google_calendar_patient_import.sql`, la función
-`process-calendar-sync` y el frontend deben publicarse coordinadamente, con la
-migración primero. Este documento describe el cambio de código; no acredita una
-publicación en producción.
+Las migraciones `20260907160000_google_calendar_patient_import.sql` y
+`20260907170000_google_calendar_patient_import_guard_convergence.sql`, la función
+`process-calendar-sync` y el frontend deben publicarse coordinadamente, con las
+migraciones primero. La segunda completa las protecciones si se había aplicado
+una copia anterior de la primera. Este documento describe el cambio de código;
+no acredita una publicación en producción.
 
 Pruebas: parser y vinculación por identidad, importador con clientes simulados,
 contratos del panel, orquestación de sincronización y la suite SQL

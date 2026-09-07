@@ -1,3 +1,7 @@
+import { normalizePhoneE164 as normalizeContactPhoneE164 } from "../../../shared/phone.ts";
+
+export { normalizeContactPhoneE164 };
+
 export type MainMenuIntent =
   | "new"
   | "reschedule"
@@ -363,39 +367,6 @@ export function parseAlternatePhoneE164(
     .filter((candidate) => /^\+[1-9][0-9]{7,14}$/.test(candidate))
     .filter((candidate) => candidate !== primaryPhoneE164);
   return uniqueValue(normalized);
-}
-
-/**
- * Normaliza el teléfono que el paciente elige para el contacto del turno.
- * Acepta el E.164 que llega desde WhatsApp y los formatos argentinos usuales.
- */
-export function normalizeContactPhoneE164(value: string): string | null {
-  const trimmed = value.trim();
-  const explicitInternational =
-    trimmed.startsWith("+") || trimmed.startsWith("00");
-  let digits = trimmed.replace(/\D/g, "");
-  if (!digits) return null;
-
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (explicitInternational && !digits.startsWith("54")) {
-    return /^[1-9][0-9]{7,14}$/.test(digits) ? `+${digits}` : null;
-  }
-
-  let national = digits.startsWith("54") ? digits.slice(2) : digits;
-  national = national.replace(/^0+/, "");
-  if (national.length === 12) {
-    for (let areaLength = 2; areaLength <= 4; areaLength += 1) {
-      if (national.slice(areaLength, areaLength + 2) === "15") {
-        national =
-          national.slice(0, areaLength) + national.slice(areaLength + 2);
-        break;
-      }
-    }
-  }
-  if (national.length === 10) national = `9${national}`;
-  digits = `54${national}`;
-
-  return /^[1-9][0-9]{7,14}$/.test(digits) ? `+${digits}` : null;
 }
 
 export function parseContactPhoneReply(
