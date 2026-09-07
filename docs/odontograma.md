@@ -48,6 +48,37 @@ La cara interna se llama palatina en el maxilar superior y lingual en el
 inferior. Es la misma cara, así que se guarda con un único valor
 `palatina_lingual` y se nombra según la arcada al mostrarla.
 
+## Colores y símbolos de la ficha de Gisela
+
+La representación sigue la referencia proporcionada por Gisela para su
+consultorio. No se presenta como un formato universal ni como una ficha de
+facturación homologada por una obra social.
+
+| Registro            | Representación                           |
+| ------------------- | ---------------------------------------- |
+| Caries              | Marca azul                               |
+| Obturación          | Círculo rojo                             |
+| Extracción indicada | Dos líneas horizontales paralelas azules |
+| Pieza ausente       | Cruz azul                                |
+
+Las piezas muestran un esquema de cinco caras. Las marcas se ubican sólo en
+las caras expresamente registradas; si caries u obturación están anotadas
+únicamente como estado general, se identifican sin atribuirles una cara. Una
+caries oclusal y una obturación distal pueden verse simultáneamente.
+
+La orientación mantiene la vista de frente al paciente: mesial apunta hacia
+la línea media; vestibular queda hacia fuera de la arcada; palatina arriba y
+lingual abajo quedan hacia dentro. La numeración FDI no cambia.
+
+Las demás condiciones conservan su nombre y se representan en tono neutro:
+el registro actual no distingue si una corona, prótesis u otro tratamiento
+está indicado o realizado, y el dibujo no debe inferirlo. Una pieza sin
+registrar sigue distinguiéndose de una registrada como sana.
+
+El cambio es de representación: no reemplaza registros clínicos anteriores.
+La leyenda, el estado actual, la vista previa y el historial comparten la
+misma notación.
+
 ## Uso de la ficha
 
 - La vista permite alternar dentición permanente, temporaria y mixta. El selector

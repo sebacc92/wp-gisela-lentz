@@ -304,6 +304,14 @@ export default component$(() => {
 
   useVisibleTask$(({ cleanup }) => {
     const client = getSupabaseClient();
+    let calendarRefresh: number | undefined;
+    const queueCalendarRefresh = () => {
+      if (document.hidden) return;
+      window.clearTimeout(calendarRefresh);
+      calendarRefresh = window.setTimeout(() => {
+        reloadVersion.value += 1;
+      }, 200);
+    };
     const channel = client
       .channel("agenda-realtime")
       .on(
@@ -316,9 +324,10 @@ export default component$(() => {
         {
           event: "*",
           schema: "public",
-          table: "google_calendar_external_events",
+          // La señal no contiene nombres ni identificadores de Google.
+          table: "calendar_availability_updates",
         },
-        () => (reloadVersion.value += 1),
+        queueCalendarRefresh,
       )
       .subscribe();
     const refresh = () => {
@@ -328,6 +337,7 @@ export default component$(() => {
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("calendar-synchronized", refresh);
     cleanup(() => {
+      window.clearTimeout(calendarRefresh);
       void client.removeChannel(channel);
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", refresh);

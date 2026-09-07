@@ -7,6 +7,10 @@ import {
 } from "@qwik.dev/core";
 import { usePreventNavigate$, type DocumentHead } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import {
+  ConditionSymbol,
+  ToothDiagram,
+} from "~/components/odontogram/ToothDiagram";
 import { Icon } from "~/components/ui/Icon";
 import { getPageTitle } from "~/config/business";
 import { isAdminProfile } from "~/lib/admin-access";
@@ -31,6 +35,10 @@ import {
   type ToothSurface,
 } from "~/lib/odontogram";
 import { getSupabaseClient } from "~/lib/supabase/client";
+import {
+  conditionNotation,
+  hasUnlocalizedFinding as isUnlocalized,
+} from "~/lib/odontogram-notation";
 import "./odontogram.css";
 
 interface PatientOption {
@@ -58,6 +66,32 @@ interface OdontogramState {
   entries: OdontogramEntry[];
   error: string;
 }
+
+function hasUnlocalizedFinding(
+  entry: Pick<OdontogramEntry, "condition" | "surfaces"> | undefined,
+): boolean {
+  return Boolean(entry && isUnlocalized(entry.condition, entry.surfaces));
+}
+
+function unlocalizedCaption(condition: ToothCondition | undefined): string {
+  return condition === "caries"
+    ? "Caries sin caras especificadas"
+    : "Obturación sin caras especificadas";
+}
+
+const TOOTH_SHORT_LABELS: Record<ToothCondition, string> = {
+  sano: "Sana",
+  caries: "Caries",
+  obturado: "Obtur.",
+  sellante: "Sellante",
+  fracturado: "Fract.",
+  endodoncia: "Endod.",
+  corona: "Corona",
+  protesis: "Prótesis",
+  implante: "Implante",
+  extraccion_indicada: "Extraer",
+  ausente: "Ausente",
+};
 
 function mapEntry(row: EntryRow): OdontogramEntry {
   return {
@@ -177,7 +211,7 @@ export default component$(() => {
     window.requestAnimationFrame(() => {
       const detail = document.getElementById("odontogram-detail");
       detail?.focus({ preventScroll: true });
-      if (window.matchMedia("(max-width: 1320px)").matches) {
+      if (window.matchMedia("(max-width: 1600px)").matches) {
         detail?.scrollIntoView({
           behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
             .matches
@@ -306,6 +340,13 @@ export default component$(() => {
   const selectedSurfaceCount = ALL_SURFACES.filter(
     (surface) => draftSurfaces[surface],
   ).length;
+  const previewSurfaces: OdontogramEntry["surfaces"] = {};
+  if (conditionAllowsSurfaces(draftCondition.value)) {
+    for (const surface of ALL_SURFACES) {
+      const finding = draftSurfaces[surface];
+      if (finding) previewSurfaces[surface] = finding;
+    }
+  }
 
   const renderRow = (teeth: number[], label: string) => (
     <div class="odontogram-arch">
@@ -323,9 +364,8 @@ export default component$(() => {
               class={{
                 "odontogram-tooth": true,
                 selected: isSelected,
-                [`condition-${entry?.condition ?? "none"}`]: true,
               }}
-              aria-label={`Pieza ${tooth}: ${toothSummary(entry)}${isSelected ? ". Seleccionada" : ""}`}
+              aria-label={`Pieza ${tooth}: ${toothSummary(entry)}${hasUnlocalizedFinding(entry) ? `. ${unlocalizedCaption(entry?.condition)}` : ""}${isSelected ? ". Seleccionada" : ""}`}
               aria-pressed={isSelected}
               title={`Pieza ${tooth} · ${toothSummary(entry)}`}
               id={`odontogram-tooth-${tooth}`}
@@ -333,11 +373,14 @@ export default component$(() => {
               onClick$={() => chooseTooth(tooth)}
             >
               <span class="odontogram-tooth-number">{tooth}</span>
-              <span class="odontogram-tooth-state" aria-hidden="true">
-                <span />
-              </span>
+              <ToothDiagram
+                tooth={tooth}
+                condition={entry?.condition}
+                surfaces={entry?.surfaces}
+                decorative
+              />
               <span class="odontogram-tooth-code" aria-hidden="true">
-                {entry ? CONDITION_LABELS[entry.condition].slice(0, 3) : "—"}
+                {entry ? TOOTH_SHORT_LABELS[entry.condition] : "—"}
               </span>
               {isSelected && (
                 <span class="odontogram-tooth-check" aria-hidden="true">
@@ -566,30 +609,34 @@ export default component$(() => {
                       <p>Consultá el estado y agregá hallazgos por cara.</p>
                     </span>
                   </div>
-                  <details class="odontogram-legend">
-                    <summary>Guía de colores</summary>
-                    <div class="odontogram-legend-grid">
-                      {(Object.keys(CONDITION_LABELS) as ToothCondition[]).map(
-                        (condition) => (
-                          <span key={condition}>
-                            <i
-                              class={`condition-swatch condition-${condition}`}
-                            >
-                              <i />
-                            </i>
-                            {CONDITION_LABELS[condition]}
-                          </span>
-                        ),
-                      )}
-                      <span>
-                        <i class="condition-swatch condition-none">
-                          <i />
-                        </i>
-                        Sin registrar
-                      </span>
-                    </div>
-                  </details>
                 </div>
+
+                <section
+                  class="odontogram-notation-legend"
+                  aria-label="Guía de símbolos del odontograma"
+                >
+                  <div class="odontogram-notation-items">
+                    {(
+                      [
+                        "caries",
+                        "obturado",
+                        "extraccion_indicada",
+                        "ausente",
+                      ] as const
+                    ).map((condition) => (
+                      <span key={condition}>
+                        <ConditionSymbol condition={condition} />
+                        <span>{conditionNotation(condition).description}</span>
+                      </span>
+                    ))}
+                  </div>
+                  <p>
+                    Las marcas en el cuadrado corresponden a las caras
+                    registradas. Una marca <strong>General</strong> queda fuera
+                    del mapa cuando ese hallazgo no tiene una cara especificada.
+                    Los demás estados se indican por su nombre, en gris.
+                  </p>
+                </section>
 
                 <div class="odontogram-chart-tools">
                   <div
@@ -739,17 +786,26 @@ export default component$(() => {
                     </header>
 
                     <div class="odontogram-current" role="status">
-                      <i
-                        class={`condition-swatch condition-${current.get(selectedTooth.value)?.condition ?? "none"}`}
-                        aria-hidden="true"
-                      >
-                        <i />
-                      </i>
+                      <ToothDiagram
+                        tooth={selectedTooth.value}
+                        condition={current.get(selectedTooth.value)?.condition}
+                        surfaces={current.get(selectedTooth.value)?.surfaces}
+                        decorative
+                      />
                       <span>
                         <small>Estado actual</small>
                         <strong>
                           {toothSummary(current.get(selectedTooth.value))}
                         </strong>
+                        {hasUnlocalizedFinding(
+                          current.get(selectedTooth.value),
+                        ) && (
+                          <span class="odontogram-unlocalized">
+                            {unlocalizedCaption(
+                              current.get(selectedTooth.value)?.condition,
+                            )}
+                          </span>
+                        )}
                       </span>
                     </div>
 
@@ -804,8 +860,8 @@ export default component$(() => {
                         </legend>
                         <p>
                           Podés registrar un hallazgo diferente en cada cara. Si
-                          no indicás caras, el estado describe la pieza
-                          completa.
+                          no indicás caras, se guarda el estado general sin
+                          marcar una cara específica.
                         </p>
                         <div class="odontogram-surface-fields">
                           {ALL_SURFACES.map((surface) => (
@@ -859,6 +915,58 @@ export default component$(() => {
                         hallazgos por cara.
                       </p>
                     )}
+
+                    <section
+                      class="odontogram-draft-preview"
+                      aria-label="Vista previa del nuevo registro"
+                    >
+                      <div class="odontogram-preview-heading">
+                        <strong>Vista previa</strong>
+                        <span>Nuevo registro · sin guardar</span>
+                      </div>
+                      <div class="odontogram-preview-content">
+                        <ToothDiagram
+                          tooth={selectedTooth.value}
+                          condition={draftCondition.value}
+                          surfaces={previewSurfaces}
+                          showSurfaceLabels
+                        />
+                        <div>
+                          <strong>
+                            {CONDITION_LABELS[draftCondition.value]}
+                          </strong>
+                          <p>
+                            {conditionAllowsSurfaces(draftCondition.value) &&
+                            selectedSurfaceCount
+                              ? ALL_SURFACES.filter(
+                                  (surface) => draftSurfaces[surface],
+                                )
+                                  .map(
+                                    (surface) =>
+                                      `${surfaceLabel(selectedTooth.value ?? 11, surface)}: ${CONDITION_LABELS[draftSurfaces[surface] as ToothCondition]}`,
+                                  )
+                                  .join(" · ")
+                              : "Estado general de la pieza."}
+                          </p>
+                          {isUnlocalized(
+                            draftCondition.value,
+                            previewSurfaces,
+                          ) && (
+                            <p class="odontogram-unlocalized">
+                              {unlocalizedCaption(draftCondition.value)}. La
+                              marca general queda fuera del mapa.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <p class="odontogram-surface-key">
+                        O: oclusal · M: mesial · D: distal · V: vestibular ·{" "}
+                        {isUpperTooth(selectedTooth.value)
+                          ? "P: palatina"
+                          : "L: lingual"}
+                        . Vista de frente al paciente.
+                      </p>
+                    </section>
 
                     <label class="form-field odontogram-note-field">
                       <span>
@@ -924,14 +1032,19 @@ export default component$(() => {
                         <ol class="odontogram-history">
                           {toothHistory.map((entry, index) => (
                             <li key={entry.id}>
-                              <i
-                                class={`condition-swatch condition-${entry.condition}`}
-                                aria-hidden="true"
-                              >
-                                <i />
-                              </i>
+                              <ToothDiagram
+                                tooth={entry.tooth}
+                                condition={entry.condition}
+                                surfaces={entry.surfaces}
+                                decorative
+                              />
                               <span>
                                 <strong>{toothSummary(entry)}</strong>
+                                {hasUnlocalizedFinding(entry) && (
+                                  <span class="odontogram-unlocalized">
+                                    {unlocalizedCaption(entry.condition)}
+                                  </span>
+                                )}
                                 <small>
                                   <time dateTime={entry.recordedAt}>
                                     {formatBusinessDate(
