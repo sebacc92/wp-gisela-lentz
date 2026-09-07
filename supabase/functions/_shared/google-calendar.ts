@@ -52,6 +52,9 @@ export interface CalendarSyncAppointment {
   starts_at: string;
   ends_at: string;
   patient_name: string;
+  patient_phone: string | null;
+  is_existing_patient: boolean | null;
+  coverage: "ioma" | "particular" | null;
   timezone: string;
 }
 
@@ -354,6 +357,25 @@ export async function googleCalendarEventPayload(
   }
 
   const pending = association.projectionStage === "pre_reservation";
+  const patientRecord =
+    appointment.is_existing_patient === true
+      ? "TF"
+      : appointment.is_existing_patient === false
+        ? "1ra vez"
+        : "Ficha sin confirmar";
+  const phone = appointment.patient_phone?.trim();
+  const patientPhone =
+    phone && /^\+[1-9][0-9]{7,14}$/.test(phone)
+      ? phone
+      : "Celular sin confirmar";
+  const coverage =
+    appointment.coverage === "ioma"
+      ? "IOMA"
+      : appointment.coverage === "particular"
+        ? "Particular"
+        : "Cobertura sin confirmar";
+  const summary = [patientName, patientRecord, patientPhone, coverage];
+  if (pending) summary.push("Pendiente de seña");
 
   const privateProperties = {
     appointment_id: appointment.appointment_id.toLowerCase(),
@@ -363,9 +385,7 @@ export async function googleCalendarEventPayload(
   };
   const payloadWithoutFingerprint = {
     ...(includeId ? { id: eventId } : {}),
-    summary: pending
-      ? `Pendiente de seña · ${patientName}`
-      : `Turno confirmado · ${patientName}`,
+    summary: summary.join(" · "),
     description: pending
       ? "Reserva pendiente administrada desde la agenda de Gisela Lentz."
       : "Turno confirmado administrado desde la agenda de Gisela Lentz.",

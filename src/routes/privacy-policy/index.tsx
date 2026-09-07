@@ -188,12 +188,14 @@ export default component$(() => {
         </p>
         <p>
           Si el consultorio habilita la integración opcional con Google
-          Calendar, se copia a un calendario privado el nombre de la persona, la
-          fecha, el horario y un identificador interno del turno. La plataforma
-          no agrega al paciente como invitado ni copia allí su teléfono, notas,
-          comprobantes o archivos. Al desconectar la integración, los eventos ya
-          creados no se eliminan automáticamente y pueden permanecer en ese
-          calendario hasta que su titular los elimine.
+          Calendar, se copian al evento el nombre y apellido de la persona, su
+          condición de paciente existente (TF) o primera vez, su teléfono
+          celular, la cobertura del turno (Particular o IOMA), la fecha, el
+          horario y un identificador interno del turno. Los eventos se marcan
+          como privados. La plataforma no agrega al paciente como invitado ni
+          copia allí notas, comprobantes o archivos. Al desconectar la
+          integración, los eventos ya creados no se eliminan automáticamente y
+          pueden permanecer en ese calendario hasta que su titular los elimine.
         </p>
       </section>
 

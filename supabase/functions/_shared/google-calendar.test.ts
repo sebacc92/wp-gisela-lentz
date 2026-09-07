@@ -32,6 +32,9 @@ const appointment: CalendarSyncAppointment = {
   starts_at: "2026-08-20T13:00:00.000Z",
   ends_at: "2026-08-20T13:45:00.000Z",
   patient_name: "  Ana   Pérez ",
+  patient_phone: "+5492291550001",
+  is_existing_patient: true,
+  coverage: "ioma",
   timezone: "America/Argentina/Buenos_Aires",
 };
 const AUTOMATION_EPOCH = "77777777-7777-4777-8777-777777777777";
@@ -139,14 +142,19 @@ test("el id del evento es determinista y compatible con Google", () => {
   assert.match(id, /^[0-9a-v]{5,1024}$/);
 });
 
-test("el evento excluye teléfono, notas internas y datos del servicio", async () => {
+test("el título incluye ficha, celular y cobertura sin notas ni servicio", async () => {
+  const patientWithInternalData = {
+    ...appointment,
+    internal_note: "Nota clínica que no debe exportarse",
+    service_name: "Servicio que no debe exportarse",
+  };
   const payload = await googleCalendarEventPayload(
-    appointment,
+    patientWithInternalData,
     association,
     true,
   );
   const serialized = JSON.stringify(payload);
-  assert.equal(payload.summary, "Turno confirmado · Ana Pérez");
+  assert.equal(payload.summary, "Ana Pérez · TF · +5492291550001 · IOMA");
   assert.equal(payload.visibility, "private");
   assert.equal(payload.status, "confirmed");
   assert.deepEqual(payload.reminders, { useDefault: false });
@@ -163,19 +171,72 @@ test("el evento excluye teléfono, notas internas y datos del servicio", async (
     "confirmed",
   );
   assert.equal(payload.id, association.eventId);
-  assert.equal(serialized.includes("phone"), false);
-  assert.equal(serialized.includes("internal_note"), false);
-  assert.equal(serialized.includes("service"), false);
+  assert.equal(
+    serialized.includes(patientWithInternalData.internal_note),
+    false,
+  );
+  assert.equal(
+    serialized.includes(patientWithInternalData.service_name),
+    false,
+  );
+  assert.equal("attendees" in payload, false);
 
   const pendingPayload = await googleCalendarEventPayload(appointment, {
     ...association,
     projectionStage: "pre_reservation",
   });
-  assert.equal(pendingPayload.summary, "Pendiente de seña · Ana Pérez");
+  assert.equal(
+    pendingPayload.summary,
+    "Ana Pérez · TF · +5492291550001 · IOMA · Pendiente de seña",
+  );
   assert.equal(
     pendingPayload.extendedProperties.private.projection_stage,
     "pre_reservation",
   );
+});
+
+test("primera vez y Particular usan la condición y cobertura informadas", async () => {
+  const payload = await googleCalendarEventPayload(
+    { ...appointment, is_existing_patient: false, coverage: "particular" },
+    association,
+  );
+  assert.equal(
+    payload.summary,
+    "Ana Pérez · 1ra vez · +5492291550001 · Particular",
+  );
+});
+
+test("los datos ausentes no se convierten en TF, primera vez ni Particular", async () => {
+  for (const phone of [null, "bsuid-sin-telefono", "\ncelular inválido\n"]) {
+    const payload = await googleCalendarEventPayload(
+      {
+        ...appointment,
+        is_existing_patient: null,
+        patient_phone: phone,
+        coverage: null,
+      },
+      association,
+    );
+    assert.equal(
+      payload.summary,
+      "Ana Pérez · Ficha sin confirmar · Celular sin confirmar · Cobertura sin confirmar",
+    );
+  }
+});
+
+test("el fingerprint registra cambios de ficha, celular o cobertura", async () => {
+  const original = await googleCalendarEventPayload(appointment, association);
+  for (const updated of [
+    { ...appointment, is_existing_patient: false },
+    { ...appointment, patient_phone: "+5492291550002" },
+    { ...appointment, coverage: "particular" as const },
+  ]) {
+    const payload = await googleCalendarEventPayload(updated, association);
+    assert.notEqual(
+      payload.extendedProperties.private.payload_fingerprint,
+      original.extendedProperties.private.payload_fingerprint,
+    );
+  }
 });
 
 test("insert en conflicto sólo parchea una asociación propia del mismo epoch", async () => {

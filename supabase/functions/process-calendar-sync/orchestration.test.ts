@@ -37,6 +37,15 @@ const TEST_NOW = Date.parse("2026-09-05T15:00:00.000Z");
 const AUTOMATION_EPOCH = "77777777-7777-4777-8777-777777777777";
 const COVERAGE_START = "2026-09-05T03:00:00.000Z";
 const COVERAGE_END = "2026-09-26T03:00:00.000Z";
+const PATIENT_DETAILS = {
+  coverage: "ioma" as const,
+  contact: {
+    name: "Paciente Sintético",
+    phone_e164: "+5492291550001",
+    alternate_phone_e164: "+5492291550002",
+    is_existing_patient: true,
+  },
+};
 
 interface RpcCall {
   name: string;
@@ -47,6 +56,7 @@ interface HttpCall {
   method: string;
   url: string;
   headers: Record<string, string>;
+  body: Record<string, unknown> | null;
 }
 
 interface TableReadCall {
@@ -66,6 +76,8 @@ function fakeSupabase(
   options: {
     existingAppointmentIds?: string[];
     appointmentReadError?: unknown;
+    patientDetails?: unknown;
+    patientDetailsError?: unknown;
   } = {},
 ) {
   const rpcCalls: RpcCall[] = [];
@@ -80,12 +92,18 @@ function fakeSupabase(
     },
     from(table: string) {
       let columns = "";
+      let filterColumn = "";
+      let filterValue: unknown;
       const chain = {
         select(value: string) {
           columns = value;
           return chain;
         },
-        eq: () => chain,
+        eq(column: string, value: unknown) {
+          filterColumn = column;
+          filterValue = value;
+          return chain;
+        },
         in(filterColumn: string, values: unknown[]) {
           tableReads.push({ table, columns, filterColumn, values });
           if (table === "appointments") {
@@ -112,14 +130,30 @@ function fakeSupabase(
           }
           return Promise.resolve({ data: [], error: null });
         },
-        maybeSingle: () =>
-          Promise.resolve({
+        maybeSingle: () => {
+          if (table === "appointments") {
+            tableReads.push({
+              table,
+              columns,
+              filterColumn,
+              values: [filterValue],
+            });
+            return Promise.resolve({
+              data:
+                "patientDetails" in options
+                  ? options.patientDetails
+                  : PATIENT_DETAILS,
+              error: options.patientDetailsError ?? null,
+            });
+          }
+          return Promise.resolve({
             data:
               table === "app_settings"
                 ? { appointment_buffer_minutes: 15 }
                 : { status: "connected", connection_generation: 1 },
             error: null,
-          }),
+          });
+        },
       };
       return chain;
     },
@@ -156,7 +190,12 @@ function fakeGoogle(route: (call: HttpCall) => Response | null): {
         headers[key.toLowerCase()] = value;
       },
     );
-    const call = { method, url, headers };
+    const call = {
+      method,
+      url,
+      headers,
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+    };
     calls.push(call);
 
     if (url.startsWith("https://oauth2.googleapis.com/token")) {
@@ -341,6 +380,217 @@ function indexOfCall(calls: RpcCall[], name: string): number {
 }
 
 Deno.test(
+  "Google recibe nombre, ficha, celular y cobertura del turno",
+  async () => {
+    for (const { details, stage, expected } of [
+      {
+        details: {
+          ...PATIENT_DETAILS,
+          contact: { ...PATIENT_DETAILS.contact, coverage: "particular" },
+        },
+        stage: "confirmed",
+        expected: "Paciente Sintético · TF · +5492291550001 · IOMA",
+      },
+      {
+        details: {
+          coverage: "particular",
+          contact: {
+            ...PATIENT_DETAILS.contact,
+            name: "Ana Pérez",
+            is_existing_patient: false,
+          },
+        },
+        stage: "pre_reservation",
+        expected:
+          "Ana Pérez · 1ra vez · +5492291550001 · Particular · Pendiente de seña",
+      },
+      {
+        details: {
+          ...PATIENT_DETAILS,
+          contact: { ...PATIENT_DETAILS.contact, phone_e164: null },
+        },
+        stage: "confirmed",
+        expected: "Paciente Sintético · TF · +5492291550002 · IOMA",
+      },
+      {
+        details: {
+          coverage: null,
+          contact: {
+            ...PATIENT_DETAILS.contact,
+            is_existing_patient: null,
+            phone_e164: null,
+            alternate_phone_e164: null,
+          },
+        },
+        stage: "confirmed",
+        expected:
+          "Paciente Sintético · Ficha sin confirmar · Celular sin confirmar · Cobertura sin confirmar",
+      },
+    ]) {
+      const { client, tableReads } = fakeSupabase(
+        baseHandlers({
+          claim_google_calendar_sync_jobs: () => ({
+            data: [
+              claimedUpsertJob({
+                patient_name: "Nombre anterior",
+                projection_stage: stage,
+              }),
+            ],
+            error: null,
+          }),
+          complete_google_calendar_sync_job: () => ({
+            data: true,
+            error: null,
+          }),
+        }),
+        { patientDetails: details },
+      );
+      const { fetcher, calls } = fakeGoogle((call) => {
+        if (call.method === "GET" && call.url.includes("/events?"))
+          return eventsListResponse([]);
+        if (call.method === "POST" && call.url.includes("/events?")) {
+          return jsonResponseOf({ id: MANAGED_EVENT_ID, etag: '"created"' });
+        }
+        return null;
+      });
+      const response = await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+      assert.equal((await response.json()).synced, 1);
+      const event = calls.find(
+        (call) => call.method === "POST" && call.url.includes("/events?"),
+      );
+      assert.equal(event?.body?.summary, expected);
+      assert.equal(event?.body?.visibility, "private");
+      const patientRead = tableReads.find(
+        (read) => read.table === "appointments",
+      );
+      assert.equal(patientRead?.filterColumn, "id");
+      assert.deepEqual(patientRead?.values, [APPOINTMENT_ID]);
+      assert.equal(patientRead?.columns.includes("internal_note"), false);
+    }
+  },
+);
+
+Deno.test(
+  "una lectura fallida del paciente reintenta sin escribir un evento incompleto",
+  async () => {
+    for (const options of [
+      { patientDetailsError: { message: "fallo privado de lectura" } },
+      { patientDetails: null },
+      { patientDetails: { coverage: "ioma", contact: null } },
+    ]) {
+      const { client, rpcCalls } = fakeSupabase(
+        baseHandlers({
+          claim_google_calendar_sync_jobs: () => ({
+            data: [claimedUpsertJob()],
+            error: null,
+          }),
+        }),
+        options,
+      );
+      const { fetcher, calls } = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? eventsListResponse([])
+          : null,
+      );
+      const response = await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+      const body = await response.json();
+      assert.equal(body.synced, 0);
+      assert.equal(body.retried, 1);
+      assert.equal(
+        calls.some(
+          (call) => call.url.includes("/events") && call.method !== "GET",
+        ),
+        false,
+      );
+      const failure = rpcCalls.find(
+        (call) => call.name === "fail_google_calendar_sync_job",
+      );
+      assert.equal(
+        failure?.args.p_error_code,
+        "CALENDAR_PATIENT_DETAILS_UNAVAILABLE",
+      );
+      assert.equal(failure?.args.p_terminal, false);
+      assert.equal(JSON.stringify(body).includes("fallo privado"), false);
+    }
+  },
+);
+
+Deno.test(
+  "el nuevo título actualiza el mismo evento confirmado con su ETag",
+  async () => {
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        claim_google_calendar_sync_jobs: () => ({
+          data: [
+            claimedUpsertJob({
+              projected_stage: "confirmed",
+              google_etag: '"previous"',
+            }),
+          ],
+          error: null,
+        }),
+        complete_google_calendar_sync_job: () => ({ data: true, error: null }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) => {
+      if (call.method === "GET" && call.url.includes("/events?"))
+        return eventsListResponse([]);
+      if (call.method === "POST" && call.url.includes("/events?"))
+        return jsonResponseOf({}, 409);
+      if (call.method === "GET" && call.url.includes(`/${MANAGED_EVENT_ID}`)) {
+        return jsonResponseOf({
+          id: MANAGED_EVENT_ID,
+          etag: '"previous"',
+          summary: "Turno confirmado · Paciente Sintético",
+          extendedProperties: {
+            private: {
+              managed_by: "gisela_lentz_agenda",
+              appointment_id: APPOINTMENT_ID,
+              automation_epoch: AUTOMATION_EPOCH,
+              projection_stage: "confirmed",
+            },
+          },
+        });
+      }
+      if (call.method === "PATCH") return jsonResponseOf({ etag: '"updated"' });
+      return null;
+    });
+    const response = await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+    assert.equal((await response.json()).synced, 1);
+    const patch = calls.find((call) => call.method === "PATCH");
+    assert.equal(
+      patch?.body?.summary,
+      "Paciente Sintético · TF · +5492291550001 · IOMA",
+    );
+    assert.equal(patch?.headers["if-match"], '"previous"');
+    assert.equal(
+      new URL(patch!.url).pathname.endsWith(`/${MANAGED_EVENT_ID}`),
+      true,
+    );
+    const completed = rpcCalls.find(
+      (call) => call.name === "complete_google_calendar_sync_job",
+    );
+    assert.equal(completed?.args.p_google_event_id, MANAGED_EVENT_ID);
+    assert.equal(completed?.args.p_google_etag, '"updated"');
+  },
+);
+
+Deno.test(
   "A: una reproyección pendiente no pisa en Google un cambio externo",
   async () => {
     const { client, rpcCalls } = fakeSupabase(
@@ -359,6 +609,9 @@ Deno.test(
         starts_at: MOVED_START,
         ends_at: MOVED_END,
         patient_name: "Paciente ficticio",
+        patient_phone: "+5492291550001",
+        is_existing_patient: true,
+        coverage: "ioma",
         timezone: "America/Argentina/Buenos_Aires",
       },
       {
@@ -492,6 +745,9 @@ Deno.test(
         starts_at: APP_START,
         ends_at: APP_END,
         patient_name: "Paciente ficticio",
+        patient_phone: "+5492291550001",
+        is_existing_patient: true,
+        coverage: "ioma",
         timezone: "America/Argentina/Buenos_Aires",
       },
       {

@@ -54,22 +54,26 @@ turnos sigue teniendo las comprobaciones adicionales descritas arriba.
 
 ## Cómo aparece una pre-reserva
 
-Google muestra **Pendiente de seña · Nombre**, con la descripción “Reserva
-pendiente administrada desde la agenda de Gisela Lentz.” El inicio y el fin
+Google muestra **Nombre Apellido · TF · +549… · IOMA · Pendiente de seña**,
+con la descripción “Reserva pendiente administrada desde la agenda de Gisela
+Lentz.” El inicio y el fin
 representan el horario y la duración de la atención. **No muestran el plazo
 para pagar ni la fecha y hora de vencimiento de la pre-reserva.** El plazo se
 calcula al crearla con `booking_hold_minutes`, configurable en la aplicación,
 y queda guardado en `hold_expires_at`.
 
-El evento contiene el nombre del paciente, el horario, la zona y marcadores
-privados de asociación. No exporta teléfono, servicio, cobertura, notas
-clínicas, comprobantes ni datos de transferencia. Se marca con visibilidad
-privada y sin asistentes ni notificaciones de Google. El campo técnico de
+El evento contiene nombre y apellido, **TF** (tiene ficha) o **1ra vez**, celular,
+la cobertura del turno (**Particular** o **IOMA**), el horario, la zona y
+marcadores privados de asociación. Si falta ficha, celular o cobertura, el dato
+figura como **sin confirmar**. No exporta servicio, notas clínicas, comprobantes
+ni datos de transferencia. Se marca con visibilidad privada y sin asistentes ni
+notificaciones de Google. El campo técnico de
 Google `status=confirmed` se usa también en pre-reservas: la diferencia
 operativa está en el título y la etapa registrada por el sistema.
 
-- Al aprobar la seña, se actualiza **el mismo evento** a **Turno confirmado ·
-  Nombre**. La reprogramación también conserva su identidad.
+- Al aprobar la seña, se actualiza **el mismo evento** a **Nombre Apellido · TF ·
+  +549… · IOMA**, quitando el aviso pendiente. La reprogramación también conserva
+  su identidad.
 - Un comprobante recibido a tiempo que sigue procesándose protege la reserva
   mientras su trabajo permanece activo. Si queda en revisión
   (`proof_received`), conserva el bloqueo y sigue apareciendo como **Pendiente

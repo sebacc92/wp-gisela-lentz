@@ -47,7 +47,10 @@ interface CalendarConnectionSecret {
   connection_generation?: number | string;
 }
 
-interface CalendarSyncJob extends CalendarSyncAppointment {
+interface CalendarSyncJob extends Omit<
+  CalendarSyncAppointment,
+  "patient_phone" | "is_existing_patient" | "coverage"
+> {
   job_id: string;
   operation: "upsert" | "delete";
   desired_version: number | string;
@@ -271,6 +274,39 @@ function inboundFailureRequiresReconnect(
 
 function calendarWorkerFailure(code: string): GoogleIntegrationError {
   return new GoogleIntegrationError(code, { status: 503, retryable: true });
+}
+
+async function calendarAppointmentWithPatientDetails(
+  client: SupabaseClient,
+  job: CalendarSyncJob,
+): Promise<CalendarSyncAppointment> {
+  // La cobertura corresponde al turno; nombre, ficha y celular al contacto.
+  // Leer sólo estos campos evita exportar notas o información clínica.
+  const { data, error } = await client
+    .from("appointments")
+    .select(
+      "coverage,contact:contacts!appointments_contact_id_fkey(name,phone_e164,alternate_phone_e164,is_existing_patient)",
+    )
+    .eq("id", job.appointment_id)
+    .maybeSingle<{
+      coverage: CalendarSyncAppointment["coverage"];
+      contact: {
+        name: string;
+        phone_e164: string | null;
+        alternate_phone_e164: string | null;
+        is_existing_patient: boolean | null;
+      } | null;
+    }>();
+  if (error || !data?.contact || typeof data.contact.name !== "string") {
+    throw calendarWorkerFailure("CALENDAR_PATIENT_DETAILS_UNAVAILABLE");
+  }
+  return {
+    ...job,
+    patient_name: data.contact.name,
+    patient_phone: data.contact.phone_e164 ?? data.contact.alternate_phone_e164,
+    is_existing_patient: data.contact.is_existing_patient,
+    coverage: data.coverage,
+  };
 }
 
 async function existingPreviewAppointmentIds(
@@ -983,10 +1019,14 @@ export async function handleCalendarSyncRequest(
           if (job.projection_stage === "absent") {
             throw calendarWorkerFailure("CALENDAR_JOB_ASSOCIATION_INVALID");
           }
+          const appointment = await calendarAppointmentWithPatientDetails(
+            client,
+            job,
+          );
           const upsertResult = await upsertGoogleCalendarEvent({
             accessToken,
             calendarId: job.authorized_google_calendar_id,
-            appointment: job,
+            appointment,
             association: {
               eventId,
               automationEpoch: job.automation_epoch,
