@@ -38,6 +38,7 @@ import {
 } from "~/lib/deposit-review";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
+  calendarBookingError,
   calendarProjectionNotice,
   readAppointmentCalendar,
   type CalendarProjectionState,
@@ -352,6 +353,13 @@ export default component$(() => {
     const id = track(() => selectedId.value);
     track(() => reloadVersion.value);
     if (!id) return;
+    if (
+      state.appointments.find((appointment) => appointment.id === id)
+        ?.googleCalendarImported
+    ) {
+      detailCalendar.value = "unavailable";
+      return;
+    }
     let current = true;
     cleanup(() => {
       current = false;
@@ -420,6 +428,12 @@ export default component$(() => {
       status: AppointmentListItem["status"],
     ) => {
       if (savingStatus.value) return;
+      if (appointment.googleCalendarImported && status === "cancelled") {
+        notice.value = calendarBookingError(
+          "CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY",
+        );
+        return;
+      }
       if (
         (status === "completed" || status === "no_show") &&
         new Date(appointment.startsAt).getTime() > Date.now()
@@ -442,8 +456,11 @@ export default component$(() => {
           { p_appointment_id: appointment.id, p_status: status },
         );
         if (error) {
-          notice.value =
-            "No pudimos cambiar el estado. No se hicieron cambios; intentá de nuevo.";
+          notice.value = error.message.includes(
+            "CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY",
+          )
+            ? calendarBookingError(error.message)
+            : "No pudimos cambiar el estado. No se hicieron cambios; intentá de nuevo.";
           return;
         }
         selectedId.value = "";
@@ -1233,19 +1250,29 @@ export default component$(() => {
                 </dl>
               </section>
 
-              {selectedAppointmentActive && (
-                <section class="detail-section" aria-live="polite">
+              {selectedAppointment.googleCalendarImported ? (
+                <section class="detail-section">
                   <h3>Google Calendar</h3>
                   <p class="detail-hint">
-                    {detailCalendar.value === "loading"
-                      ? "Comprobando este turno…"
-                      : detailCalendar.value === "synced"
-                        ? "Este turno está guardado en Google Calendar."
-                        : detailCalendar.value === "conflict"
-                          ? "Hay un conflicto de horario. Revisá Google Calendar antes de confirmar este turno al paciente."
-                          : "La reserva está en el sistema, pero su sincronización con Google todavía no está verificada."}
+                    Creado en Google Calendar. Para cambiar el horario o
+                    cancelarlo, hacelo desde Google Calendar.
                   </p>
                 </section>
+              ) : (
+                selectedAppointmentActive && (
+                  <section class="detail-section" aria-live="polite">
+                    <h3>Google Calendar</h3>
+                    <p class="detail-hint">
+                      {detailCalendar.value === "loading"
+                        ? "Comprobando este turno…"
+                        : detailCalendar.value === "synced"
+                          ? "Este turno está guardado en Google Calendar."
+                          : detailCalendar.value === "conflict"
+                            ? "Hay un conflicto de horario. Revisá Google Calendar antes de confirmar este turno al paciente."
+                            : "La reserva está en el sistema, pero su sincronización con Google todavía no está verificada."}
+                    </p>
+                  </section>
+                )
               )}
 
               <section class="detail-section">
@@ -1415,14 +1442,16 @@ export default component$(() => {
               )}
               {selectedAppointmentActive && (
                 <div class="detail-action-row">
-                  <button
-                    class="secondary-button"
-                    type="button"
-                    disabled={detailBusy}
-                    onClick$={() => (rescheduling.value = true)}
-                  >
-                    Reprogramar
-                  </button>
+                  {!selectedAppointment.googleCalendarImported && (
+                    <button
+                      class="secondary-button"
+                      type="button"
+                      disabled={detailBusy}
+                      onClick$={() => (rescheduling.value = true)}
+                    >
+                      Reprogramar
+                    </button>
+                  )}
                   <button
                     class="secondary-button"
                     type="button"
@@ -1457,18 +1486,20 @@ export default component$(() => {
                       ? "Guardando…"
                       : "No asistió"}
                   </button>
-                  <button
-                    class="secondary-button danger-button"
-                    type="button"
-                    disabled={detailBusy}
-                    onClick$={() =>
-                      changeStatus(selectedAppointment, "cancelled")
-                    }
-                  >
-                    {savingStatus.value === "cancelled"
-                      ? "Guardando…"
-                      : "Cancelar turno"}
-                  </button>
+                  {!selectedAppointment.googleCalendarImported && (
+                    <button
+                      class="secondary-button danger-button"
+                      type="button"
+                      disabled={detailBusy}
+                      onClick$={() =>
+                        changeStatus(selectedAppointment, "cancelled")
+                      }
+                    >
+                      {savingStatus.value === "cancelled"
+                        ? "Guardando…"
+                        : "Cancelar turno"}
+                    </button>
+                  )}
                 </div>
               )}
             </footer>
@@ -1506,19 +1537,21 @@ export default component$(() => {
         />
       )}
 
-      {rescheduling.value && selectedAppointment && (
-        <RescheduleAppointmentDrawer
-          appointment={selectedAppointment}
-          bookingDurations={state.bookingDurations}
-          onClose$={() => (rescheduling.value = false)}
-          onSaved$={(message) => {
-            rescheduling.value = false;
-            selectedId.value = "";
-            notice.value = message;
-            reloadVersion.value += 1;
-          }}
-        />
-      )}
+      {rescheduling.value &&
+        selectedAppointment &&
+        !selectedAppointment.googleCalendarImported && (
+          <RescheduleAppointmentDrawer
+            appointment={selectedAppointment}
+            bookingDurations={state.bookingDurations}
+            onClose$={() => (rescheduling.value = false)}
+            onSaved$={(message) => {
+              rescheduling.value = false;
+              selectedId.value = "";
+              notice.value = message;
+              reloadVersion.value += 1;
+            }}
+          />
+        )}
 
       {notice.value && (
         <div

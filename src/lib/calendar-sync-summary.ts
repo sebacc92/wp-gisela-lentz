@@ -15,6 +15,9 @@ export interface CalendarSyncSummary {
   skipped: number;
   pagesFetched: number;
   fullResync: boolean;
+  appointmentsImported: number;
+  patientImportsNeedReview: number;
+  patientImportsFailed: number;
 }
 
 export function emptyCalendarSyncSummary(): CalendarSyncSummary {
@@ -33,6 +36,9 @@ export function emptyCalendarSyncSummary(): CalendarSyncSummary {
     skipped: 0,
     pagesFetched: 0,
     fullResync: false,
+    appointmentsImported: 0,
+    patientImportsNeedReview: 0,
+    patientImportsFailed: 0,
   };
 }
 
@@ -63,6 +69,9 @@ export function parseCalendarSyncSummary(value: unknown): CalendarSyncSummary {
     skipped: count(source.skipped),
     pagesFetched: count(source.pagesFetched),
     fullResync: source.fullResync === true,
+    appointmentsImported: count(source.appointmentsImported),
+    patientImportsNeedReview: count(source.patientImportsNeedReview),
+    patientImportsFailed: count(source.patientImportsFailed),
   };
 }
 
@@ -74,7 +83,8 @@ export function calendarSyncChangeCount(summary: CalendarSyncSummary): number {
     summary.blocksImported +
     summary.blocksUpdated +
     summary.blocksRemoved +
-    summary.conflictsOpened
+    summary.conflictsOpened +
+    summary.appointmentsImported
   );
 }
 
@@ -106,6 +116,24 @@ export function parseCalendarSyncOutcome(value: unknown): CalendarSyncOutcome {
 
 function changeParts(summary: CalendarSyncSummary): string[] {
   const parts: string[] = [];
+  if (summary.appointmentsImported > 0) {
+    parts.push(
+      pluralize(
+        summary.appointmentsImported,
+        "turno reconocido",
+        "turnos reconocidos",
+      ),
+    );
+  }
+  if (summary.patientImportsNeedReview > 0) {
+    parts.push(
+      pluralize(
+        summary.patientImportsNeedReview,
+        "evento de paciente para completar",
+        "eventos de pacientes para completar",
+      ),
+    );
+  }
   if (summary.pushed > 0) {
     parts.push(pluralize(summary.pushed, "enviado", "enviados"));
   }
@@ -169,7 +197,9 @@ export function describeCalendarSync(input: {
       ? "error"
       : input.skippedReason
         ? "skipped"
-        : summary.failed > 0 || summary.retried > 0
+        : summary.failed > 0 ||
+            summary.retried > 0 ||
+            summary.patientImportsFailed > 0
           ? "partial"
           : "completed");
 

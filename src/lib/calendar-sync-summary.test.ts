@@ -149,6 +149,26 @@ test("el outcome del servidor manda sobre los contadores", () => {
   assert.match(message, /incompleta/);
 });
 
+test("los turnos reconocidos se distinguen de bloqueos y pendientes de completar", () => {
+  const summary = parseCalendarSyncSummary({
+    appointmentsImported: 1,
+    patientImportsNeedReview: 2,
+    patientImportsFailed: 0,
+  });
+  assert.equal(calendarSyncChangeCount(summary), 1);
+  assert.match(describeCalendarSync({ summary }), /1 turno reconocido/);
+  assert.match(
+    describeCalendarSync({ summary }),
+    /2 eventos de pacientes para completar/,
+  );
+  assert.match(
+    describeCalendarSync({
+      summary: { ...summary, patientImportsFailed: 1 },
+    }),
+    /Sincronización incompleta/,
+  );
+});
+
 test("un outcome desconocido se trata como error, nunca como éxito", () => {
   assert.equal(parseCalendarSyncOutcome("todo bien"), "error");
   assert.equal(parseCalendarSyncOutcome(undefined), "error");

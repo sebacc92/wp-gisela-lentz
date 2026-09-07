@@ -166,6 +166,8 @@ test("los outcomes RPC sólo aceptan el contrato actual exacto", () => {
     "unchanged",
     "already_removed",
     "skipped_converted",
+    "conflict_recorded",
+    "conflict_pending",
   ];
   const managed = [
     "conflict_recorded",
@@ -196,6 +198,20 @@ test("los outcomes RPC sólo aceptan el contrato actual exacto", () => {
     assert.equal(parseExternalEventRpcOutcome(value), null);
     assert.equal(parseManagedEventRpcOutcome(value), null);
   }
+});
+
+test("los cambios en turnos importados abren revisión sin contar otro bloqueo", () => {
+  const recorded = applyExternalEventOutcome(
+    emptyInboundSyncSummary(),
+    "conflict_recorded",
+  );
+  const pending = applyExternalEventOutcome(recorded, "conflict_pending");
+  assert.equal(pending.conflictsOpened, 1);
+  assert.equal(pending.blocksImported, 0);
+  assert.equal(pending.blocksUpdated, 0);
+  assert.equal(pending.blocksRemoved, 0);
+  assert.equal(pending.skipped, 1);
+  assert.equal(inboundChangeCount(pending), 1);
 });
 
 test("una corrida sin novedades no reporta ningún cambio", () => {

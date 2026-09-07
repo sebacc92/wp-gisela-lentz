@@ -22,6 +22,10 @@ import { authorizeUser, createServiceClient } from "../_shared/supabase.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 import { calendarJobFailureDecision } from "./sync-policy.ts";
 import {
+  emptyPatientImportSummary,
+  importCalendarPatientAppointments,
+} from "./patient-import.ts";
+import {
   applyExternalEventOutcome,
   applyManagedEventOutcome,
   type CalendarSyncMode,
@@ -1113,6 +1117,7 @@ export async function handleCalendarSyncRequest(
     const cleanupFailed = 0;
 
     const summary = {
+      ...emptyPatientImportSummary(),
       pushed: inserted,
       updatedInGoogle: patched,
       adoptedInGoogle: adopted,
@@ -1130,7 +1135,7 @@ export async function handleCalendarSyncRequest(
       fullResync: inbound.fullResync,
     };
 
-    const outcome = calendarSyncOutcome({
+    let outcome = calendarSyncOutcome({
       inboundError,
       inboundSkippedReason,
       truncated: inbound.truncated,
@@ -1213,6 +1218,50 @@ export async function handleCalendarSyncRequest(
         });
       if (attemptRecordError || attemptRecorded !== true) {
         throw calendarWorkerFailure("CALENDAR_SYNC_ATTEMPT_RECORD_FAILED");
+      }
+    }
+
+    // A prior complete pull is essential: never convert a patient event from
+    // an incomplete page, an expired scope, or the preview/initial import.
+    // Scan persisted active blocks as well as newly changed events so adding
+    // a missing patient later can resolve a previously incomplete title.
+    if (inboundObservationSafe && !inboundOnly && currentAutomationEpoch) {
+      try {
+        Object.assign(
+          summary,
+          await importCalendarPatientAppointments({
+            client,
+            calendarId,
+            generation,
+            automationEpoch: currentAutomationEpoch,
+            coverageStartsAt: coverage.startsAt,
+            coverageEndsAt: coverage.endsAt,
+            now,
+          }),
+        );
+      } catch {
+        summary.patientImportsFailed += 1;
+      }
+      if (summary.patientImportsFailed > 0) outcome = "partial";
+      if (
+        summary.appointmentsImported ||
+        summary.patientImportsNeedReview ||
+        summary.patientImportsFailed
+      ) {
+        const { data: recorded, error: recordError } = await client.rpc(
+          "record_google_calendar_sync_attempt",
+          {
+            p_expected_generation: generation,
+            p_summary: summary,
+            p_changes: changes + summary.appointmentsImported,
+            p_note: summary.patientImportsFailed
+              ? "CALENDAR_PATIENT_IMPORT_FAILED"
+              : null,
+          },
+        );
+        if (recordError || recorded !== true) {
+          throw calendarWorkerFailure("CALENDAR_PATIENT_IMPORT_RECORD_FAILED");
+        }
       }
     }
 
@@ -1428,15 +1477,16 @@ async function pullGoogleCalendar(input: {
         p_google_event_id: classified.eventId,
         p_kind: classified.kind === "external_block" ? "block" : "unsupported",
         p_removed: removed,
-        p_summary: removed ? null : (classified.summary ?? null),
+        // Keep the observation for an already-converted patient source. Past
+        // and transparent events stop being blocks but are not tombstones.
+        p_summary:
+          classified.kind === "external_removed"
+            ? null
+            : (classified.summary ?? null),
         p_starts_at:
-          classified.kind === "external_block" && !pastExternalBlock
-            ? classified.startsAt
-            : null,
+          classified.kind === "external_block" ? classified.startsAt : null,
         p_ends_at:
-          classified.kind === "external_block" && !pastExternalBlock
-            ? classified.endsAt
-            : null,
+          classified.kind === "external_block" ? classified.endsAt : null,
         p_all_day:
           classified.kind === "external_block"
             ? classified.allDay
@@ -1447,8 +1497,14 @@ async function pullGoogleCalendar(input: {
             ? classified.recurring
             : classified.kind === "external_unsupported" &&
               classified.reason === "RECURRING",
-        p_unsupported_reason:
-          classified.kind === "external_unsupported" ? classified.reason : null,
+        p_unsupported_reason: pastExternalBlock
+          ? "PAST_EVENT"
+          : classified.kind === "external_removed" &&
+              classified.removalReason === "transparent"
+            ? "TRANSPARENT_EVENT"
+            : classified.kind === "external_unsupported"
+              ? classified.reason
+              : null,
         p_google_etag: classified.etag,
         p_google_updated_at: classified.updatedAt,
       },

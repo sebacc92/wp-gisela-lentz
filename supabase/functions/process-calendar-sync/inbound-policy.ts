@@ -176,7 +176,9 @@ export type ExternalEventRpcOutcome =
   | "removed"
   | "unchanged"
   | "already_removed"
-  | "skipped_converted";
+  | "skipped_converted"
+  | "conflict_recorded"
+  | "conflict_pending";
 
 export type ManagedEventRpcOutcome =
   | "conflict_recorded"
@@ -199,6 +201,8 @@ export function parseExternalEventRpcOutcome(
     case "unchanged":
     case "already_removed":
     case "skipped_converted":
+    case "conflict_recorded":
+    case "conflict_pending":
       return value;
     default:
       return null;
@@ -251,6 +255,10 @@ export function applyExternalEventOutcome(
   outcome: ExternalEventRpcOutcome,
 ): InboundSyncSummary {
   switch (outcome) {
+    case "conflict_recorded":
+      return { ...summary, conflictsOpened: summary.conflictsOpened + 1 };
+    case "conflict_pending":
+      return { ...summary, skipped: summary.skipped + 1 };
     case "created":
       return { ...summary, blocksImported: summary.blocksImported + 1 };
     case "updated":

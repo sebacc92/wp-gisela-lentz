@@ -60,6 +60,7 @@ interface AppointmentRow {
   starts_at: string;
   ends_at: string;
   status: AppointmentStatus;
+  google_calendar_imported: boolean;
   coverage: PatientCoverage | null;
   duration_minutes: number;
   deposit_status: DepositStatus;
@@ -80,6 +81,7 @@ export interface AppointmentListItem {
   endsAt: string;
   status: AppointmentRow["status"];
   source: "whatsapp" | "manual";
+  googleCalendarImported: boolean;
   internalNote: string | null;
   contactName: string;
   contactPhone: string;
@@ -158,6 +160,7 @@ function mapAppointment(row: AppointmentRow): AppointmentSummary {
     serviceId: row.service_id ?? undefined,
     professionalId: row.professional_id,
     startsAt: row.starts_at,
+    googleCalendarImported: row.google_calendar_imported === true,
     status,
     coverage: row.coverage ?? undefined,
     durationMinutes: row.duration_minutes,
@@ -201,7 +204,7 @@ export async function loadInboxData(client: SupabaseClient): Promise<{
       ? client
           .from("appointments")
           .select(
-            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,google_calendar_imported,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
           )
           .in("contact_id", contactIds)
           .order("starts_at", { ascending: true })
@@ -346,7 +349,7 @@ export async function loadAppointments(
   let query = client
     .from("appointments")
     .select(
-      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,internal_note,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,google_calendar_imported,internal_note,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
     )
     .gte("starts_at", fromIso);
   if (toIso) query = query.lt("starts_at", toIso);
@@ -364,6 +367,7 @@ export async function loadAppointments(
       ends_at: string;
       status: AppointmentListItem["status"];
       source: AppointmentListItem["source"];
+      google_calendar_imported: boolean;
       internal_note: string | null;
       coverage: PatientCoverage | null;
       duration_minutes: number;
@@ -404,6 +408,7 @@ export async function loadAppointments(
       endsAt: row.ends_at,
       status: row.status,
       source: row.source,
+      googleCalendarImported: row.google_calendar_imported === true,
       internalNote: row.internal_note,
       contactName: contact?.name ?? "Paciente",
       contactPhone: contact?.phone_e164 ?? "",

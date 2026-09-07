@@ -70,6 +70,8 @@ export function calendarProjectionNotice(
 }
 
 export function calendarBookingError(message: string): string {
+  if (message.includes("CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY"))
+    return "Este turno se creó en Google Calendar. Para cambiar el horario o cancelarlo, hacelo desde Google Calendar.";
   if (message.includes("ORTHODONTIC_VISIT_TYPE_REQUIRED"))
     return "Elegí Primera vez o En tratamiento con Gisela para este turno de ortodoncia.";
   if (message.includes("ORTHODONTIC_VISIT_TYPE_NOT_APPLICABLE"))

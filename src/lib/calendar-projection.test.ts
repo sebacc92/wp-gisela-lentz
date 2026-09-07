@@ -2,11 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  calendarBookingError,
   readAppointmentCalendar,
   verifyAppointmentCalendar,
 } from "./calendar-projection.ts";
 import { requestDepositAndNotify } from "./deposit-request.ts";
 import { confirmDepositAndNotify } from "./deposit-confirmation.ts";
+
+test("un turno importado explica dónde cambiarlo sin sugerir fallos de conexión", () => {
+  const message = calendarBookingError(
+    "CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY",
+  );
+  assert.match(
+    message,
+    /Para cambiar el horario o cancelarlo, hacelo desde Google Calendar/,
+  );
+  assert.doesNotMatch(message, /conexión|sincronizá/);
+});
 
 function clientWith(states: unknown[], syncThrows = false) {
   const calls: string[] = [];

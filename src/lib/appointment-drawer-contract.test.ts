@@ -84,8 +84,13 @@ test("la conversión de un bloqueo está conectada a su RPC transaccional", () =
   assert.match(page, /Convertir en turno/);
   assert.match(page, /convertingBlockId/);
 
-  // El formulario explica la sustitución antes de convertir.
-  assert.match(converter, /se reemplaza por el turno/);
+  // El evento externo sigue administrado desde Google; convertir no lo duplica.
+  assert.match(converter, /conserva el horario y el evento original/);
+  assert.match(
+    converter.replace(/\s+/g, " "),
+    /No se crea otro evento\. Convertir no envía una respuesta al paciente; los recordatorios siguen la configuración/,
+  );
+  assert.doesNotMatch(converter, /verifyAppointmentCalendar/);
 
   // Una sola vía de creación: el RPC transaccional, nunca una segunda
   // implementación de reserva desde el navegador.

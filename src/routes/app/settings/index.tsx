@@ -2739,6 +2739,17 @@ export default component$(() => {
                                               "reject_google_calendar_conflict",
                                               { p_conflict_id: conflict.id },
                                             );
+                                          if (
+                                            error?.message.includes(
+                                              "CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY",
+                                            )
+                                          ) {
+                                            await loadGoogleCalendarStatus();
+                                            googleCalendar.error = true;
+                                            googleCalendar.message =
+                                              "Este turno viene de un evento creado en Google Calendar. Para restaurarlo o corregirlo, editá el evento original en Google y sincronizá la agenda.";
+                                            return;
+                                          }
                                           if (error) throw error;
 
                                           googleCalendar.conflicts =

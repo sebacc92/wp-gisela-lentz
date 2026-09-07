@@ -78,6 +78,8 @@ function fakeSupabase(
     appointmentReadError?: unknown;
     patientDetails?: unknown;
     patientDetailsError?: unknown;
+    patientImportBlocks?: Array<Record<string, unknown>>;
+    patientImportContacts?: Array<Record<string, unknown>>;
   } = {},
 ) {
   const rpcCalls: RpcCall[] = [];
@@ -103,6 +105,45 @@ function fakeSupabase(
           filterColumn = column;
           filterValue = value;
           return chain;
+        },
+        gte() {
+          return chain;
+        },
+        lte() {
+          return chain;
+        },
+        gt() {
+          return chain;
+        },
+        order() {
+          return chain;
+        },
+        limit() {
+          return chain;
+        },
+        then(
+          resolve: (value: unknown) => unknown,
+          reject: (error: unknown) => unknown,
+        ) {
+          return Promise.resolve({
+            data:
+              table === "google_calendar_external_events"
+                ? (options.patientImportBlocks ?? [])
+                : table === "contacts"
+                  ? (options.patientImportContacts ?? [])
+                  : table === "professionals"
+                    ? [{ id: "professional-1" }]
+                    : table === "services"
+                      ? [
+                          {
+                            id: "service-1",
+                            name: "Consulta",
+                            requires_orthodontic_intake: false,
+                          },
+                        ]
+                      : [],
+            error: null,
+          }).then(resolve, reject);
         },
         in(filterColumn: string, values: unknown[]) {
           tableReads.push({ table, columns, filterColumn, values });
@@ -378,6 +419,117 @@ function eventsListResponse(items: unknown[]): Response {
 function indexOfCall(calls: RpcCall[], name: string): number {
   return calls.findIndex((call) => call.name === name);
 }
+
+Deno.test(
+  "patient imports wait for committed inbound and keep the original Google event",
+  async () => {
+    for (const mode of ["manual", "initial_import"]) {
+      const db = fakeSupabase(
+        baseHandlers({
+          import_google_calendar_patient_appointment: () => ({
+            data: [{ appointment_id: APPOINTMENT_ID, created: true }],
+            error: null,
+          }),
+        }),
+        {
+          patientImportBlocks: [
+            {
+              google_event_id: "icardo-original",
+              summary: "Icardo Matias TF particular",
+              starts_at: APP_START,
+              ends_at: APP_END,
+            },
+          ],
+          patientImportContacts: [
+            {
+              id: "22222222-2222-4222-8222-222222222222",
+              name: "Matias Icardo",
+              phone_e164: "+5492234541374",
+            },
+          ],
+        },
+      );
+      const google = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? eventsListResponse([])
+          : null,
+      );
+      const response = await handleCalendarSyncRequest(
+        new Request("https://app.example.com/sync", {
+          method: "POST",
+          body: JSON.stringify({ mode }),
+        }),
+        {
+          createClient: () => db.client,
+          authorize: authorizationFor("ADMIN"),
+          environment: (name) => ENVIRONMENT[name],
+          fetcher: google.fetcher,
+          now: () => TEST_NOW,
+        },
+      );
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      const imported = indexOfCall(
+        db.rpcCalls,
+        "import_google_calendar_patient_appointment",
+      );
+      if (mode === "manual") {
+        assert.ok(
+          imported >
+            indexOfCall(db.rpcCalls, "complete_google_calendar_inbound_sync"),
+        );
+        assert.equal(body.summary.appointmentsImported, 1);
+        assert.equal(body.outcome, "completed");
+      } else {
+        assert.equal(imported, -1);
+        assert.equal(body.summary.appointmentsImported, 0);
+      }
+      assert.equal(
+        google.calls.some(
+          (call) =>
+            call.url.includes("/events") &&
+            ["POST", "PATCH", "DELETE"].includes(call.method),
+        ),
+        false,
+      );
+    }
+  },
+);
+
+Deno.test("a failed inbound commit cannot trigger patient import", async () => {
+  const db = fakeSupabase(
+    baseHandlers({
+      complete_google_calendar_inbound_sync: () => ({
+        data: false,
+        error: null,
+      }),
+    }),
+    { patientImportBlocks: [{ summary: "Icardo Matias TF particular" }] },
+  );
+  const google = fakeGoogle((call) =>
+    call.method === "GET" && call.url.includes("/events?")
+      ? eventsListResponse([])
+      : null,
+  );
+  const response = await handleCalendarSyncRequest(
+    new Request("https://app.example.com/sync", {
+      method: "POST",
+      body: JSON.stringify({ mode: "manual" }),
+    }),
+    {
+      createClient: () => db.client,
+      authorize: authorizationFor("ADMIN"),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher: google.fetcher,
+      now: () => TEST_NOW,
+    },
+  );
+  assert.equal(response.status, 503);
+  assert.equal(
+    indexOfCall(db.rpcCalls, "import_google_calendar_patient_appointment"),
+    -1,
+  );
+});
 
 Deno.test(
   "Google recibe nombre, ficha, celular y cobertura del turno",
@@ -1059,6 +1211,10 @@ Deno.test(
     );
     assert.equal(externalRemoval?.args.p_google_event_id, externalEventId);
     assert.equal(externalRemoval?.args.p_removed, true);
+    assert.equal(
+      externalRemoval?.args.p_unsupported_reason,
+      "TRANSPARENT_EVENT",
+    );
     assert.equal(externalRemoval?.args.p_starts_at, null);
     assert.equal(externalRemoval?.args.p_ends_at, null);
     assert.equal(
@@ -3882,8 +4038,10 @@ Deno.test(
       "manual-movido-al-pasado",
     );
     assert.equal(application?.args.p_removed, true);
-    assert.equal(application?.args.p_starts_at, null);
-    assert.equal(application?.args.p_ends_at, null);
+    assert.equal(application?.args.p_unsupported_reason, "PAST_EVENT");
+    assert.equal(application?.args.p_summary, "Evento sintético pasado");
+    assert.equal(application?.args.p_starts_at, "2020-01-01T10:00:00.000Z");
+    assert.equal(application?.args.p_ends_at, "2020-01-01T11:00:00.000Z");
     assert.equal(application?.args.p_google_etag, '"etag-pasado"');
     assert.equal(body.summary.blocksRemoved, 1);
   },

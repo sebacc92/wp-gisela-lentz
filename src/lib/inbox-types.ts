@@ -61,6 +61,7 @@ export interface AppointmentSummary {
     | "Cancelado"
     | "No asistió";
   startsAt?: string;
+  googleCalendarImported?: boolean;
   professionalId?: string;
   service?: string;
   serviceId?: string;
