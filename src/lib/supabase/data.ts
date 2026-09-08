@@ -544,6 +544,7 @@ export async function loadCalendarUnsupportedEvents(
 export interface CalendarConflict {
   id: string;
   appointmentId: string;
+  imported: boolean;
   kind: "reschedule_requested" | "cancellation_requested" | "metadata_changed";
   proposedStartsAt: string | null;
   proposedEndsAt: string | null;
@@ -560,7 +561,7 @@ export async function loadCalendarConflicts(
   const { data, error } = await client
     .from("google_calendar_sync_conflicts")
     .select(
-      "id,appointment_id,kind,proposed_starts_at,proposed_ends_at,observed_starts_at,observed_ends_at,detected_at,appointments!google_calendar_sync_conflicts_appointment_id_fkey(contacts!appointments_contact_id_fkey(name))",
+      "id,appointment_id,kind,proposed_starts_at,proposed_ends_at,observed_starts_at,observed_ends_at,detected_at,appointments!google_calendar_sync_conflicts_appointment_id_fkey(google_calendar_imported,contacts!appointments_contact_id_fkey(name))",
     )
     .eq("status", "pending")
     .order("detected_at", { ascending: false })
@@ -578,8 +579,14 @@ export async function loadCalendarConflicts(
       observed_ends_at: string | null;
       detected_at: string;
       appointments:
-        | { contacts: { name: string } | Array<{ name: string }> | null }
-        | Array<{ contacts: { name: string } | Array<{ name: string }> | null }>
+        | {
+            google_calendar_imported: boolean;
+            contacts: { name: string } | Array<{ name: string }> | null;
+          }
+        | Array<{
+            google_calendar_imported: boolean;
+            contacts: { name: string } | Array<{ name: string }> | null;
+          }>
         | null;
     };
     const appointment = Array.isArray(row.appointments)
@@ -591,6 +598,8 @@ export async function loadCalendarConflicts(
     return {
       id: row.id,
       appointmentId: row.appointment_id,
+      // Missing ownership information must not offer a Google restore action.
+      imported: appointment?.google_calendar_imported !== false,
       kind: row.kind,
       proposedStartsAt: row.proposed_starts_at,
       proposedEndsAt: row.proposed_ends_at,

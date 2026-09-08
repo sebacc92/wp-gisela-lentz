@@ -219,7 +219,7 @@ test("reconnect_required conserva la acción de desconexión para cambiar de cue
   assert.match(page, /:\s*"Desconectar"/);
 });
 
-test("metadata_changed sólo permite restaurar desde la agenda", () => {
+test("metadata_changed administrado permite restaurar; importado exige revisión separada", () => {
   const page = source("src/routes/app/settings/index.tsx");
   const conflictsStart = page.indexOf('class="calendar-conflicts"');
   const conflictsEnd = page.indexOf("{state.isAdmin && (", conflictsStart);
@@ -229,6 +229,8 @@ test("metadata_changed sólo permite restaurar desde la agenda", () => {
   assert.match(conflicts, /conflict\.kind === "metadata_changed"/);
   assert.match(conflicts, /Se modificaron datos del evento en Google/);
   assert.match(conflicts, /Restaurar desde la agenda/);
+  assert.match(conflicts, /\{!conflict\.imported && \(/);
+  assert.match(conflicts, /Revisar cambio/);
   assert.match(
     conflicts,
     /\{conflict\.kind !== "metadata_changed" && \(\s*<button/,

@@ -24,6 +24,11 @@ import {
   type CalendarImportPreview,
 } from "~/lib/google-calendar-import-preview";
 import {
+  describeCalendarConflictReviewBlock,
+  parseCalendarConflictReview,
+  type CalendarConflictReview,
+} from "~/lib/google-calendar-conflict-review";
+import {
   canRunManualGoogleCalendarSync,
   googleCalendarSyncStatus,
   type GoogleCalendarSyncStatus,
@@ -382,7 +387,9 @@ export default component$(() => {
       | "select-calendar"
       | "cancel-selection",
     resolving: "",
-    resolvingAction: "" as "" | "reject" | "apply",
+    resolvingAction: "" as "" | "reject" | "apply" | "review" | "accept-title",
+    conflictReview: null as CalendarConflictReview | null,
+    conflictReviewConfirmed: false,
     message:
       googleResult === "selection_required"
         ? GOOGLE_CALENDAR_SELECTION_REQUIRED_MESSAGE
@@ -545,6 +552,8 @@ export default component$(() => {
   });
 
   const loadGoogleCalendarStatus = $(async (): Promise<boolean> => {
+    googleCalendar.conflictReview = null;
+    googleCalendar.conflictReviewConfirmed = false;
     googleCalendar.loading = true;
     googleCalendar.error = false;
     try {
@@ -628,6 +637,97 @@ export default component$(() => {
       return false;
     } finally {
       googleCalendar.loading = false;
+    }
+  });
+
+  const reviewImportedCalendarConflict = $(async (conflictId: string) => {
+    if (
+      !state.isAdmin ||
+      googleCalendar.loading ||
+      Boolean(googleCalendar.action) ||
+      Boolean(googleCalendar.resolving) ||
+      !googleCalendar.conflicts.some(
+        (item) =>
+          item.id === conflictId &&
+          item.imported &&
+          item.kind === "metadata_changed",
+      )
+    )
+      return;
+    googleCalendar.resolving = conflictId;
+    googleCalendar.resolvingAction = "review";
+    googleCalendar.conflictReview = null;
+    googleCalendar.conflictReviewConfirmed = false;
+    googleCalendar.error = false;
+    googleCalendar.message = "";
+    try {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "google-calendar-conflict-review",
+        { body: { action: "review", conflictId } },
+      );
+      const review = parseCalendarConflictReview(data, conflictId);
+      if (error || !review) throw new Error("CALENDAR_CONFLICT_REVIEW_FAILED");
+      googleCalendar.conflictReview = review;
+    } catch {
+      const refreshed = await loadGoogleCalendarStatus();
+      googleCalendar.error = true;
+      googleCalendar.message = refreshed
+        ? "No pudimos revisar el cambio. No aceptamos nada: volvé a tocar «Revisar cambio» para intentarlo nuevamente."
+        : "No pudimos revisar el cambio ni actualizar el estado. No aceptamos nada: recargá esta sección antes de continuar.";
+    } finally {
+      googleCalendar.resolving = "";
+      googleCalendar.resolvingAction = "";
+    }
+  });
+
+  const acceptImportedCalendarTitle = $(async (conflictId: string) => {
+    const review = googleCalendar.conflictReview;
+    if (
+      !state.isAdmin ||
+      googleCalendar.loading ||
+      Boolean(googleCalendar.action) ||
+      Boolean(googleCalendar.resolving) ||
+      !googleCalendar.conflictReviewConfirmed ||
+      !review ||
+      review.conflictId !== conflictId ||
+      !review.canAcceptTitle ||
+      !review.reviewToken
+    )
+      return;
+    googleCalendar.resolving = conflictId;
+    googleCalendar.resolvingAction = "accept-title";
+    googleCalendar.error = false;
+    googleCalendar.message = "";
+    // An uncertain response must require a fresh review, never token reuse.
+    googleCalendar.conflictReview = null;
+    googleCalendar.conflictReviewConfirmed = false;
+    try {
+      const { data, error } = await getSupabaseClient().functions.invoke(
+        "google-calendar-conflict-review",
+        {
+          body: {
+            action: "accept_title",
+            conflictId,
+            reviewToken: review.reviewToken,
+          },
+        },
+      );
+      if (error || data?.resolved !== true)
+        throw new Error("CALENDAR_CONFLICT_ACCEPT_FAILED");
+      const refreshed = await loadGoogleCalendarStatus();
+      googleCalendar.error = !refreshed;
+      googleCalendar.message = refreshed
+        ? "Aceptamos el texto de Google. No cambiamos el paciente ni el horario y no escribimos en Google Calendar. Aceptar el texto no registra pagos ni confirma una seña."
+        : "La aceptación se guardó, pero no pudimos actualizar la vista. Recargá esta sección antes de continuar.";
+    } catch {
+      const refreshed = await loadGoogleCalendarStatus();
+      googleCalendar.error = true;
+      googleCalendar.message = refreshed
+        ? "No pudimos confirmar la aceptación. Revisá el estado; si el cambio sigue pendiente, tocá «Revisar cambio» otra vez antes de decidir."
+        : "No pudimos confirmar la aceptación ni actualizar el estado. Recargá esta sección antes de continuar.";
+    } finally {
+      googleCalendar.resolving = "";
+      googleCalendar.resolvingAction = "";
     }
   });
 
@@ -2708,88 +2808,129 @@ export default component$(() => {
                                       "cancellation_requested"
                                         ? "Se borró el evento en Google."
                                         : conflict.kind === "metadata_changed"
-                                          ? "Se modificaron datos del evento en Google. El turno en la agenda no cambió."
+                                          ? conflict.imported
+                                            ? "Cambió el texto o algún dato del evento importado de Google. Revisá la comparación desde este panel; el turno no cambió."
+                                            : "Se modificaron datos del evento en Google. El turno en la agenda no cambió."
                                           : `Se movió al ${formatLastCalendarSync(
                                               conflict.proposedStartsAt ?? "",
                                             )}.`}
                                     </span>
                                   </div>
                                   <div class="calendar-conflict-actions">
-                                    <button
-                                      class="secondary-button"
-                                      type="button"
-                                      disabled={
-                                        !state.isAdmin ||
-                                        Boolean(googleCalendar.resolving) ||
-                                        Boolean(googleCalendar.action)
-                                      }
-                                      onClick$={async () => {
-                                        if (
+                                    {conflict.imported &&
+                                      conflict.kind === "metadata_changed" &&
+                                      state.isAdmin && (
+                                        <button
+                                          class="secondary-button"
+                                          type="button"
+                                          disabled={
+                                            googleCalendar.loading ||
+                                            Boolean(googleCalendar.resolving) ||
+                                            Boolean(googleCalendar.action)
+                                          }
+                                          onClick$={() =>
+                                            reviewImportedCalendarConflict(
+                                              conflict.id,
+                                            )
+                                          }
+                                        >
+                                          {googleCalendar.resolving ===
+                                            conflict.id &&
+                                          googleCalendar.resolvingAction ===
+                                            "review"
+                                            ? "Revisando…"
+                                            : googleCalendar.resolving ===
+                                                  conflict.id &&
+                                                googleCalendar.resolvingAction ===
+                                                  "accept-title"
+                                              ? "Aceptando…"
+                                              : googleCalendar.conflictReview
+                                                    ?.conflictId === conflict.id
+                                                ? "Volver a revisar"
+                                                : "Revisar cambio"}
+                                        </button>
+                                      )}
+                                    {!conflict.imported && (
+                                      <button
+                                        class="secondary-button"
+                                        type="button"
+                                        disabled={
                                           !state.isAdmin ||
                                           Boolean(googleCalendar.resolving) ||
                                           Boolean(googleCalendar.action)
-                                        ) {
-                                          return;
                                         }
-                                        googleCalendar.resolving = conflict.id;
-                                        googleCalendar.resolvingAction =
-                                          "reject";
-                                        googleCalendar.error = false;
-                                        googleCalendar.message = "";
-                                        try {
-                                          const { error } =
-                                            await getSupabaseClient().rpc(
-                                              "reject_google_calendar_conflict",
-                                              { p_conflict_id: conflict.id },
-                                            );
+                                        onClick$={async () => {
                                           if (
-                                            error?.message.includes(
-                                              "CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY",
-                                            )
+                                            !state.isAdmin ||
+                                            conflict.imported ||
+                                            Boolean(googleCalendar.resolving) ||
+                                            Boolean(googleCalendar.action)
                                           ) {
-                                            await loadGoogleCalendarStatus();
-                                            googleCalendar.error = true;
-                                            googleCalendar.message =
-                                              "Este turno viene de un evento creado en Google Calendar. Para restaurarlo o corregirlo, editá el evento original en Google y sincronizá la agenda.";
                                             return;
                                           }
-                                          if (error) throw error;
+                                          googleCalendar.resolving =
+                                            conflict.id;
+                                          googleCalendar.resolvingAction =
+                                            "reject";
+                                          googleCalendar.error = false;
+                                          googleCalendar.message = "";
+                                          try {
+                                            const { error } =
+                                              await getSupabaseClient().rpc(
+                                                "reject_google_calendar_conflict",
+                                                { p_conflict_id: conflict.id },
+                                              );
+                                            if (
+                                              error?.message.includes(
+                                                "CALENDAR_IMPORTED_APPOINTMENT_READ_ONLY",
+                                              )
+                                            ) {
+                                              await loadGoogleCalendarStatus();
+                                              googleCalendar.error = true;
+                                              googleCalendar.message =
+                                                "Este turno viene de un evento creado en Google Calendar. Para restaurarlo o corregirlo, editá el evento original en Google y sincronizá la agenda.";
+                                              return;
+                                            }
+                                            if (error) throw error;
 
-                                          googleCalendar.conflicts =
-                                            googleCalendar.conflicts.filter(
-                                              (item) => item.id !== conflict.id,
-                                            );
-                                          googleCalendar.conflictCount =
-                                            Math.max(
-                                              0,
-                                              googleCalendar.conflictCount - 1,
-                                            );
-                                          const refreshed =
-                                            await loadGoogleCalendarStatus();
-                                          googleCalendar.error = !refreshed;
-                                          googleCalendar.message = refreshed
-                                            ? "Dejamos el turno como está acá y lo vamos a restaurar en Google."
-                                            : "La decisión se guardó, pero no pudimos actualizar la vista. Recargá esta sección antes de continuar.";
-                                        } catch {
-                                          const refreshed =
-                                            await loadGoogleCalendarStatus();
-                                          googleCalendar.error = true;
-                                          googleCalendar.message = refreshed
-                                            ? "No pudimos confirmar si la decisión se guardó. Revisá el estado antes de volver a intentar."
-                                            : "No pudimos confirmar si la decisión se guardó ni recargar el estado. Recargá esta sección antes de volver a intentar.";
-                                        } finally {
-                                          googleCalendar.resolving = "";
-                                          googleCalendar.resolvingAction = "";
-                                        }
-                                      }}
-                                    >
-                                      {googleCalendar.resolving ===
-                                        conflict.id &&
-                                      googleCalendar.resolvingAction ===
-                                        "reject"
-                                        ? "Guardando…"
-                                        : "Restaurar desde la agenda"}
-                                    </button>
+                                            googleCalendar.conflicts =
+                                              googleCalendar.conflicts.filter(
+                                                (item) =>
+                                                  item.id !== conflict.id,
+                                              );
+                                            googleCalendar.conflictCount =
+                                              Math.max(
+                                                0,
+                                                googleCalendar.conflictCount -
+                                                  1,
+                                              );
+                                            const refreshed =
+                                              await loadGoogleCalendarStatus();
+                                            googleCalendar.error = !refreshed;
+                                            googleCalendar.message = refreshed
+                                              ? "Dejamos el turno como está acá y lo vamos a restaurar en Google."
+                                              : "La decisión se guardó, pero no pudimos actualizar la vista. Recargá esta sección antes de continuar.";
+                                          } catch {
+                                            const refreshed =
+                                              await loadGoogleCalendarStatus();
+                                            googleCalendar.error = true;
+                                            googleCalendar.message = refreshed
+                                              ? "No pudimos confirmar si la decisión se guardó. Revisá el estado antes de volver a intentar."
+                                              : "No pudimos confirmar si la decisión se guardó ni recargar el estado. Recargá esta sección antes de volver a intentar.";
+                                          } finally {
+                                            googleCalendar.resolving = "";
+                                            googleCalendar.resolvingAction = "";
+                                          }
+                                        }}
+                                      >
+                                        {googleCalendar.resolving ===
+                                          conflict.id &&
+                                        googleCalendar.resolvingAction ===
+                                          "reject"
+                                          ? "Guardando…"
+                                          : "Restaurar desde la agenda"}
+                                      </button>
+                                    )}
                                     {conflict.kind !== "metadata_changed" && (
                                       <button
                                         class="primary-button"
@@ -2870,6 +3011,135 @@ export default component$(() => {
                                       </button>
                                     )}
                                   </div>
+                                  {state.isAdmin &&
+                                    conflict.imported &&
+                                    googleCalendar.conflictReview
+                                      ?.conflictId === conflict.id && (
+                                      <section
+                                        class="calendar-conflict-review"
+                                        aria-label="Comparación del texto del evento"
+                                      >
+                                        <h4>
+                                          Revisá el cambio de{" "}
+                                          {
+                                            googleCalendar.conflictReview
+                                              .patientName
+                                          }
+                                        </h4>
+                                        <div class="calendar-conflict-comparison">
+                                          <div>
+                                            <strong>
+                                              Texto guardado al importar
+                                            </strong>
+                                            <p>
+                                              {
+                                                googleCalendar.conflictReview
+                                                  .local.title
+                                              }
+                                            </p>
+                                            <span>
+                                              Desde{" "}
+                                              {formatLastCalendarSync(
+                                                googleCalendar.conflictReview
+                                                  .local.startsAt,
+                                              )}
+                                              {" · Hasta "}
+                                              {formatLastCalendarSync(
+                                                googleCalendar.conflictReview
+                                                  .local.endsAt,
+                                              )}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <strong>
+                                              Texto actual en Google
+                                            </strong>
+                                            <p>
+                                              {googleCalendar.conflictReview
+                                                .remote.title || "Sin título"}
+                                            </p>
+                                            <span>
+                                              {googleCalendar.conflictReview
+                                                .remote.startsAt &&
+                                              googleCalendar.conflictReview
+                                                .remote.endsAt
+                                                ? `Desde ${formatLastCalendarSync(googleCalendar.conflictReview.remote.startsAt)} · Hasta ${formatLastCalendarSync(googleCalendar.conflictReview.remote.endsAt)}`
+                                                : "Horario no disponible en Google"}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        {googleCalendar.conflictReview
+                                          .canAcceptTitle &&
+                                        googleCalendar.conflictReview
+                                          .reviewToken ? (
+                                          <>
+                                            <p>
+                                              Podés aceptar este texto desde el
+                                              panel. No cambia el paciente, la
+                                              cobertura ni el horario del turno
+                                              y no escribe en Google Calendar.
+                                              Aceptar el texto no registra pagos
+                                              ni confirma una seña.
+                                            </p>
+                                            <label class="calendar-conflict-confirmation">
+                                              <input
+                                                type="checkbox"
+                                                checked={
+                                                  googleCalendar.conflictReviewConfirmed
+                                                }
+                                                disabled={
+                                                  googleCalendar.loading ||
+                                                  Boolean(
+                                                    googleCalendar.resolving,
+                                                  ) ||
+                                                  Boolean(googleCalendar.action)
+                                                }
+                                                onChange$={(_, element) => {
+                                                  googleCalendar.conflictReviewConfirmed =
+                                                    element.checked;
+                                                }}
+                                              />
+                                              <span>
+                                                Revisé ambos textos y confirmo
+                                                que corresponden al mismo
+                                                paciente y turno. Entiendo que
+                                                aceptar el texto no registra
+                                                pagos ni confirma una seña.
+                                              </span>
+                                            </label>
+                                            <button
+                                              class="primary-button"
+                                              type="button"
+                                              disabled={
+                                                !googleCalendar.conflictReviewConfirmed ||
+                                                googleCalendar.loading ||
+                                                Boolean(
+                                                  googleCalendar.resolving,
+                                                ) ||
+                                                Boolean(googleCalendar.action)
+                                              }
+                                              onClick$={() =>
+                                                acceptImportedCalendarTitle(
+                                                  conflict.id,
+                                                )
+                                              }
+                                            >
+                                              Aceptar texto de Google
+                                            </button>
+                                          </>
+                                        ) : (
+                                          <p
+                                            class="calendar-conflict-review-blocked"
+                                            role="status"
+                                          >
+                                            {describeCalendarConflictReviewBlock(
+                                              googleCalendar.conflictReview
+                                                .reason,
+                                            )}
+                                          </p>
+                                        )}
+                                      </section>
+                                    )}
                                 </li>
                               ))}
                             </ul>

@@ -429,6 +429,9 @@ verify_jwt = false
 [functions.google-calendar-status]
 verify_jwt = false
 
+[functions.google-calendar-conflict-review]
+verify_jwt = false
+
 [functions.google-calendar-disconnect]
 verify_jwt = false
 

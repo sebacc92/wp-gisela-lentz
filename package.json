@@ -41,7 +41,7 @@
     "test:cloudflare:smoke:production": "node scripts/test-cloudflare-smoke.mjs --config wrangler.jsonc --label production",
     "test:cloudflare:smoke:staging": "node scripts/test-cloudflare-smoke.mjs --config wrangler.staging.jsonc --label staging",
     "test:automation": "pnpm run build.types:functions && node --test supabase/functions/_shared/*.test.ts supabase/functions/process-calendar-sync/inbound-policy.test.ts supabase/functions/process-calendar-sync/patient-import.test.ts supabase/functions/process-calendar-sync/sync-policy.test.ts supabase/functions/process-reminders/*.test.ts src/lib/*.test.ts && pnpm run test:functions",
-    "test:functions": "deno test --no-check supabase/functions/google-calendar-disconnect/index.test.ts supabase/functions/google-calendar-oauth-callback/index.test.ts supabase/functions/google-calendar-selection/index.test.ts supabase/functions/google-calendar-status/index.test.ts supabase/functions/process-calendar-sync/orchestration.test.ts",
+    "test:functions": "deno test --no-check supabase/functions/google-calendar-disconnect/index.test.ts supabase/functions/google-calendar-oauth-callback/index.test.ts supabase/functions/google-calendar-selection/index.test.ts supabase/functions/google-calendar-status/index.test.ts supabase/functions/google-calendar-conflict-review/index.test.ts supabase/functions/process-calendar-sync/orchestration.test.ts",
     "qwik": "qwik"
   },
   "devDependencies": {
