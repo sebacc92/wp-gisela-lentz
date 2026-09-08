@@ -36,7 +36,7 @@
     "preview:cloudflare": "node scripts/run-cloudflare-command.mjs preview",
     "start": "vite --open --mode ssr",
     "test:cloudflare": "pnpm run build:cloudflare && pnpm run test:cloudflare:config && pnpm run test:cloudflare:smoke:production && pnpm run test:cloudflare:smoke:staging",
-    "test:cloudflare:config": "node --test scripts/cloudflare-config.test.mjs && node scripts/check-cloudflare-config.mjs",
+    "test:cloudflare:config": "node --test scripts/cloudflare-config.test.mjs scripts/check-public-build-env.test.mjs && node scripts/check-cloudflare-config.mjs",
     "test:cloudflare:remote": "node scripts/test-cloudflare-remote.mjs",
     "test:cloudflare:smoke:production": "node scripts/test-cloudflare-smoke.mjs --config wrangler.jsonc --label production",
     "test:cloudflare:smoke:staging": "node scripts/test-cloudflare-smoke.mjs --config wrangler.staging.jsonc --label staging",

@@ -8,6 +8,10 @@ import {
 } from "../_shared/orthodontic-booking.ts";
 import { loadOwnerAgenda } from "../_shared/owner-agenda.ts";
 import {
+  resolveOwnerPatientLookup,
+  type OwnerPatientChoice,
+} from "../_shared/owner-patient-lookup.ts";
+import {
   ACCEPTED_COVERAGE_MESSAGE,
   PATIENT_COVERAGE_OPTIONS,
   PATIENT_PROFILE_PROMPTS,
@@ -102,9 +106,7 @@ import {
 import {
   OWNER_HELP_MESSAGE,
   detectOwnerRequest,
-  formatOwnerPatient,
   verifiedOwnerPhone,
-  OWNER_TIMEZONE,
 } from "../_shared/owner-access.ts";
 import { createServiceClient } from "../_shared/supabase.ts";
 import { constantTimeEqual } from "../_shared/whatsapp-webhook.ts";
@@ -473,6 +475,7 @@ interface AutomationSlot {
 }
 
 interface AutomationContext {
+  ownerPatientChoice?: OwnerPatientChoice;
   invalidAttempts?: number;
   professionalId?: string;
   professionalName?: string;
@@ -660,10 +663,11 @@ Deno.serve(async (request) => {
     if (!Number.isFinite(executionNow.getTime())) {
       throw new Error("AUTOMATION_EXECUTION_SNAPSHOT_INVALID");
     }
-    const refreshCalendarAvailability = () =>
+    const refreshCalendarAvailability = (signal?: AbortSignal) =>
       refreshCalendarAvailabilityBeforeBooking({
         projectUrl: Deno.env.get("SUPABASE_URL"),
         cronSecret: Deno.env.get("GOOGLE_CALENDAR_CRON_SECRET"),
+        signal,
       });
     const priorEffectResult = await client
       .from("whatsapp_automation_effects")
@@ -1151,11 +1155,12 @@ Deno.serve(async (request) => {
 
     const verifySavedCalendarProjection = async (appointmentId: string) => {
       const synced = await ensureAppointmentCalendarProjection({
-        readProjection: async () => {
-          const { data, error } = await client.rpc(
-            "appointment_google_calendar_projection",
-            { p_appointment_id: appointmentId },
-          );
+        readProjection: async (signal) => {
+          const { data, error } = await client
+            .rpc("appointment_google_calendar_projection", {
+              p_appointment_id: appointmentId,
+            })
+            .abortSignal(signal);
           if (error) throw error;
           return data;
         },
@@ -1168,7 +1173,7 @@ Deno.serve(async (request) => {
         await handoff(
           "CALENDAR_PROJECTION_PENDING",
           { appointmentId },
-          "El turno quedó guardado en el sistema, pero falta verificarlo en Google Calendar. La secretaria lo va a revisar antes de confirmártelo.",
+          "Todavía no pudimos confirmar tu turno. Vamos a revisar tu solicitud y te respondemos por este chat.",
         );
       }
       return synced;
@@ -1415,67 +1420,50 @@ Deno.serve(async (request) => {
       return true;
     };
 
-    // El número personal autorizado consulta su propia agenda: nunca entra al
-    // flujo de reserva ni recibe el menú de pacientes.
+    // Los números autorizados consultan la agenda del consultorio: nunca entran al
+    // flujo de reserva ni reciben el menú de pacientes.
     const ownerPhone = verifiedOwnerPhone(metadata);
     if (ownerPhone !== null && ownerPhone === contact.phone_e164) {
-      const requested = detectOwnerRequest(inboundBody);
+      const ownerQueryNow = new Date();
+      const requested = detectOwnerRequest(inboundBody, ownerQueryNow);
       let reply = OWNER_HELP_MESSAGE;
+      let pending: OwnerPatientChoice | null = null;
+      let ownerRequestKind = requested?.kind ?? "help";
 
       if (requested?.kind === "agenda") {
-        reply = await loadOwnerAgenda({ client, day: requested.day });
-      } else if (requested?.kind === "patient") {
-        const { data, error } = await client
-          .from("contacts")
-          .select("id,name,phone_e164,coverage")
-          .ilike("name", `%${requested.query.replace(/[\\%_]/g, "\\$&")}%`)
-          .limit(9);
-        if (error) throw error;
-
-        const matches = await Promise.all(
-          (data ?? []).map(async (row) => {
-            const { data: next, error: nextError } = await client
-              .from("appointments")
-              .select("starts_at,coverage,deposit_status")
-              .eq("contact_id", row.id)
-              .gte("starts_at", new Date().toISOString())
-              .in("status", ["scheduled", "confirmed"])
-              .or(
-                `status.eq.confirmed,deposit_status.not.in.(pending,proof_received),hold_expires_at.gt.${new Date().toISOString()}`,
-              )
-              .order("starts_at")
-              .limit(1)
-              .maybeSingle();
-            if (nextError) throw nextError;
-            return {
-              name: row.name as string,
-              phone: (row.phone_e164 as string) ?? null,
-              coverage: (row.coverage as string) ?? null,
-              notes: null,
-              nextAppointment: next
-                ? {
-                    startsAt: next.starts_at as string,
-                    patientName: row.name as string,
-                    patientPhone: (row.phone_e164 as string) ?? null,
-                    coverage: (next.coverage as string) ?? null,
-                    service: null,
-                    depositStatus: (next.deposit_status as string) ?? null,
-                  }
-                : null,
-            };
-          }),
-        );
-        reply = formatOwnerPatient({
-          matches,
-          query: requested.query,
-          timezone: OWNER_TIMEZONE,
+        reply = await loadOwnerAgenda({
+          client,
+          day: requested.day,
+          now: ownerQueryNow,
         });
+      } else {
+        const lookup = await resolveOwnerPatientLookup({
+          client,
+          body: inboundBody,
+          query: requested?.kind === "patient" ? requested.query : undefined,
+          pending: session.context.ownerPatientChoice,
+          ownerPhone,
+          conversationId: conversation.id,
+          now: ownerQueryNow,
+        });
+        if (lookup) {
+          reply = lookup.reply;
+          pending = lookup.pending;
+          ownerRequestKind = "patient";
+        }
       }
 
-      await send(
-        textPayload(reply),
+      // Preserve the exact options sent and their IDs across execution retries.
+      // Otherwise a changed directory could make "2" select a different person.
+      const answer = await durableDecision("owner_private_reply", {
         reply,
-        { owner_request: requested?.kind ?? "help" },
+        pending,
+        request: ownerRequestKind,
+      });
+      await send(
+        textPayload(answer.reply),
+        answer.reply,
+        { owner_request: answer.request },
         "owner_access",
       );
       // Cada respuesta con datos de pacientes queda registrada.
@@ -1483,9 +1471,13 @@ Deno.serve(async (request) => {
         action: "whatsapp.owner_private_answer",
         entity_type: "conversation",
         entity_id: conversation.id,
-        metadata: { request: requested?.kind ?? "help" },
+        metadata: { request: answer.request },
       });
-      await saveSession("idle");
+      await saveSessionAt(
+        "idle",
+        answer.pending ? { ownerPatientChoice: answer.pending } : {},
+        answer.pending?.expiresAt ?? null,
+      );
       return await finish({ processed: true, state: "owner_access" });
     }
 

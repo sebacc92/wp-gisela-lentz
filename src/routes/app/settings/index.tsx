@@ -2664,7 +2664,10 @@ export default component$(() => {
 
                       {(googleCalendar.conflictCount > 0 ||
                         googleCalendar.conflicts.length > 0) && (
-                        <div class="calendar-conflicts">
+                        <div
+                          class="calendar-conflicts"
+                          id="google-calendar-conflicts"
+                        >
                           <h3>Cambios hechos en Google que hay que revisar</h3>
                           <p>
                             Alguien movió, borró o modificó en Google un turno

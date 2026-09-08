@@ -105,7 +105,7 @@ test("sólo un estado completo y automatizado se presenta al día", () => {
   }
 });
 
-test("errores y conflictos preceden a pendientes y automatización", () => {
+test("los conflictos explican que sincronizar no reemplaza la decisión humana", () => {
   const attention = parseGoogleCalendarOperationalStatus({
     ...readyResponse,
     pendingCount: 3,
@@ -113,7 +113,10 @@ test("errores y conflictos preceden a pendientes y automatización", () => {
     automationActive: false,
   });
   assert.ok(attention);
-  assert.equal(googleCalendarOperationalView(attention).kind, "attention");
+  const view = googleCalendarOperationalView(attention);
+  assert.equal(view.kind, "attention");
+  assert.match(view.title, /1 cambio para revisar/);
+  assert.match(view.detail, /Sincronizar no decide/);
 
   const pending = parseGoogleCalendarOperationalStatus({
     ...readyResponse,

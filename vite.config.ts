@@ -8,6 +8,7 @@ import { defineConfig, type UserConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 import pkg from "./package.json";
 import tailwindcss from "@tailwindcss/vite";
+import { publicBuildEnvGuard } from "./scripts/check-public-build-env.mjs";
 type PkgDep = Record<string, string>;
 const { dependencies = {}, devDependencies = {} } = pkg as any as {
   dependencies: PkgDep;
@@ -23,6 +24,7 @@ export default defineConfig(({ command, mode }): UserConfig => {
   return {
     envPrefix: ["VITE_", "PUBLIC_"],
     plugins: [
+      publicBuildEnvGuard(),
       qwikRouter(),
       qwikVite(),
       tsconfigPaths({ root: "." }),

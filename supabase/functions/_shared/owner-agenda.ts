@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
+import type { OwnerAgendaDay } from "./owner-agenda-period.ts";
 import {
   formatOwnerAgenda,
   ownerAgendaRange,
@@ -28,34 +29,47 @@ export function activeOwnerAppointment(
 
 export async function loadOwnerAgenda(args: {
   client: SupabaseClient;
-  day: "today" | "tomorrow" | "week";
+  day: OwnerAgendaDay;
   now?: Date;
 }): Promise<string> {
   const now = args.now ?? new Date();
   const range = ownerAgendaRange(args.day, now);
-  const [appointments, connection, blocks] = await Promise.all([
-    args.client
-      .from("appointments")
-      .select(
-        "starts_at,status,hold_expires_at,coverage,deposit_status,contacts!appointments_contact_id_fkey(name)",
+  let appointmentQuery = args.client
+    .from("appointments")
+    .select(
+      "starts_at,status,hold_expires_at,coverage,deposit_status,contacts!appointments_contact_id_fkey(name)",
+    )
+    .gte("starts_at", range.from)
+    .in("status", ["scheduled", "confirmed"])
+    .order("starts_at");
+  if (range.until) {
+    appointmentQuery = appointmentQuery.lt("starts_at", range.until);
+  } else {
+    // A future list starts now, has no arbitrary week cutoff, and never claims
+    // to include everything if the message/query limit is reached.
+    appointmentQuery = appointmentQuery
+      .or(
+        `status.eq.confirmed,deposit_status.not.in.(pending,proof_received),hold_expires_at.gt.${now.toISOString()}`,
       )
-      .gte("starts_at", range.from)
-      .lt("starts_at", range.until)
-      .in("status", ["scheduled", "confirmed"])
-      .order("starts_at"),
+      .limit(101);
+  }
+  const [appointments, connection, blocks] = await Promise.all([
+    appointmentQuery,
     args.client
       .from("google_calendar_connections")
       .select("status,connection_generation,last_sync_completed_at")
       .eq("id", true)
       .maybeSingle(),
-    args.client
-      .from("google_calendar_external_events")
-      .select("starts_at,ends_at,all_day,connection_generation")
-      .eq("kind", "block")
-      .eq("status", "active")
-      .lt("starts_at", range.until)
-      .gt("ends_at", range.from)
-      .order("starts_at"),
+    range.until
+      ? args.client
+          .from("google_calendar_external_events")
+          .select("starts_at,ends_at,all_day,connection_generation")
+          .eq("kind", "block")
+          .eq("status", "active")
+          .lt("starts_at", range.until)
+          .gt("ends_at", range.from)
+          .order("starts_at")
+      : Promise.resolve({ data: [], error: null }),
   ]);
   if (appointments.error || connection.error || blocks.error)
     throw new Error("OWNER_AGENDA_UNAVAILABLE");
@@ -67,8 +81,11 @@ export async function loadOwnerAgenda(args: {
     Date.parse(current.last_sync_completed_at) > now.getTime() - 5 * 60 * 1000;
   return formatOwnerAgenda({
     day: args.day,
+    now,
     timezone: OWNER_TIMEZONE,
+    hasMore: args.day === "upcoming" && (appointments.data?.length ?? 0) > 100,
     appointments: (appointments.data ?? [])
+      .slice(0, args.day === "upcoming" ? 100 : undefined)
       .filter((row) => activeOwnerAppointment(row, now))
       .map((row) => {
         const patient = Array.isArray(row.contacts)

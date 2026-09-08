@@ -260,10 +260,14 @@ test("la confirmación exenta conserva ventana, pausa humana, baja y kill switch
         },
       );
     }
+    const optedOutAt = Date.now();
     await assert.rejects(
       assertOutboundPolicy(
         policyInput("appointment_confirmation", projection, null, {
-          contact: { whatsapp_opt_out_at: new Date().toISOString() },
+          conversation: {
+            last_inbound_message_at: new Date(optedOutAt - 60000).toISOString(),
+          },
+          contact: { whatsapp_opt_out_at: new Date(optedOutAt).toISOString() },
         }),
       ),
       { message: "WHATSAPP_POLICY:CONTACT_OPTED_OUT" },

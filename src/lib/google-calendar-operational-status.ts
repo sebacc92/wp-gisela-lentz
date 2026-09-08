@@ -118,6 +118,16 @@ export function googleCalendarOperationalView(
     };
   }
 
+  if (status.conflictCount > 0) {
+    const plural = status.conflictCount === 1 ? "cambio" : "cambios";
+    return {
+      kind: "attention",
+      title: `Google Calendar tiene ${status.conflictCount} ${plural} para revisar`,
+      detail:
+        "Sincronizar no decide estos cambios. Revisalos y elegí qué versión conservar.",
+    };
+  }
+
   if (
     status.status === "reconnect" ||
     status.status === "reconnect_required" ||
@@ -125,7 +135,6 @@ export function googleCalendarOperationalView(
     status.status === "attention" ||
     status.inboundSyncState === "full_resync_required" ||
     status.failedCount > 0 ||
-    status.conflictCount > 0 ||
     status.hasSyncError
   ) {
     return {

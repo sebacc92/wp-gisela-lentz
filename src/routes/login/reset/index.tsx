@@ -14,19 +14,34 @@ import {
   passwordAuthCallback,
   validateNewPassword,
 } from "~/lib/password-recovery";
-import { getSupabaseClient } from "~/lib/supabase/client";
+import { getSupabaseClient, isSupabaseConfigured } from "~/lib/supabase/client";
 
-type RecoveryState = "checking" | "ready" | "invalid" | "saving";
+type RecoveryState =
+  | "checking"
+  | "ready"
+  | "invalid"
+  | "unavailable"
+  | "saving";
+const CONFIGURATION_ERROR_MESSAGE =
+  "El acceso no está disponible por un problema de configuración. Intentá nuevamente más tarde.";
 
 export default component$(() => {
   const navigate = useNavigate();
   const password = useSignal("");
   const confirmation = useSignal("");
   const visible = useSignal(false);
-  const state = useSignal<RecoveryState>("checking");
-  const error = useSignal("");
+  const configured = isSupabaseConfigured();
+  const state = useSignal<RecoveryState>(
+    configured ? "checking" : "unavailable",
+  );
+  const error = useSignal(configured ? "" : CONFIGURATION_ERROR_MESSAGE);
 
   useVisibleTask$(async ({ cleanup }) => {
+    if (!configured) {
+      error.value = CONFIGURATION_ERROR_MESSAGE;
+      state.value = "unavailable";
+      return;
+    }
     const callbackUrl = new URL(window.location.href);
     const authCallback = passwordAuthCallback(callbackUrl);
     if (authLinkHasError(callbackUrl) || !authCallback) {
@@ -34,45 +49,52 @@ export default component$(() => {
       return;
     }
 
-    const client = getSupabaseClient();
-    let acceptedAuthCallback = false;
-    const acceptCallbackSession = (accessToken: string): boolean => {
-      if (
-        state.value !== "checking" ||
-        accessToken !== authCallback.accessToken
-      ) {
-        return false;
-      }
+    try {
+      const client = getSupabaseClient();
+      let acceptedAuthCallback = false;
+      const acceptCallbackSession = (accessToken: string): boolean => {
+        if (
+          state.value !== "checking" ||
+          accessToken !== authCallback.accessToken
+        ) {
+          return false;
+        }
 
-      acceptedAuthCallback = true;
-      state.value = "ready";
-      window.history.replaceState(window.history.state, "", "/login/reset/");
-      return true;
-    };
-    const {
-      data: { subscription },
-    } = client.auth.onAuthStateChange((event, session) => {
-      const acceptedEvent =
-        (authCallback.action === "recovery" && event === "PASSWORD_RECOVERY") ||
-        (authCallback.action === "invite" && event === "SIGNED_IN");
-      if (
-        !acceptedEvent ||
-        !session ||
-        !acceptCallbackSession(session.access_token)
-      ) {
-        return;
-      }
-    });
-    cleanup(() => subscription.unsubscribe());
+        acceptedAuthCallback = true;
+        state.value = "ready";
+        window.history.replaceState(window.history.state, "", "/login/reset/");
+        return true;
+      };
+      const {
+        data: { subscription },
+      } = client.auth.onAuthStateChange((event, session) => {
+        const acceptedEvent =
+          (authCallback.action === "recovery" &&
+            event === "PASSWORD_RECOVERY") ||
+          (authCallback.action === "invite" && event === "SIGNED_IN");
+        if (
+          !acceptedEvent ||
+          !session ||
+          !acceptCallbackSession(session.access_token)
+        ) {
+          return;
+        }
+      });
+      cleanup(() => subscription.unsubscribe());
 
-    const {
-      data: { session },
-      error: sessionError,
-    } = await client.auth.getSession();
-    if (!sessionError && session) {
-      acceptCallbackSession(session.access_token);
+      const {
+        data: { session },
+        error: sessionError,
+      } = await client.auth.getSession();
+      if (!sessionError && session) {
+        acceptCallbackSession(session.access_token);
+      }
+      if (!acceptedAuthCallback) state.value = "invalid";
+    } catch {
+      error.value =
+        "No pudimos validar el enlace. Revisá la conexión y volvé a abrir el enlace del email.";
+      state.value = "unavailable";
     }
-    if (!acceptedAuthCallback) state.value = "invalid";
   });
 
   return (
@@ -100,11 +122,19 @@ export default component$(() => {
             <span class="small-spinner" aria-hidden="true" />
             <p>Validando el enlace…</p>
           </div>
-        ) : state.value === "invalid" ? (
+        ) : state.value === "invalid" || state.value === "unavailable" ? (
           <div class="login-recovery-state" role="alert">
             <Icon name="info" size={20} />
-            <strong>El enlace no es válido o ya venció.</strong>
-            <p>Pedí uno nuevo desde la pantalla de ingreso.</p>
+            <strong>
+              {state.value === "unavailable"
+                ? "No pudimos validar el acceso."
+                : "El enlace no es válido o ya venció."}
+            </strong>
+            <p>
+              {state.value === "unavailable"
+                ? error.value
+                : "Pedí uno nuevo desde la pantalla de ingreso."}
+            </p>
             <button
               class="primary-button login-submit"
               type="button"
@@ -119,6 +149,12 @@ export default component$(() => {
             aria-busy={state.value === "saving"}
             preventdefault:submit
             onSubmit$={async () => {
+              if (!configured) {
+                error.value = CONFIGURATION_ERROR_MESSAGE;
+                state.value = "unavailable";
+                return;
+              }
+              if (state.value !== "ready") return;
               error.value = validateNewPassword(
                 password.value,
                 confirmation.value,
@@ -126,20 +162,32 @@ export default component$(() => {
               if (error.value) return;
 
               state.value = "saving";
-              const { error: updateError } =
-                await getSupabaseClient().auth.updateUser({
-                  password: password.value,
-                });
-              if (updateError) {
+              try {
+                const { error: updateError } =
+                  await getSupabaseClient().auth.updateUser({
+                    password: password.value,
+                  });
+                if (updateError) {
+                  error.value =
+                    "No pudimos guardar la contraseña. Pedí un enlace nuevo e intentá otra vez.";
+                  return;
+                }
+              } catch {
                 error.value =
-                  "No pudimos guardar la contraseña. Pedí un enlace nuevo e intentá otra vez.";
-                state.value = "ready";
+                  "No pudimos guardar la contraseña. Revisá la conexión e intentá nuevamente.";
                 return;
+              } finally {
+                state.value = "ready";
               }
 
               password.value = "";
               confirmation.value = "";
-              await navigate("/app");
+              try {
+                await navigate("/app");
+              } catch {
+                error.value =
+                  "La contraseña se guardó, pero no pudimos abrir el panel. Volvé a ingresar con tu contraseña nueva.";
+              }
             }}
           >
             <label>
@@ -203,7 +251,7 @@ export default component$(() => {
             <button
               class="primary-button login-submit"
               type="submit"
-              disabled={state.value === "saving"}
+              disabled={!configured || state.value === "saving"}
             >
               {state.value === "saving" && (
                 <span class="button-spinner" aria-hidden="true" />

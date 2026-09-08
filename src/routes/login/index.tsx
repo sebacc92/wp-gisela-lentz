@@ -1,4 +1,4 @@
-import { component$, useSignal, useVisibleTask$ } from "@qwik.dev/core";
+import { $, component$, useSignal, useVisibleTask$ } from "@qwik.dev/core";
 import type { DocumentHead } from "@qwik.dev/router";
 import { useLocation, useNavigate } from "@qwik.dev/router";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
@@ -12,7 +12,25 @@ import {
   PASSWORD_RECOVERY_SENT_MESSAGE,
   passwordResetRedirectUrl,
 } from "~/lib/password-recovery";
-import { getSupabaseClient } from "~/lib/supabase/client";
+import { getSupabaseClient, isSupabaseConfigured } from "~/lib/supabase/client";
+import {
+  captchaOptions,
+  isCaptchaError,
+  loadTurnstile,
+  TURNSTILE_ACTION,
+  TURNSTILE_FAILED_MESSAGE,
+  TURNSTILE_PENDING_MESSAGE,
+  turnstileSitekey,
+} from "~/lib/turnstile";
+
+/** Sin sitekey configurado no hay widget ni token: el login sigue funcionando
+ * igual que antes. Es lo que mantiene vivo el desarrollo local mientras el
+ * CAPTCHA de Supabase todavía no está encendido. */
+const CAPTCHA_SITEKEY = turnstileSitekey(
+  import.meta.env.PUBLIC_TURNSTILE_SITEKEY,
+);
+const CONFIGURATION_ERROR_MESSAGE =
+  "El acceso no está disponible por un problema de configuración. Intentá nuevamente más tarde.";
 
 function safeLoginDestination(raw: string | null, currentUrl: URL): string {
   if (!raw || raw.includes("\\")) return "/app";
@@ -36,21 +54,78 @@ export default component$(() => {
   const loading = useSignal(false);
   const recoveryLoading = useSignal(false);
   const recoveryMessage = useSignal("");
-  const error = useSignal("");
+  const configured = isSupabaseConfigured();
+  const error = useSignal(configured ? "" : CONFIGURATION_ERROR_MESSAGE);
   const destination = safeLoginDestination(
     location.url.searchParams.get("next"),
     location.url,
   );
+  const captchaToken = useSignal("");
+  const captchaWidget = useSignal("");
+  const captchaSlot = useSignal<HTMLDivElement>();
+
+  useVisibleTask$(async ({ cleanup }) => {
+    if (!CAPTCHA_SITEKEY || !captchaSlot.value) return;
+    try {
+      await loadTurnstile();
+    } catch {
+      error.value = TURNSTILE_FAILED_MESSAGE;
+      return;
+    }
+    const widgetId = window.turnstile?.render(captchaSlot.value, {
+      sitekey: CAPTCHA_SITEKEY,
+      action: TURNSTILE_ACTION,
+      callback: (token: string) => {
+        captchaToken.value = token;
+      },
+      "expired-callback": () => {
+        captchaToken.value = "";
+      },
+      "error-callback": () => {
+        captchaToken.value = "";
+      },
+    });
+    captchaWidget.value = widgetId ?? "";
+    cleanup(() => {
+      if (widgetId) window.turnstile?.remove(widgetId);
+    });
+  });
+
+  // El token se gasta en cada intento. Sin reset, el segundo envío viaja con
+  // uno ya redimido y Supabase lo rechaza como si fuera un bot.
+  const resetCaptcha = $(() => {
+    captchaToken.value = "";
+    try {
+      if (captchaWidget.value) window.turnstile?.reset(captchaWidget.value);
+    } catch {
+      if (!error.value) error.value = TURNSTILE_FAILED_MESSAGE;
+    }
+  });
 
   useVisibleTask$(async () => {
+    if (!configured) {
+      error.value = CONFIGURATION_ERROR_MESSAGE;
+      return;
+    }
     if (location.url.searchParams.get("error") === "inactive") {
       error.value =
         "Tu acceso está inactivo. Consultá con la persona administradora.";
     }
-    const {
-      data: { session },
-    } = await getSupabaseClient().auth.getSession();
-    if (session) await navigate(destination);
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await getSupabaseClient().auth.getSession();
+      if (sessionError) {
+        error.value =
+          "No pudimos validar tu sesión. Revisá la conexión e intentá nuevamente.";
+        return;
+      }
+      if (session) await navigate(destination);
+    } catch {
+      error.value =
+        "No pudimos validar tu sesión. Revisá la conexión e intentá nuevamente.";
+    }
   });
 
   return (
@@ -77,24 +152,48 @@ export default component$(() => {
           aria-busy={loading.value || recoveryLoading.value}
           preventdefault:submit
           onSubmit$={async () => {
-            loading.value = true;
-            error.value = "";
-            const { error: signInError } =
-              await getSupabaseClient().auth.signInWithPassword({
-                email: email.value.trim(),
-                password: password.value,
-              });
-
-            if (signInError) {
-              error.value =
-                signInError.message === "Invalid login credentials"
-                  ? "El email o la contraseña no son correctos."
-                  : "No pudimos iniciar sesión. Intentá nuevamente.";
-              loading.value = false;
+            if (!configured) {
+              error.value = CONFIGURATION_ERROR_MESSAGE;
               return;
             }
+            if (loading.value || recoveryLoading.value) return;
+            if (CAPTCHA_SITEKEY && !captchaToken.value) {
+              error.value = TURNSTILE_PENDING_MESSAGE;
+              return;
+            }
+            loading.value = true;
+            error.value = "";
+            try {
+              const { error: signInError } =
+                await getSupabaseClient().auth.signInWithPassword({
+                  email: email.value.trim(),
+                  password: password.value,
+                  options: captchaOptions(captchaToken.value),
+                });
 
-            await navigate(destination);
+              if (signInError) {
+                error.value = isCaptchaError(signInError.message)
+                  ? TURNSTILE_FAILED_MESSAGE
+                  : signInError.message === "Invalid login credentials"
+                    ? "El email o la contraseña no son correctos."
+                    : "No pudimos iniciar sesión. Intentá nuevamente.";
+                return;
+              }
+            } catch {
+              error.value =
+                "No pudimos iniciar sesión. Revisá la conexión e intentá nuevamente.";
+              return;
+            } finally {
+              loading.value = false;
+              await resetCaptcha();
+            }
+
+            try {
+              await navigate(destination);
+            } catch {
+              error.value =
+                "Iniciaste sesión, pero no pudimos abrir el panel. Recargá la página para continuar.";
+            }
           }}
         >
           <label>
@@ -155,8 +254,13 @@ export default component$(() => {
           <button
             class="login-forgot-button"
             type="button"
-            disabled={loading.value || recoveryLoading.value}
+            disabled={!configured || loading.value || recoveryLoading.value}
             onClick$={async () => {
+              if (!configured) {
+                error.value = CONFIGURATION_ERROR_MESSAGE;
+                return;
+              }
+              if (loading.value || recoveryLoading.value) return;
               const normalizedEmail = email.value.trim();
               error.value = "";
               recoveryMessage.value = "";
@@ -166,28 +270,49 @@ export default component$(() => {
                 return;
               }
 
-              recoveryLoading.value = true;
-              const { error: recoveryError } =
-                await getSupabaseClient().auth.resetPasswordForEmail(
-                  normalizedEmail,
-                  {
-                    redirectTo: passwordResetRedirectUrl(location.url.origin),
-                  },
-                );
-              recoveryLoading.value = false;
-
-              if (recoveryError) {
-                error.value =
-                  "No pudimos enviar el enlace. Intentá nuevamente más tarde.";
+              if (CAPTCHA_SITEKEY && !captchaToken.value) {
+                error.value = TURNSTILE_PENDING_MESSAGE;
                 return;
               }
-              recoveryMessage.value = PASSWORD_RECOVERY_SENT_MESSAGE;
+
+              recoveryLoading.value = true;
+              try {
+                const { error: recoveryError } =
+                  await getSupabaseClient().auth.resetPasswordForEmail(
+                    normalizedEmail,
+                    {
+                      redirectTo: passwordResetRedirectUrl(location.url.origin),
+                      ...captchaOptions(captchaToken.value),
+                    },
+                  );
+
+                if (recoveryError) {
+                  error.value = isCaptchaError(recoveryError.message)
+                    ? TURNSTILE_FAILED_MESSAGE
+                    : "No pudimos enviar el enlace. Intentá nuevamente más tarde.";
+                  return;
+                }
+                recoveryMessage.value = PASSWORD_RECOVERY_SENT_MESSAGE;
+              } catch {
+                error.value =
+                  "No pudimos enviar el enlace. Revisá la conexión e intentá nuevamente.";
+              } finally {
+                recoveryLoading.value = false;
+                await resetCaptcha();
+              }
             }}
           >
             {recoveryLoading.value
               ? "Enviando enlace…"
               : "¿Olvidaste tu contraseña?"}
           </button>
+          {CAPTCHA_SITEKEY && (
+            <div
+              class="login-captcha"
+              ref={captchaSlot}
+              aria-label="Verificación de seguridad"
+            />
+          )}
           {error.value && (
             <p id="login-error" class="login-error" role="alert">
               {error.value}
@@ -201,7 +326,7 @@ export default component$(() => {
           <button
             class="primary-button login-submit"
             type="submit"
-            disabled={loading.value || recoveryLoading.value}
+            disabled={!configured || loading.value || recoveryLoading.value}
           >
             {loading.value && (
               <span class="button-spinner" aria-hidden="true" />

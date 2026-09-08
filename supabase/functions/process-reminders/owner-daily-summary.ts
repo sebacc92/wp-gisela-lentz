@@ -20,6 +20,25 @@ export interface OwnerSummaryResult {
   reason: string | null;
 }
 
+export interface OwnerSummaryRunResult extends OwnerSummaryResult {
+  /** Un resultado por teléfono autorizado, sin teléfonos: el número privado no
+   * viaja en la respuesta del cron ni en los logs. */
+  recipients: OwnerSummaryResult[];
+}
+
+interface OwnerSummaryLedgerRow {
+  id: string;
+  summary_date: string;
+  recipient_phone_e164: string;
+  status: string;
+  body: string;
+  inbound_message_id: string;
+  processing_started_at: string;
+  contact_id: string;
+  conversation_id: string;
+  attempts: number;
+}
+
 function enabledFromEnvironment(): boolean {
   return typeof Deno !== "undefined"
     ? Deno.env.get("WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED") === "true"
@@ -30,29 +49,59 @@ function enabledFromEnvironment(): boolean {
       ).process?.env?.WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED === "true";
 }
 
-/** One deterministic, private digest. It never uses message_templates and
- * cannot fall back to a paid message when the service window is closed. */
+/** Sólo se propagan códigos propios: el mensaje de un error de red o del
+ * cliente podría arrastrar una URL o un dato de la consulta. */
+function failureReason(error: unknown): string {
+  const code = error instanceof Error ? error.message : "";
+  return /^[A-Z][A-Z_]+$/.test(code) ? code : "OWNER_SUMMARY_FAILED";
+}
+
+function aggregate(results: OwnerSummaryResult[]): OwnerSummaryResult {
+  const failed = results.find((result) => result.status === "failed");
+  if (failed) return { status: failed.status, reason: failed.reason };
+  const sent = results.filter((result) => result.status === "sent");
+  if (!sent.length) return { status: "skipped", reason: results[0].reason };
+  return sent.length === results.length
+    ? { status: "sent", reason: null }
+    : { status: "sent", reason: "OWNER_SUMMARY_PARTIAL" };
+}
+
+/** One deterministic, private digest per authorized phone. It never uses
+ * message_templates and cannot fall back to a paid message when the service
+ * window is closed. */
 export async function processOwnerDailySummary(args: {
   client: SupabaseClient;
   now?: Date;
   enabled?: boolean;
   ownerNumbers?: Set<string>;
   send?: typeof sendAndRecordMessage;
-}): Promise<OwnerSummaryResult> {
+}): Promise<OwnerSummaryRunResult> {
   const { client } = args;
   const schedule = ownerSummarySchedule(args.now);
   if (
     !(args.enabled ?? enabledFromEnvironment()) ||
     !whatsappAutomationsEnabled()
   ) {
-    return { status: "skipped", reason: "OWNER_SUMMARY_DISABLED" };
+    return {
+      status: "skipped",
+      reason: "OWNER_SUMMARY_DISABLED",
+      recipients: [],
+    };
   }
   if (!schedule.due)
-    return { status: "skipped", reason: "OWNER_SUMMARY_NOT_DUE" };
+    return {
+      status: "skipped",
+      reason: "OWNER_SUMMARY_NOT_DUE",
+      recipients: [],
+    };
   const owners = args.ownerNumbers ?? ownerNumbersFromEnvironment();
-  if (owners.size !== 1)
-    return { status: "skipped", reason: "OWNER_NUMBER_NOT_CONFIGURED" };
-  const phone = [...owners][0];
+  if (!owners.size) {
+    return {
+      status: "skipped",
+      reason: "OWNER_NUMBER_NOT_CONFIGURED",
+      recipients: [],
+    };
+  }
   const settings = await client
     .from("app_settings")
     .select("automations_enabled")
@@ -60,13 +109,56 @@ export async function processOwnerDailySummary(args: {
     .single();
   if (settings.error) throw new Error("OWNER_SETTINGS_UNAVAILABLE");
   if (settings.data?.automations_enabled !== true) {
-    return { status: "skipped", reason: "AUTOMATIONS_DISABLED" };
+    return {
+      status: "skipped",
+      reason: "AUTOMATIONS_DISABLED",
+      recipients: [],
+    };
   }
 
+  // La agenda de mañana es la misma para todos: se arma una sola vez y recién
+  // cuando algún destinatario habilitado la va a recibir.
+  let agenda: Promise<string> | null = null;
+  const body = () =>
+    (agenda ??= loadOwnerAgenda({ client, day: "tomorrow", now: args.now }));
+
+  const results: OwnerSummaryResult[] = [];
+  // Orden estable: dos crones simultáneos reclaman los destinatarios en la
+  // misma secuencia, y el segundo encuentra cada fila ya tomada.
+  for (const phone of [...owners].sort()) {
+    results.push(
+      // Una falla de un destinatario no puede dejar sin agenda a los otros.
+      await summaryForRecipient({
+        client,
+        phone,
+        owners,
+        summaryDate: schedule.date,
+        body,
+        send: args.send,
+      }).catch((error) => {
+        const reason = failureReason(error);
+        console.error("owner-daily-summary", reason);
+        return { status: "failed" as const, reason };
+      }),
+    );
+  }
+  return { ...aggregate(results), recipients: results };
+}
+
+async function summaryForRecipient(args: {
+  client: SupabaseClient;
+  phone: string;
+  owners: Set<string>;
+  summaryDate: string;
+  body: () => Promise<string>;
+  send?: typeof sendAndRecordMessage;
+}): Promise<OwnerSummaryResult> {
+  const { client, phone, owners } = args;
   const existing = await client
     .from("whatsapp_owner_daily_summaries")
     .select("status")
-    .eq("summary_date", schedule.date)
+    .eq("summary_date", args.summaryDate)
+    .eq("recipient_phone_e164", phone)
     .maybeSingle();
   if (existing.error) throw new Error("OWNER_SUMMARY_LOOKUP_FAILED");
   if (existing.data && ["sent", "skipped"].includes(existing.data.status)) {
@@ -137,11 +229,10 @@ export async function processOwnerDailySummary(args: {
   }
 
   let body: string | null = null;
-  if (!skipReason) {
-    body = await loadOwnerAgenda({ client, day: "tomorrow", now: args.now });
-  }
+  if (!skipReason) body = await args.body();
 
   const claim = await client.rpc("claim_whatsapp_owner_daily_summary", {
+    p_recipient_phone: phone,
     p_contact_id: contact?.id ?? null,
     p_conversation_id: conversation?.id ?? null,
     p_inbound_message_id: inboundId,
@@ -149,17 +240,9 @@ export async function processOwnerDailySummary(args: {
     p_skip_reason: skipReason,
   });
   if (claim.error) throw new Error("OWNER_SUMMARY_CLAIM_FAILED");
-  const row = (Array.isArray(claim.data) ? claim.data[0] : claim.data) as {
-    id: string;
-    summary_date: string;
-    status: string;
-    body: string;
-    inbound_message_id: string;
-    processing_started_at: string;
-    contact_id: string;
-    conversation_id: string;
-    attempts: number;
-  } | null;
+  const row = (
+    Array.isArray(claim.data) ? claim.data[0] : claim.data
+  ) as OwnerSummaryLedgerRow | null;
   if (!row || row.status !== "processing") {
     return {
       status: "skipped",
@@ -173,7 +256,8 @@ export async function processOwnerDailySummary(args: {
     !conversation ||
     row.contact_id !== contact.id ||
     row.conversation_id !== conversation.id ||
-    row.summary_date !== schedule.date
+    row.recipient_phone_e164 !== phone ||
+    row.summary_date !== args.summaryDate
   ) {
     throw new Error("OWNER_SUMMARY_CONTEXT_CHANGED");
   }
@@ -187,7 +271,9 @@ export async function processOwnerDailySummary(args: {
       conversation,
       payload: textPayload(row.body),
       bodyPreview: row.body,
-      idempotencyKey: `owner-summary:${row.summary_date}`,
+      // La clave lleva la fila del ledger: un reintento no duplica y el
+      // resumen de un destinatario no deduplica contra el del otro.
+      idempotencyKey: `owner-summary:${row.summary_date}:${row.id}`,
       metadata: {
         source: "owner_daily_summary",
         inbound_message_id: row.inbound_message_id,

@@ -97,7 +97,7 @@ Deno.serve(async (request) => {
   // Una falla del resumen privado no interrumpe expiraciones ni otros avisos.
   const ownerSummary = await processOwnerDailySummary({ client }).catch(() => {
     console.error("process-reminders", "OWNER_SUMMARY_FAILED");
-    return { status: "failed", reason: "OWNER_SUMMARY_FAILED" };
+    return { status: "failed", reason: "OWNER_SUMMARY_FAILED", recipients: [] };
   });
 
   const holdExpirationMessage =

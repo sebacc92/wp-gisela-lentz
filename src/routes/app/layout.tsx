@@ -67,7 +67,11 @@ export default component$(() => {
       ]);
       const { data: profile, error: profileError } = profileResult;
 
-      if (profileError || !profile?.active) {
+      // Un fallo consultando el perfil no demuestra que el acceso se haya
+      // revocado: mantenemos el panel cerrado, pero conservamos la sesión.
+      if (profileError) throw profileError;
+
+      if (!profile?.active) {
         await client.auth.signOut();
         await navigate(inactiveLoginUrl);
         return;
@@ -97,6 +101,9 @@ export default component$(() => {
       <main class="auth-loading">
         <strong>No pudimos abrir la plataforma</strong>
         <p>{error.value}</p>
+        <button type="button" onClick$={() => window.location.reload()}>
+          Reintentar
+        </button>
         <button type="button" onClick$={() => navigate(loginUrl)}>
           Volver a ingresar
         </button>

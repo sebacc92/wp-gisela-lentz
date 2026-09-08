@@ -262,25 +262,55 @@ valores reales en la migración ni en esta guía.
 
 ### Resumen privado de Gisela: configuración separada
 
-1. Configurar en Edge Functions `WHATSAPP_OWNER_NUMBERS` con **el único teléfono
-   personal confirmado de Gisela**, formato `+549...`. No se completa por
-   deducción ni se usa el número comercial. La ausencia o más de un número
-   deshabilitan el acceso privado.
-2. Aplicar la migración `20260906040000_whatsapp_owner_daily_summary.sql` y
-   desplegar `whatsapp-webhook`, `whatsapp-automation` y `process-reminders` con
-   sus módulos compartidos. Un mensaje recibido antes de esta versión no tiene
-   la nueva evidencia: Gisela debe enviar uno nuevo desde su teléfono personal.
+1. Configurar en Edge Functions `WHATSAPP_OWNER_NUMBERS` con **los teléfonos
+   personales confirmados** que pueden ver la agenda, separados por coma y en
+   formato `+549...`: el de Gisela y, mientras dure un trabajo técnico, el de
+   quien la asiste. No se completa por deducción ni se usa el número comercial.
+   La ausencia, una entrada que no sea E.164 exacto o más de tres teléfonos
+   deshabilitan el acceso privado para todos. Cada número ve la agenda completa
+   con nombres de pacientes: agregar sólo con autorización expresa de la
+   profesional y quitar el número cuando termina el motivo.
+2. Aplicar las migraciones `20260906040000_whatsapp_owner_daily_summary.sql` y
+   `20260907130000_whatsapp_owner_summary_recipients.sql`, y desplegar
+   `whatsapp-webhook`, `whatsapp-automation` y `process-reminders` con sus
+   módulos compartidos. Un mensaje recibido antes de esta versión no tiene la
+   nueva evidencia: cada teléfono autorizado debe enviar uno nuevo desde su
+   propia línea.
 3. Habilitar `WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED=true`,
    `WHATSAPP_AUTOMATIONS_ENABLED=true` y el bot en la aplicación. El resumen
-   respeta test mode y su allowlist; durante una prueba sólo admite ese número.
+   respeta test mode y su allowlist: durante una prueba, cada teléfono
+   autorizado debe estar además en esa allowlist para recibirlo.
 4. Mantener el cron `process-reminders` cada cinco minutos con
    `REMINDER_CRON_SECRET`. El disparo de las 21:00 locales es 00:00 UTC del día
    siguiente. Los disparos 21:05 y 21:10 permiten reintentos; a las 21:15 se
    cierra. No hace falta activar plantillas ni recordatorios a pacientes.
-5. Gisela envía un mensaje de texto, por ejemplo “turnos de mañana”. Ese
-   mensaje abre su ventana de 24 h; escribir desde la app comercial o responder
-   desde el sistema a Gisela no la renueva. Si a las 21 no hay ventana, se omite
-   el resumen sin usar plantillas. `BAJA` cancela posteriores resúmenes.
+5. Cada autorizado envía un mensaje de texto desde su teléfono, por ejemplo
+   “turnos de mañana”. Ese mensaje abre **su** ventana de 24 h; escribir desde
+   la app comercial o responderle desde el sistema no la renueva, y la ventana
+   de un teléfono no habilita la del otro. Si a las 21 alguno no tiene ventana,
+   se omite su resumen sin usar plantillas y los demás salen igual. `BAJA`
+   cancela los resúmenes posteriores de quien la envía.
+
+Las consultas privadas entienden “próximos turnos”, días de semana, fechas como
+“turnos del 10/9” y “turnos de la semana que viene”, siempre en horario de
+Argentina. “Próximos turnos” busca desde ahora, agrupa por fecha y avisa si el
+listado no cabe completo; un período inválido o no soportado pide aclaración,
+sin sustituirlo por hoy. También acepta “pasame los datos de Ana Pérez” y
+“¿cuándo viene Ana Pérez?” para consultar datos administrativos y el próximo
+turno, sin exportar notas clínicas. Los horarios ocupados de Google se muestran
+resumidos en consultas por período, no en la lista abierta de próximos turnos.
+
+La búsqueda de pacientes ignora acentos y mayúsculas y compara palabras completas:
+“Matías Icardo” encuentra “Matias Icardo”, pero “Ana” no selecciona “Mariana”.
+También reconoce “¿Cuándo se atiende Matías Icardo?”. Si el nombre tiene un error
+pequeño, ofrece hasta cinco nombres parecidos y espera confirmación; sólo después
+consulta teléfono, cobertura y próximo turno. Se puede responder “sí” para una
+única sugerencia, el número de opción cuando hay varias, o “no” para empezar de
+nuevo. La selección queda vinculada al teléfono autorizado y a su conversación,
+vence a los diez minutos y no selecciona automáticamente fichas con nombres
+idénticos. El directorio de nombres se pagina sin cargar notas ni fichas completas;
+si supera 10.000 contactos la búsqueda falla explícitamente, no devuelve un
+resultado parcial como si fuera completo.
 
 El cron debe quedar creado en el proyecto de destino al desplegar. Si aún no
 existe, crear desde Supabase Dashboard un Cron HTTP para el endpoint
@@ -289,10 +319,12 @@ header `x-cron-secret` y URL/valor del secreto recuperados desde Vault. No pegar
 secretos reales en el código del job ni crear otro cron si ya hay uno equivalente.
 La revisión y los tests locales no crean ese job remoto ni envían WhatsApp reales.
 
-La bitácora de resultado está en `whatsapp_owner_daily_summaries` (sólo backend):
-`sent`, `skipped` o `failed`, con motivos como
+La bitácora de resultado está en `whatsapp_owner_daily_summaries` (sólo backend),
+con una fila por teléfono y día: `sent`, `skipped` o `failed`, con motivos como
 `CUSTOMER_SERVICE_WINDOW_CLOSED`, `OWNER_RECIPIENT_UNVERIFIED` o
-`CONTACT_OPTED_OUT`. `process-reminders` también devuelve `owner_summary`.
+`CONTACT_OPTED_OUT`. `process-reminders` devuelve `owner_summary` con el
+resultado agregado —`OWNER_SUMMARY_PARTIAL` si salió para unos y no para
+otros— y el detalle por destinatario en `recipients`, sin teléfonos.
 No incluye el teléfono ni los nombres de pacientes en logs de error.
 
 ## 8. Health y resolución simple

@@ -7,6 +7,12 @@ import { WhatsAppPolicyError } from "../_shared/whatsapp.ts";
 
 const NOW = Date.parse("2026-09-07T00:00:00Z");
 const PHONE = "+5491112345678";
+const SECOND = "+5491112345679";
+
+type SendArgs = Parameters<
+  NonNullable<Parameters<typeof processOwnerDailySummary>[0]["send"]>
+>[0];
+
 function setup(t: TestContext) {
   t.mock.timers.enable({ apis: ["Date"], now: NOW });
   const old = process.env.WHATSAPP_AUTOMATIONS_ENABLED;
@@ -17,18 +23,32 @@ function setup(t: TestContext) {
   });
 }
 
+function sent(outbound: SendArgs) {
+  return {
+    id: `sent-${outbound.contact.phone_e164}`,
+    whatsapp_message_id: "wamid.fake",
+    status: "sent" as const,
+    deduplicated: false,
+  };
+}
+
+/** Cada teléfono autorizado tiene su propio contacto, conversación, entrante
+ * verificado y fila del ledger: la maqueta no puede confundirlos entre sí. */
 function fake(
   input: {
     inboundAt?: string;
     optedOut?: boolean;
     paused?: boolean;
     priorBody?: string;
+    known?: string[];
   } = {},
 ) {
-  let ledger: Record<string, unknown> | null = null;
+  const known = input.known ?? [PHONE];
+  const ledger = new Map<string, Record<string, unknown>>();
   const calls: Array<{ table: string; filters: Array<[string, unknown]> }> = [];
   const claims: Array<Record<string, unknown>> = [];
   const lastInbound = input.inboundAt ?? "2026-09-06T23:00:00Z";
+  const phoneOf = (id: unknown) => String(id).split(":")[1];
   const client = {
     from(table: string) {
       assert.notEqual(
@@ -39,21 +59,30 @@ function fake(
       const trace = { table, filters: [] as Array<[string, unknown]> };
       calls.push(trace);
       let update: Record<string, unknown> | null = null;
+      const filter = (key: string) =>
+        trace.filters.find(([name]) => name === key)?.[1];
+      const ledgerKey = () =>
+        trace.filters.some(([name]) => name === "id")
+          ? phoneOf(filter("id"))
+          : String(filter("recipient_phone_e164"));
       const value = () => {
         if (table === "app_settings") return { automations_enabled: true };
-        if (table === "contacts")
+        if (table === "contacts") {
+          const phone = String(filter("phone_e164"));
+          if (!known.includes(phone)) return null;
           return {
-            id: "contact",
-            name: "Gisela",
-            phone_e164: PHONE,
-            whatsapp_id: PHONE.slice(1),
+            id: `contact:${phone}`,
+            name: "Autorizada",
+            phone_e164: phone,
+            whatsapp_id: phone.slice(1),
             whatsapp_user_id: null,
             whatsapp_consent_status: input.optedOut ? "opted_out" : "unknown",
           };
+        }
         if (table === "conversations")
           return {
-            id: "conversation",
-            contact_id: "contact",
+            id: `conversation:${phoneOf(filter("contact_id"))}`,
+            contact_id: filter("contact_id"),
             status: "open",
             coexistence_account_id: null,
             last_inbound_message_at: lastInbound,
@@ -62,11 +91,11 @@ function fake(
           };
         if (table === "messages")
           return {
-            id: "inbound",
+            id: `inbound:${phoneOf(filter("contact_id"))}`,
             created_at: lastInbound,
             metadata: {
               sender_identity_source: "signed_meta_webhook",
-              verified_sender_phone_e164: PHONE,
+              verified_sender_phone_e164: phoneOf(filter("contact_id")),
             },
           };
         if (table === "appointments")
@@ -95,11 +124,18 @@ function fake(
               connection_generation: 1,
             },
           ];
-        if (table === "whatsapp_owner_daily_summaries") return ledger;
+        if (table === "whatsapp_owner_daily_summaries")
+          return ledger.get(ledgerKey()) ?? null;
         throw new Error(`Tabla inesperada ${table}`);
       };
       const result = () => {
-        if (update && ledger) ledger = { ...ledger, ...update };
+        const current = value();
+        if (update && current && table === "whatsapp_owner_daily_summaries") {
+          ledger.set(ledgerKey(), {
+            ...(current as Record<string, unknown>),
+            ...update,
+          });
+        }
         return { data: value(), error: null };
       };
       const query = {
@@ -153,9 +189,11 @@ function fake(
     async rpc(name: string, args: Record<string, unknown>) {
       assert.equal(name, "claim_whatsapp_owner_daily_summary");
       claims.push(args);
-      ledger = {
-        id: "summary",
+      const phone = String(args.p_recipient_phone);
+      const row = {
+        id: `summary:${phone}`,
         summary_date: "2026-09-06",
+        recipient_phone_e164: phone,
         contact_id: args.p_contact_id,
         conversation_id: args.p_conversation_id,
         inbound_message_id: args.p_inbound_message_id,
@@ -165,37 +203,37 @@ function fake(
         processing_started_at: new Date(NOW).toISOString(),
         attempts: 1,
       };
-      return { data: [ledger], error: null };
+      ledger.set(phone, row);
+      return { data: [row], error: null };
     },
   } as unknown as SupabaseClient;
-  return { client, calls, claims, ledger: () => ledger };
+  return {
+    client,
+    calls,
+    claims,
+    ledger: (phone = PHONE) => ledger.get(phone) ?? null,
+  };
 }
 
 test("a las 21 envía una sola agenda de mañana en texto, incluye ocupados Google y registra envío", async (t) => {
   setup(t);
   const f = fake();
-  let sent = 0;
+  let delivered = 0;
   const args = {
     client: f.client,
     enabled: true,
     ownerNumbers: new Set([PHONE]),
-    send: async (
-      outbound: Parameters<
-        NonNullable<Parameters<typeof processOwnerDailySummary>[0]["send"]>
-      >[0],
-    ) => {
-      sent += 1;
+    send: async (outbound: SendArgs) => {
+      delivered += 1;
       assert.equal(outbound.payload.type, "text");
-      assert.equal(outbound.idempotencyKey, "owner-summary:2026-09-06");
+      assert.equal(
+        outbound.idempotencyKey,
+        `owner-summary:2026-09-06:summary:${PHONE}`,
+      );
       assert.match(outbound.bodyPreview, /10:00 · Paciente prueba/);
       assert.match(outbound.bodyPreview, /12:00–13:00 · Ocupado/);
-      assert.equal(outbound.metadata?.inbound_message_id, "inbound");
-      return {
-        id: "sent-message",
-        whatsapp_message_id: "wamid.fake",
-        status: "sent" as const,
-        deduplicated: false,
-      };
+      assert.equal(outbound.metadata?.inbound_message_id, `inbound:${PHONE}`);
+      return sent(outbound);
     },
   };
   assert.equal((await processOwnerDailySummary(args)).status, "sent");
@@ -203,7 +241,7 @@ test("a las 21 envía una sola agenda de mañana en texto, incluye ocupados Goog
     (await processOwnerDailySummary(args)).reason,
     "OWNER_SUMMARY_ALREADY_PROCESSED",
   );
-  assert.equal(sent, 1);
+  assert.equal(delivered, 1);
   const appointmentQuery = f.calls.find(
     (call) => call.table === "appointments",
   );
@@ -213,7 +251,67 @@ test("a las 21 envía una sola agenda de mañana en texto, incluye ocupados Goog
         key === "gte:starts_at" && value === "2026-09-07T03:00:00.000Z",
     ),
   );
-  assert.equal(f.ledger()?.message_id, "sent-message");
+  assert.equal(f.ledger()?.message_id, `sent-${PHONE}`);
+});
+
+test("cada teléfono autorizado recibe su propio despacho y la agenda se arma una sola vez", async (t) => {
+  setup(t);
+  const f = fake({ known: [PHONE, SECOND] });
+  const delivered: string[] = [];
+  const result = await processOwnerDailySummary({
+    client: f.client,
+    enabled: true,
+    ownerNumbers: new Set([SECOND, PHONE]),
+    send: async (outbound: SendArgs) => {
+      delivered.push(outbound.contact.phone_e164 as string);
+      // Cada resumen viaja atado a la evidencia de su propio destinatario.
+      assert.equal(
+        outbound.metadata?.inbound_message_id,
+        `inbound:${outbound.contact.phone_e164}`,
+      );
+      return sent(outbound);
+    },
+  });
+  assert.equal(result.status, "sent");
+  assert.equal(result.reason, null);
+  assert.deepEqual(delivered, [PHONE, SECOND]);
+  assert.deepEqual(
+    f.claims.map((claim) => claim.p_recipient_phone),
+    [PHONE, SECOND],
+  );
+  assert.deepEqual(
+    f.claims.map((claim) => claim.p_contact_id),
+    [`contact:${PHONE}`, `contact:${SECOND}`],
+  );
+  assert.equal(f.ledger(SECOND)?.message_id, `sent-${SECOND}`);
+  assert.equal(
+    f.calls.filter((call) => call.table === "appointments").length,
+    1,
+  );
+});
+
+test("un destinatario sin ventana no frena el resumen del otro", async (t) => {
+  setup(t);
+  const f = fake({ known: [PHONE] });
+  let delivered = 0;
+  const result = await processOwnerDailySummary({
+    client: f.client,
+    enabled: true,
+    ownerNumbers: new Set([PHONE, SECOND]),
+    send: async (outbound: SendArgs) => {
+      delivered += 1;
+      return sent(outbound);
+    },
+  });
+  assert.equal(delivered, 1);
+  assert.equal(result.status, "sent");
+  assert.equal(result.reason, "OWNER_SUMMARY_PARTIAL");
+  assert.deepEqual(result.recipients, [
+    { status: "sent", reason: null },
+    { status: "skipped", reason: "OWNER_HAS_NOT_MESSAGED" },
+  ]);
+  assert.equal(f.ledger(SECOND)?.reason, "OWNER_HAS_NOT_MESSAGED");
+  assert.equal(f.ledger(SECOND)?.body, null);
 });
 
 test("sin ventana, con BAJA o pausa registra omisión sin leer la agenda ni enviar", async (t) => {
@@ -253,13 +351,14 @@ test("reintento usa el texto guardado aunque la agenda cambie y ventana vencida 
       throw new WhatsAppPolicyError("CUSTOMER_SERVICE_WINDOW_CLOSED");
     },
   });
-  assert.deepEqual(result, {
-    status: "skipped",
-    reason: "CUSTOMER_SERVICE_WINDOW_CLOSED",
-  });
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "CUSTOMER_SERVICE_WINDOW_CLOSED");
+  assert.deepEqual(result.recipients, [
+    { status: "skipped", reason: "CUSTOMER_SERVICE_WINDOW_CLOSED" },
+  ]);
 });
 
-test("fuera del horario o sin un único dueño configurado no consulta datos privados", async (t) => {
+test("fuera del horario o sin allowlist configurada no consulta datos privados", async (t) => {
   setup(t);
   const f = fake();
   assert.equal(

@@ -3314,6 +3314,12 @@ button {
   margin-top: 30px;
 }
 
+.login-captcha {
+  /* Reserva el alto del widget para que el formulario no salte cuando
+     Cloudflare termina de cargarlo. */
+  min-height: 65px;
+}
+
 .login-form > label {
   display: flex;
   flex-direction: column;

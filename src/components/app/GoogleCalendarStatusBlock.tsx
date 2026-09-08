@@ -164,6 +164,7 @@ export const GoogleCalendarStatusBlock =
         state.status.connected,
       ),
     );
+    const hasConflicts = (state.status?.conflictCount ?? 0) > 0;
 
     return (
       <section
@@ -241,7 +242,14 @@ export const GoogleCalendarStatusBlock =
         )}
 
         <div class="calendar-operational-actions">
-          {appUser.isAdmin && (
+          {appUser.isAdmin && hasConflicts ? (
+            <Link
+              class="secondary-button small"
+              href="/app/settings?section=google#google-calendar-conflicts"
+            >
+              Revisar cambios
+            </Link>
+          ) : appUser.isAdmin ? (
             <button
               class="secondary-button small"
               type="button"
@@ -250,7 +258,7 @@ export const GoogleCalendarStatusBlock =
             >
               {state.syncing ? "Sincronizando…" : "Sincronizar ahora"}
             </button>
-          )}
+          ) : null}
           {state.error && !state.syncing ? (
             <button
               class="secondary-button small"

@@ -140,6 +140,15 @@ Son configuración pública que queda incluida en el cliente; la seguridad sigue
 dependiendo de Supabase Auth y RLS. No deben convertirse en secretos de
 Wrangler.
 
+El build de producción ahora falla antes de compilar si falta cualquiera de las
+dos variables de Supabase o si la clave no es pública (`publishable` o `anon`).
+Al compilar desde un worktree temporal o CI, pasar explícitamente esos valores
+al proceso de build: los archivos `.env.local` ignorados no viajan con Git.
+No copiar el archivo de secretos entero al directorio de publicación.
+`PUBLIC_TURNSTILE_SITEKEY` es opcional mientras la protección CAPTCHA de Auth
+esté apagada; si se configura, también debe estar presente al compilar. Activar
+la protección del backend es un paso separado, posterior a verificar el login.
+
 El Worker de las fases 1, 2A y 2B no requiere variables de runtime ni secrets.
 El archivo `config/cloudflare-runtime.env` permanece intencionalmente vacío
 para evitar que Wrangler cargue por accidente credenciales locales. Ningún

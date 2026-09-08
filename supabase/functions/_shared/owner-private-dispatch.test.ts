@@ -7,6 +7,7 @@ import {
 } from "./whatsapp.ts";
 
 const PHONE = "+5491112345678";
+const SECOND = "+5491112345679";
 const NOW = Date.parse("2026-09-07T00:00:00Z");
 
 function client(
@@ -87,9 +88,16 @@ test("el destinatario real de Graph debe coincidir con el remitente firmado auto
       }),
       /OWNER_RECIPIENT_UNVERIFIED/,
     );
-  process.env.WHATSAPP_OWNER_NUMBERS = `${PHONE},+5491112345679`;
+  // Con dos teléfonos autorizados la evidencia sigue siendo de cada mensaje:
+  // el otro número de la allowlist tampoco puede recibir esta respuesta.
+  process.env.WHATSAPP_OWNER_NUMBERS = `${PHONE},${SECOND}`;
+  await assertPrivateOwnerDispatch({ ...args, client: client(validInbound) });
   await assert.rejects(
-    assertPrivateOwnerDispatch({ ...args, client: client(validInbound) }),
+    assertPrivateOwnerDispatch({
+      ...args,
+      recipient: { kind: "wa_id", value: SECOND.slice(1) },
+      client: client(validInbound),
+    }),
     /OWNER_RECIPIENT_UNVERIFIED/,
   );
 });

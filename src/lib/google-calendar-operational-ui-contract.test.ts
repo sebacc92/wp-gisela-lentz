@@ -42,7 +42,21 @@ test("Sincronizar ahora exige ADMIN y evita doble envío local", () => {
     block,
     /disabled=\{!canSynchronize \|\| state\.loading \|\| state\.syncing\}/,
   );
-  assert.match(block, /\{appUser\.isAdmin && \(/);
+  assert.match(block, /appUser\.isAdmin && hasConflicts \?/);
+  assert.match(block, /: appUser\.isAdmin \? \(/);
+});
+
+test("los conflictos llevan a la decisión pendiente en vez de ofrecer otra sincronización", () => {
+  const block = source("src/components/app/GoogleCalendarStatusBlock.tsx");
+  const settings = source("src/routes/app/settings/index.tsx");
+
+  assert.match(block, /const hasConflicts =/);
+  assert.match(
+    block,
+    /href="\/app\/settings\?section=google#google-calendar-conflicts"/,
+  );
+  assert.match(block, />\s*Revisar cambios\s*<\/Link>/);
+  assert.match(settings, /id="google-calendar-conflicts"/);
 });
 
 test("el resumen muestra revisión exitosa y nunca identidad de Calendar", () => {

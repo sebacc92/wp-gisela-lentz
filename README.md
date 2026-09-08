@@ -87,10 +87,35 @@ o del nuevo proyecto de Gisela:
 ```env
 PUBLIC_SUPABASE_URL=
 PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+PUBLIC_TURNSTILE_SITEKEY=0x4AAAAAAEsC2vo0kNxMsJaa
 ```
 
 La aplicación muestra errores simples si Supabase no está configurado. Las
 credenciales de Meta y las claves de servicio nunca usan el prefijo `PUBLIC_`.
+
+### Turnstile en el login
+
+El login está preparado para usar Cloudflare Turnstile. El widget
+`Gisela Lentz login` está registrado para `giselalentz.com.ar`, `localhost` y
+`127.0.0.1`; su sitekey es público y su clave secreta debe configurarse en
+Supabase Dashboard → Authentication → Attack Protection, nunca en archivos
+versionados ni en el frontend. Publicar este código no activa CAPTCHA en Auth.
+
+Cuando CAPTCHA está habilitado, quien verifica el token es Supabase Auth, no la
+aplicación: el navegador manda
+`captchaToken` en `signInWithPassword` y en `resetPasswordForEmail`, y Supabase
+lo valida contra Cloudflare. Como no expone `action` ni `hostname` de esa
+respuesta, un token generado en `localhost` también sirve contra producción.
+Corta bots genéricos y fuerza bruta, no a alguien decidido con un navegador
+automatizado; la contraseña y RLS siguen siendo el límite real.
+
+`PUBLIC_TURNSTILE_SITEKEY` se inlinea en el build, así que tiene que estar
+presente al compilar. Sin ese valor no se dibuja el widget y no se manda token,
+que es justo lo que permite trabajar mientras el CAPTCHA está apagado.
+
+**El orden importa**: desplegar primero el frontend con el sitekey y recién
+después activar el CAPTCHA en Supabase. Al revés, el login y la recuperación de
+contraseña quedan rotos hasta que llegue el deploy.
 
 ## Gisela Lentz setup
 

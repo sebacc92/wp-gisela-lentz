@@ -5,6 +5,7 @@ import {
   handleCalendarSyncRequest,
 } from "./index.ts";
 import { googleCalendarEventPayload } from "../_shared/google-calendar.ts";
+import { refreshCalendarAvailabilityBeforeBooking } from "../_shared/calendar-booking-availability.ts";
 
 type Authorize = NonNullable<CalendarSyncDependencies["authorize"]>;
 
@@ -1820,6 +1821,95 @@ Deno.test(
       rpcCalls.some((call) => call.name === "claim_google_calendar_sync_jobs"),
       false,
       "un lease ocupado también bloquea todo push",
+    );
+  },
+);
+
+Deno.test(
+  "la reserva espera un lease ocupado y exige un pull completo del worker real",
+  async () => {
+    let elapsed = 0;
+    let leaseAttempts = 0;
+    const handlers = baseHandlers();
+    const { client, rpcCalls } = fakeSupabase({
+      ...handlers,
+      begin_google_calendar_inbound_sync: (args) => {
+        leaseAttempts += 1;
+        return leaseAttempts === 1
+          ? { data: [], error: null }
+          : handlers.begin_google_calendar_inbound_sync(args);
+      },
+    });
+    const google = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([])
+        : null,
+    );
+    const outcomes: unknown[] = [];
+    const accepted = await refreshCalendarAvailabilityBeforeBooking({
+      projectUrl: "https://project.example.test",
+      cronSecret: ENVIRONMENT.GOOGLE_CALENDAR_CRON_SECRET,
+      now: () => elapsed,
+      sleep: (milliseconds, signal) => {
+        signal.throwIfAborted();
+        assert.equal(milliseconds, 1_000);
+        elapsed += milliseconds;
+        return Promise.resolve();
+      },
+      fetcher: async (url, init) => {
+        const response = await handleCalendarSyncRequest(
+          new Request(String(url), init),
+          {
+            createClient: () => client,
+            environment: (name) => ENVIRONMENT[name],
+            fetcher: google.fetcher,
+            now: () => TEST_NOW + elapsed,
+          },
+        );
+        const body = await response.clone().json();
+        outcomes.push(body.outcome);
+        if (outcomes.length === 1) {
+          assert.equal(response.status, 200);
+          assert.equal(body.inbound.skippedReason, "INBOUND_SYNC_IN_PROGRESS");
+          assert.equal(
+            google.calls.some((call) => call.url.includes("/events?")),
+            false,
+            "el intento ocupado no lee ni modifica eventos de Google",
+          );
+          assert.equal(
+            rpcCalls.some(
+              (call) => call.name === "claim_google_calendar_sync_jobs",
+            ),
+            false,
+            "el intento ocupado no reclama trabajos salientes",
+          );
+          assert.equal(
+            rpcCalls.some(
+              (call) => call.name === "complete_google_calendar_inbound_sync",
+            ),
+            false,
+          );
+        }
+        return response;
+      },
+    });
+
+    assert.equal(accepted, true);
+    assert.equal(elapsed, 1_000);
+    assert.equal(leaseAttempts, 2);
+    assert.deepEqual(outcomes, ["skipped", "completed"]);
+    assert.equal(
+      google.calls.filter(
+        (call) => call.method === "GET" && call.url.includes("/events?"),
+      ).length,
+      1,
+    );
+    assert.equal(
+      rpcCalls.filter(
+        (call) => call.name === "complete_google_calendar_inbound_sync",
+      ).length,
+      1,
+      "sólo el segundo intento confirma la observación completa",
     );
   },
 );

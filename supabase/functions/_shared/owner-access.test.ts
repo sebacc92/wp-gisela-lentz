@@ -6,6 +6,7 @@ import {
   isOwnerNumber,
   parseOwnerNumbers,
   ownerAgendaRange,
+  ownerNumbersFromEnvironment,
   ownerSummarySchedule,
   verifiedOwnerPhone,
   formatOwnerAgenda,
@@ -14,6 +15,7 @@ import {
 } from "./owner-access.ts";
 
 const OWNER = "+5492262338010";
+const ASSISTANT = "+5492291575215";
 
 test("la allowlist sólo acepta E.164 exacto y descarta el resto", () => {
   const parsed = parseOwnerNumbers(
@@ -52,6 +54,39 @@ test("la validación del número es exacta, no por parecido", () => {
   }
 });
 
+test("el secreto autoriza los teléfonos nominados y falla cerrado si no se entiende", (t) => {
+  const previous = process.env.WHATSAPP_OWNER_NUMBERS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.WHATSAPP_OWNER_NUMBERS;
+    else process.env.WHATSAPP_OWNER_NUMBERS = previous;
+  });
+
+  process.env.WHATSAPP_OWNER_NUMBERS = ` ${OWNER} , ${ASSISTANT} ,`;
+  assert.deepEqual(
+    [...ownerNumbersFromEnvironment()].sort(),
+    [ASSISTANT, OWNER].sort(),
+  );
+  // Un duplicado es el mismo permiso escrito dos veces, no una lista rara.
+  process.env.WHATSAPP_OWNER_NUMBERS = `${OWNER},${OWNER}`;
+  assert.deepEqual([...ownerNumbersFromEnvironment()], [OWNER]);
+
+  for (const secret of [
+    "",
+    "texto",
+    // Una entrada mal escrita no habilita al resto: no se sabe a quién se
+    // quiso autorizar, y el acceso alcanza a toda la agenda.
+    `${OWNER},2291575215`,
+    `${OWNER},${ASSISTANT},soy Gisela`,
+    // Más teléfonos que los previstos: la lista deja de ser nominal.
+    `${OWNER},${ASSISTANT},+5491112345678,+5491112345679`,
+  ]) {
+    process.env.WHATSAPP_OWNER_NUMBERS = secret;
+    assert.equal(ownerNumbersFromEnvironment().size, 0, secret);
+  }
+  delete process.env.WHATSAPP_OWNER_NUMBERS;
+  assert.equal(ownerNumbersFromEnvironment().size, 0);
+});
+
 test("reconoce el pedido de agenda por día", () => {
   assert.deepEqual(detectOwnerRequest("Me das los turnos de mañana"), {
     kind: "agenda",
@@ -75,15 +110,19 @@ test("reconoce el pedido de agenda por día", () => {
 test("reconoce la consulta por un paciente", () => {
   assert.deepEqual(detectOwnerRequest("datos de Ana Pérez"), {
     kind: "patient",
-    query: "datos de ana perez".replace("datos de ", ""),
+    query: "Ana Pérez",
   });
   assert.deepEqual(detectOwnerRequest("paciente Ana Pérez"), {
     kind: "patient",
-    query: "ana perez",
+    query: "Ana Pérez",
   });
   assert.deepEqual(detectOwnerRequest("telefono de la paciente Ana"), {
     kind: "patient",
-    query: "ana",
+    query: "Ana",
+  });
+  assert.deepEqual(detectOwnerRequest("Qué turno tiene Milagros Ferreyra?"), {
+    kind: "patient",
+    query: "Milagros Ferreyra",
   });
 });
 

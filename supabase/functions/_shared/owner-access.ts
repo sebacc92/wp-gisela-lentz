@@ -1,4 +1,13 @@
 import { normalizeUserInput } from "./automation-flow.ts";
+import { extractOwnerPatientQuery } from "./owner-patient-query.ts";
+import {
+  type OwnerAgendaDay,
+  ownerLocalDate,
+  OWNER_TIMEZONE,
+  parseOwnerAgendaDay,
+} from "./owner-agenda-period.ts";
+
+export { OWNER_TIMEZONE } from "./owner-agenda-period.ts";
 
 /**
  * Números autorizados a recibir información privada por WhatsApp: la agenda con
@@ -10,6 +19,11 @@ import { normalizeUserInput } from "./automation-flow.ts";
  * sumar un número propio sería suficiente para vaciar la agenda por WhatsApp.
  */
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
+
+/** Tope de teléfonos autorizados. La lista es nominal y corta —la profesional
+ * y, mientras dure un trabajo técnico, quien la asiste—; el límite evita que un
+ * secreto pegado de más convierta la agenda en un canal abierto. */
+const MAX_OWNER_NUMBERS = 3;
 
 export function parseOwnerNumbers(raw: string | undefined): Set<string> {
   const numbers = new Set<string>();
@@ -34,48 +48,36 @@ export function isOwnerNumber(
 }
 
 export type OwnerRequest =
-  | { kind: "agenda"; day: "today" | "tomorrow" | "week" }
+  | { kind: "agenda"; day: OwnerAgendaDay }
   | { kind: "patient"; query: string };
 
-const AGENDA_WORDS =
-  /\b(turno|turnos|agenda|agendados|pacientes|citas|tengo|tenes|tenés)\b/;
+const AGENDA_WORDS = /\b(turno|turnos|agenda|agendados|pacientes|citas)\b/;
 
 /**
  * Reconoce de forma determinista qué está pidiendo. No usa IA: la respuesta
  * contiene datos de pacientes y no puede depender de que un modelo interprete
  * bien una frase.
  */
-export function detectOwnerRequest(body: string): OwnerRequest | null {
+export function detectOwnerRequest(
+  body: string,
+  now = new Date(),
+): OwnerRequest | null {
   const phrase = normalizeUserInput(body);
   if (!phrase) return null;
 
-  const patient = phrase.match(
-    /^(?:datos|ficha|info|informacion|telefono|buscar|paciente)\s+(?:de\s+)?(?:la\s+|el\s+)?(?:paciente\s+)?(.{2,60})$/,
-  );
+  const patient = extractOwnerPatientQuery(body);
+  if (patient) return { kind: "patient", query: patient };
 
   if (AGENDA_WORDS.test(phrase)) {
-    if (/\b(manana|el dia de manana)\b/.test(phrase)) {
-      return { kind: "agenda", day: "tomorrow" };
-    }
-    if (/\b(semana|la semana|esta semana)\b/.test(phrase)) {
-      return { kind: "agenda", day: "week" };
-    }
-    if (/\b(hoy|el dia de hoy)\b/.test(phrase)) {
-      return { kind: "agenda", day: "today" };
-    }
-    // "Me das los turnos" sin fecha se responde con el día en curso.
-    if (!patient) return { kind: "agenda", day: "today" };
+    const day = parseOwnerAgendaDay(body, now);
+    return day === null ? null : { kind: "agenda", day };
   }
 
-  if (patient?.[1]) {
-    const query = patient[1].trim();
-    if (query.length >= 2) return { kind: "patient", query };
-  }
   return null;
 }
 
 export const OWNER_HELP_MESSAGE =
-  'Puedo pasarte los turnos de hoy, los de mañana o los de la semana, y los datos de un paciente. Escribime por ejemplo "turnos de mañana" o "datos de Ana Pérez".';
+  'Podés consultar la agenda y los datos administrativos de pacientes. Probá con "próximos turnos", "turnos del jueves", "turnos del 10/9" o "datos de Ana Pérez". Si pedís otro período, indicame la fecha para buscarlo.';
 
 function runtimeEnvironment(name: string): string | undefined {
   if (typeof Deno !== "undefined") return Deno.env.get(name);
@@ -88,15 +90,22 @@ function runtimeEnvironment(name: string): string | undefined {
 }
 
 export function ownerNumbersFromEnvironment(): Set<string> {
-  const configured = parseOwnerNumbers(
-    runtimeEnvironment("WHATSAPP_OWNER_NUMBERS"),
+  const raw = runtimeEnvironment("WHATSAPP_OWNER_NUMBERS");
+  const written = new Set(
+    (raw ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
   );
-  // Este consultorio pertenece a una sola profesional. Una lista ambigua no
-  // puede ampliar silenciosamente el acceso a toda la agenda.
-  return configured.size === 1 ? configured : new Set<string>();
+  const configured = parseOwnerNumbers(raw);
+  // Falla cerrado ante una lista que no se entiende entera: si alguna entrada
+  // no es E.164 exacto no se puede saber a quién se quiso autorizar, y una
+  // lista más larga que la prevista tampoco se acepta a medias.
+  if (!configured.size || configured.size !== written.size) {
+    return new Set<string>();
+  }
+  return configured.size <= MAX_OWNER_NUMBERS ? configured : new Set<string>();
 }
-
-export const OWNER_TIMEZONE = "America/Argentina/Buenos_Aires";
 
 /** Una identidad proviene del webhook firmado, nunca de un teléfono editable. */
 export function verifiedOwnerPhone(
@@ -112,21 +121,23 @@ export function verifiedOwnerPhone(
 }
 
 export function ownerAgendaRange(
-  day: "today" | "tomorrow" | "week",
+  day: OwnerAgendaDay,
   now = new Date(),
-): { from: string; until: string; localDate: string } {
-  const date = new Intl.DateTimeFormat("en-CA", {
-    timeZone: OWNER_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
+): { from: string; until: string | null; localDate: string } {
+  const date = ownerLocalDate(now);
+  if (day === "upcoming")
+    return { from: now.toISOString(), until: null, localDate: date };
   // Argentina usa UTC-03. Límites explícitos evitan incluir turnos de las
   // 21–24 del día anterior cuando el servidor trabaja en UTC.
-  const from = new Date(`${date}T00:00:00-03:00`);
+  const from = new Date(
+    `${typeof day === "object" ? day.date : date}T00:00:00-03:00`,
+  );
   if (day === "tomorrow") from.setUTCDate(from.getUTCDate() + 1);
   const until = new Date(from);
-  until.setUTCDate(until.getUTCDate() + (day === "week" ? 7 : 1));
+  until.setUTCDate(
+    until.getUTCDate() +
+      (day === "week" ? 7 : typeof day === "object" ? (day.days ?? 1) : 1),
+  );
   return {
     from: from.toISOString(),
     until: until.toISOString(),
@@ -165,10 +176,11 @@ export interface OwnerAgendaAppointment {
   depositStatus: string | null;
 }
 
-const DAY_TITLES: Record<"today" | "tomorrow" | "week", string> = {
+const DAY_TITLES = {
   today: "Turnos de hoy",
   tomorrow: "Turnos de mañana",
   week: "Turnos de los próximos 7 días",
+  upcoming: "Próximos turnos",
 };
 
 function timeIn(value: string, timezone: string): string {
@@ -197,24 +209,34 @@ function depositSuffix(status: string | null): string {
 
 export function formatOwnerAgenda(args: {
   appointments: OwnerAgendaAppointment[];
-  day: "today" | "tomorrow" | "week";
+  day: OwnerAgendaDay;
   timezone: string;
+  now?: Date;
+  hasMore?: boolean;
   blocks?: Array<{ startsAt: string; endsAt: string; allDay: boolean }>;
   calendarNeedsReview?: boolean;
 }): string {
-  const title = DAY_TITLES[args.day];
+  const range = ownerAgendaRange(args.day, args.now);
+  const title =
+    typeof args.day === "object"
+      ? `${args.day.days === 7 ? "Turnos desde el" : "Turnos del"} ${dayIn(range.from, args.timezone)}`
+      : `${DAY_TITLES[args.day]}${args.day === "today" || args.day === "tomorrow" ? ` (${dayIn(range.from, args.timezone)})` : ""}`;
+  const groupByDate =
+    args.day === "week" ||
+    args.day === "upcoming" ||
+    (typeof args.day === "object" && args.day.days === 7);
   const lines: string[] = [
     args.appointments.length
       ? `${title}:`
       : `${title}: sin turnos cargados en el sistema.`,
-    "",
   ];
+  if (args.appointments.length) lines.push("");
   let lastDay = "";
   let shown = 0;
   for (const appointment of args.appointments) {
     if (lines.join("\n").length > 3400) break;
     shown += 1;
-    if (args.day === "week") {
+    if (groupByDate) {
       const day = dayIn(appointment.startsAt, args.timezone);
       if (day !== lastDay) {
         if (lastDay) lines.push("");
@@ -234,24 +256,30 @@ export function formatOwnerAgenda(args: {
       `${parts.join(" · ")}${depositSuffix(appointment.depositStatus)}`,
     );
   }
-  lines.push("");
+  if (shown > 0) lines.push("");
   if (shown < args.appointments.length) {
     lines.push(
       `+ ${args.appointments.length - shown} turnos más. Consultá la agenda completa en /app.`,
     );
   }
-  lines.push(
-    args.appointments.length === 1
-      ? "1 turno."
-      : `${args.appointments.length} turnos.`,
-  );
+  if (args.hasMore)
+    lines.push(
+      "Hay más turnos. Pedime un día específico o consultá la agenda completa en /app.",
+    );
+  if (args.appointments.length > 0 && !args.hasMore)
+    lines.push(
+      args.appointments.length === 1
+        ? "1 turno."
+        : `${args.appointments.length} turnos.`,
+    );
   if (args.blocks?.length) {
     lines.push("", "Horarios ocupados en Google Calendar:");
     let shownBlocks = 0;
     for (const block of args.blocks) {
-      if (lines.join("\n").length > 3700) break;
-      const day =
-        args.day === "week" ? `${dayIn(block.startsAt, args.timezone)} · ` : "";
+      if (shownBlocks >= 3 || lines.join("\n").length > 3700) break;
+      const day = groupByDate
+        ? `${dayIn(block.startsAt, args.timezone)} · `
+        : "";
       lines.push(
         `${day}${block.allDay ? "Todo el día" : `${timeIn(block.startsAt, args.timezone)}–${timeIn(block.endsAt, args.timezone)}`} · Ocupado`,
       );
@@ -291,7 +319,7 @@ export function formatOwnerPatient(args: {
       "",
       ...names,
       "",
-      "Escribime el nombre completo del que necesitás.",
+      'Escribime "datos de" seguido del nombre completo del paciente que necesitás.',
     ].join("\n");
   }
 

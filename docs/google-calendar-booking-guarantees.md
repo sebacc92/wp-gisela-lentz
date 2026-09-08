@@ -21,8 +21,16 @@ ejecución antes de reservar.
    `synced` prueba que Google confirmó el mismo intervalo y etapa del turno en
    la cuenta, calendario, generación y autorización actuales. Un trabajo en cola
    o una respuesta exitosa de un worker que procesó otros turnos no alcanzan.
-4. Si falta esa prueba, se conserva el turno y se muestra que necesita revisión.
-   El bot deriva a la secretaria; no solicita la seña ni promete la confirmación.
+4. Si la proyección está pendiente, el bot espera y vuelve a consultar cada
+   500 ms durante un máximo de 20 segundos, incluidas las consultas y la
+   actualización. Primero deja trabajar a la sincronización disparada al guardar;
+   después de dos segundos puede solicitar una única actualización adicional.
+   En cuanto verifica el turno, continúa con la confirmación o el pedido de seña.
+   Un conflicto, desconexión o error de consulta detiene la espera.
+5. Si no se obtiene esa prueba, se conserva el turno y se deriva a revisión
+   humana. El paciente recibe «Todavía no pudimos confirmar tu turno. Vamos a
+   revisar tu solicitud y te respondemos por este chat.», sin detalles técnicos.
+   El bot no solicita la seña ni promete la confirmación.
    Los avisos de seña y confirmación también verifican esta condición en el
    servidor inmediatamente antes del envío a WhatsApp.
 
@@ -38,6 +46,16 @@ importa normalmente en la siguiente ejecución, más la latencia de Google y del
 procesamiento. El bot actualiza Google antes de ofrecer horarios y vuelve a
 comprobarlo al reservar; no depende de que alguien abra la agenda o toque el
 botón de sincronización.
+
+Si esa comprobación coincide con otra sincronización en curso, el bot espera
+un segundo y vuelve a intentarlo. El límite total sigue siendo 45 segundos,
+incluidas las peticiones, lecturas de respuesta y esperas; no se reinicia con
+cada intento. Sólo se reintenta el estado explícito
+`INBOUND_SYNC_IN_PROGRESS`, sin errores ni resultados parciales. El bot necesita
+una actualización completa antes de continuar, y la base vuelve a validar el
+horario antes de crear o reprogramar. Una cancelación de la comprobación, un
+error real o el agotamiento del plazo conservan el bloqueo de la reserva y la
+derivación a revisión humana.
 
 La pantalla recibe cambios importados mediante `calendar_availability_updates`.
 Es una señal de revisión y fecha para ADMIN, sin nombres ni identificadores de

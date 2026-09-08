@@ -87,11 +87,17 @@ append-only; el resumen de consentimiento del contacto no se edita manualmente.
 
 ## Agenda privada de Gisela y resumen de las 21:00
 
-El acceso privado usa exactamente un teléfono personal E.164 en el secreto
-`WHATSAPP_OWNER_NUMBERS`. No se acepta un nombre de perfil, un mensaje diciendo
-“soy Gisela”, el teléfono público del consultorio ni un número agregado desde la
-UI. Una lista ausente o con varios teléfonos falla cerrada. La aplicación está
-pensada únicamente para esta profesional.
+El acceso privado usa una lista corta y nominada de teléfonos personales E.164
+en el secreto `WHATSAPP_OWNER_NUMBERS`, separados por coma: el de Gisela y, hoy,
+el del desarrollo mientras dura el trabajo técnico. No se acepta un nombre de
+perfil, un mensaje diciendo “soy Gisela”, el teléfono público del consultorio ni
+un número agregado desde la UI. Una lista ausente, con una entrada que no sea
+E.164 exacto o con más de tres teléfonos falla cerrada y no habilita a nadie.
+
+Cada teléfono agregado ve la agenda completa con nombres de pacientes, así que
+la lista se mantiene mínima: se agrega con autorización expresa de la
+profesional y se quita del secreto apenas termina el motivo que lo justificó.
+Sacar un número surte efecto en el siguiente mensaje; no hace falta desplegar.
 
 El webhook comprueba la firma de Meta y registra el teléfono del remitente
 observado en ese evento. El backend revalida esa evidencia, su vigencia de
@@ -100,31 +106,34 @@ editar `messages.metadata`; el número editable de un contacto no concede acceso
 privado. Si Meta sólo comparte un identificador sin teléfono, la respuesta
 privada se bloquea hasta contar con identidad telefónica verificable.
 
-Desde ese teléfono Gisela puede pedir “turnos de hoy”, “turnos de mañana”,
-“turnos de la semana” o “datos de Ana Pérez”. Las respuestas contienen datos
+Desde un teléfono autorizado se puede pedir “turnos de hoy”, “turnos de
+mañana”, “turnos de la semana” o “datos de Ana Pérez”. Las respuestas contienen datos
 administrativos necesarios y quedan registradas. No se exportan notas libres,
 motivos de consulta, tratamientos, odontogramas ni historias clínicas. Los
 adjuntos del teléfono autorizado no se envían a IA para interpretar consultas
 privadas; los pedidos privados se hacen por texto.
 
 Con `WHATSAPP_OWNER_DAILY_SUMMARY_ENABLED=true`, el worker de recordatorios
-prepara una única agenda de mañana a las **21:00 de Buenos Aires**. El cron se
-invoca cada cinco minutos; permite reintentos hasta las 21:15. Después omite ese
+prepara la agenda de mañana a las **21:00 de Buenos Aires** y la despacha una
+vez por teléfono autorizado. El texto se arma una sola vez y es el mismo para
+todos. El cron se invoca cada cinco minutos; permite reintentos hasta las 21:15. Después omite ese
 día. Incluye turnos activos del sistema y horarios ocupados importados desde
 Google Calendar, sin copiar títulos libres de esos eventos. Excluye
 pre-reservas vencidas e indica si Calendar carece de una revisión reciente.
 
 Este resumen se envía sólo en texto libre dentro de las 24 horas desde un
-mensaje entrante verificado de Gisela. Una salida, eco del teléfono comercial,
-confirmación de entrega o importación de historial no abre ni renueva esa
-ventana. La baja, una pausa de conversación o los interruptores del bot frenan
-el resumen. Si no hay ventana, se registra la omisión y **no se usa una plantilla
+mensaje entrante verificado del propio destinatario: cada teléfono necesita su
+ventana abierta y la de uno no habilita la del otro. Una salida, eco del
+teléfono comercial, confirmación de entrega o importación de historial no abre
+ni renueva esa ventana. La baja, una pausa de conversación o los interruptores
+del bot frenan el resumen de ese destinatario; los demás siguen su curso. Si no hay ventana, se registra la omisión y **no se usa una plantilla
 como alternativa**. Los recordatorios a pacientes conservan su configuración y
 consentimiento separados.
 
 La tabla privada `whatsapp_owner_daily_summaries` conserva fecha, estado, motivo
-de omisión, destinatario y texto del primer intento. La fecha es única; los
-reintentos no cambian el contenido ni crean otro despacho lógico. La autorización
+de omisión, destinatario y texto del primer intento. El par fecha + teléfono es
+único: hay una fila por destinatario y día, y los reintentos no cambian el
+contenido ni crean otro despacho lógico. La autorización
 y la hora se controlan otra vez en SQL y antes de Graph. No se persiste la agenda
 si el resumen ya se omite por falta de ventana.
 
