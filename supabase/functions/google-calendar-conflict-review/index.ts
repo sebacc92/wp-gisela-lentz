@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 import {
   getGoogleCalendarEvent,
+  GoogleIntegrationError,
   googleOAuthConfiguration,
   refreshGoogleAccessToken,
   type GoogleCalendarEvent,
@@ -297,14 +298,15 @@ export function titleReviewBlockReason(
   ) {
     return "El texto no identifica con seguridad al mismo paciente. No vamos a cambiar el paciente ni descartar esta diferencia automáticamente.";
   }
+  // Compare the event's own baseline for TF/first visit. The contact's global
+  // flag may differ already; this text-only review must neither change it nor
+  // claim that a pre-existing discrepancy has been verified or corrected.
   if (
     !remote.coverage ||
     remote.coverage !== appointment.coverage ||
     remote.coverage !== baseline.coverage ||
     remote.isExistingPatient === null ||
     remote.isExistingPatient !== baseline.isExistingPatient ||
-    (contact.is_existing_patient !== null &&
-      remote.isExistingPatient !== contact.is_existing_patient) ||
     remote.serviceHint !== baseline.serviceHint ||
     remote.orthodonticVisitType !== baseline.orthodonticVisitType
   ) {
@@ -534,7 +536,15 @@ export async function handleGoogleCalendarConflictReviewRequest(
           : "No pudimos completar la revisión. No cambiamos el turno ni el evento de Google.";
     return jsonResponse(
       request,
-      { error: failure.code, message },
+      {
+        error: failure.code,
+        message,
+        // Only locally-defined integration codes, never Google's response body,
+        // event details, tokens or exception messages.
+        ...(error instanceof GoogleIntegrationError
+          ? { cause: error.code }
+          : {}),
+      },
       failure.status,
     );
   }

@@ -649,6 +649,43 @@ Deno.test(
 );
 
 Deno.test(
+  "text-only review preserves a pre-existing contact record discrepancy",
+  async () => {
+    const test = fixture();
+    test.value.contact.is_existing_patient = false;
+    const originalContact = structuredClone(test.value.contact);
+    test.setRemote({
+      ...event(),
+      summary: "Matias Ejemplo TF Particular seña 10",
+    });
+    const preview = await (
+      await handleGoogleCalendarConflictReviewRequest(
+        request(),
+        test.dependencies,
+      )
+    ).json();
+    assert.equal(preview.canAcceptTitle, true);
+    const response = await handleGoogleCalendarConflictReviewRequest(
+      request("accept_title", preview.reviewToken),
+      test.dependencies,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(test.value.contact, originalContact);
+    assert.equal(
+      test.writes[0].p_expected_contact_updated_at,
+      originalContact.updated_at,
+    );
+    assert.equal(
+      typeof titleReviewBlockReason(test.value, {
+        ...event(),
+        summary: "Matias Ejemplo 1ra vez Particular seña 10",
+      }),
+      "string",
+    );
+  },
+);
+
+Deno.test(
   "missing token, unknown actions and browser-supplied calendar overrides fail before Google",
   async () => {
     for (const body of [
