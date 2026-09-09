@@ -426,6 +426,9 @@ export async function handleCalendarSyncRequest(
   try {
     const now = new Date((dependencies.now ?? Date.now)());
     let expiredHolds = 0;
+    // Queda visible en la respuesta: el vencimiento no se pudo aplicar en esta
+    // corrida y lo cubre el job de Postgres, no un reintento de Google.
+    let holdExpirationDeferred = false;
     // El scheduler y el trigger inmediato comparten este gate SQL. Se consulta
     // antes de purgar candidatos, reconciliar cola, refrescar OAuth o tocar
     // Google; desplegar la infraestructura nunca activa la automatización.
@@ -463,6 +466,13 @@ export async function handleCalendarSyncRequest(
       // El vencimiento es una transición interna existente y no depende de la
       // disponibilidad de Google. No reclama avisos ni ejecuta WhatsApp; el
       // delete que pueda encolar seguirá bloqueado hasta un pull inbound seguro.
+      //
+      // Su guard SQL exige una observación inbound sana, así que una corrida
+      // fallida lo vuelve imposible. Abortar acá impedía el propio pull que
+      // habría limpiado ese error: la automatización quedaba trabada hasta que
+      // una persona sincronizara a mano. Se tolera y se sigue. No se pierde el
+      // vencimiento: el job `booking-hold-expiration` lo ejecuta dentro de
+      // Postgres cada minuto, sin depender de Google ni de esta función.
       const { data: expiredRows, error: expirationError } = await client.rpc(
         "expire_google_calendar_automation_booking_holds",
         {
@@ -473,9 +483,10 @@ export async function handleCalendarSyncRequest(
         },
       );
       if (expirationError || !Array.isArray(expiredRows)) {
-        throw calendarWorkerFailure("CALENDAR_HOLD_EXPIRATION_FAILED");
+        holdExpirationDeferred = true;
+      } else {
+        expiredHolds = expiredRows.length;
       }
-      expiredHolds = expiredRows.length;
     }
 
     // El candidato OAuth vive en Vault y no debe depender de que alguien vuelva
@@ -1282,6 +1293,7 @@ export async function handleCalendarSyncRequest(
         retried,
         failed,
         expiredHolds,
+        holdExpirationDeferred,
         cleanup: { done: cleanupDone, failed: cleanupFailed },
         inbound: {
           ...summary,

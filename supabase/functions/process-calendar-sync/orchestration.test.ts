@@ -2982,6 +2982,48 @@ Deno.test(
 );
 
 Deno.test(
+  "un vencimiento de señas fallido no aborta la corrida ni traba el pull inbound",
+  async () => {
+    // El guard SQL del vencimiento exige inbound sano, así que una corrida
+    // fallida lo rompe. Si eso abortara, el pull que limpia `last_sync_error`
+    // nunca ocurriría y la automatización quedaría trabada para siempre.
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        expire_google_calendar_automation_booking_holds: () => ({
+          data: null,
+          error: {
+            message: "GOOGLE_CALENDAR_AUTOMATION_EXPIRATION_SCOPE_CHANGED",
+          },
+        }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) =>
+      call.method === "GET" && call.url.includes("/events?")
+        ? eventsListResponse([])
+        : null,
+    );
+    const response = await handleCalendarSyncRequest(automaticSyncRequest(), {
+      createClient: () => client,
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+      now: () => TEST_NOW,
+    });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    assert.equal(response.status, 200);
+    assert.equal(body.holdExpirationDeferred, true);
+    assert.equal(body.expiredHolds, 0);
+    // Lo que importa: la corrida siguió y llegó a observar Google.
+    assert.ok(calls.some((call) => call.url.includes("/events?")));
+    const names = rpcCalls.map((call) => call.name);
+    assert.ok(
+      names.includes("purge_expired_google_calendar_connection_candidate"),
+    );
+    assert.ok(names.includes("complete_google_calendar_inbound_sync"));
+  },
+);
+
+Deno.test(
   "si Google falla el automático vence la seña pero preserva la cola sin mutación remota",
   async () => {
     const { client, rpcCalls } = fakeSupabase(
