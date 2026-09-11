@@ -1,0 +1,119 @@
+/* Adjuntos clínicos del paciente. */
+
+.patient-attachments {
+  display: grid;
+  gap: 10px;
+}
+
+.patient-attachments-upload input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.patient-attachments-upload .secondary-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.patient-attachments-upload input:focus-visible + .secondary-button {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 2px;
+}
+
+.patient-attachments-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.patient-attachments-list li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.patient-attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--brand-50);
+  color: var(--brand-900);
+}
+
+.patient-attachment-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.patient-attachment-copy strong {
+  overflow: hidden;
+  color: var(--ink-900);
+  font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.patient-attachment-copy small {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.patient-attachment-actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.patient-attachment-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500);
+  cursor: pointer;
+}
+
+.patient-attachment-delete:hover {
+  background: var(--rose-soft);
+  color: var(--danger);
+}
+
+.patient-attachments-note,
+.patient-attachments-empty {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.patient-attachments-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}

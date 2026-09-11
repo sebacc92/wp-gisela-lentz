@@ -1,13 +1,17 @@
 import {
   $,
   component$,
+  useContext,
   useSignal,
   useStore,
   useVisibleTask$,
 } from "@qwik.dev/core";
 import type { DocumentHead } from "@qwik.dev/router";
-import { Link } from "@qwik.dev/router";
+import { Link, useLocation } from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
+import { DuplicateAssistant } from "~/components/patients/DuplicateAssistant";
+import { PatientAttachments } from "~/components/patients/PatientAttachments";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { Icon } from "~/components/ui/Icon";
 import { getPageTitle } from "~/config/business";
@@ -70,13 +74,39 @@ function formatAppointment(value: string): string {
   });
 }
 
+const DEPOSIT_LABELS: Record<DepositStatus, string> = {
+  not_required: "No requerida",
+  pending: "Esperando seña",
+  proof_received: "Comprobante recibido",
+  confirmed: "Confirmada",
+  expired: "Vencida",
+};
+
+function depositLabel(appointment: AppointmentRow): string {
+  return DEPOSIT_LABELS[
+    effectiveDepositStatus(
+      appointment.status,
+      appointment.deposit_status,
+      appointment.hold_expires_at,
+    )
+  ];
+}
+
 function whatsappIdentityLabel(patient: PatientRow): string {
   return patient.phone_e164 ?? "Identidad privada de WhatsApp";
 }
 
 export default component$(() => {
+  const appUser = useContext(APP_USER_CONTEXT);
+  const location = useLocation();
+  const patientTab = useSignal<
+    "datos" | "turnos" | "clinico" | "adjuntos" | "pagos"
+  >("datos");
+  const printingId = useSignal("");
+  const duplicatesOpen = useSignal(false);
   const query = useSignal("");
-  const selectedId = useSignal("");
+  // La búsqueda global (Ctrl/⌘ + K) entra directo a un paciente por URL.
+  const selectedId = useSignal(location.url.searchParams.get("patient") ?? "");
   const editorOpen = useSignal(false);
   const notice = useSignal("");
   const reloadVersion = useSignal(0);
@@ -206,6 +236,13 @@ export default component$(() => {
   const selected = state.patients.find(
     (patient) => patient.id === selectedId.value,
   );
+  // Sólo los turnos donde la seña dice algo: el resto no es un registro de pago.
+  const depositHistory = (selected?.appointments ?? []).filter(
+    (appointment) => appointment.deposit_status !== "not_required",
+  );
+  const printingPatient = state.patients.find(
+    (patient) => patient.id === printingId.value,
+  );
   const editorOriginalPatient = state.patients.find(
     (patient) => patient.id === editor.id,
   );
@@ -231,6 +268,13 @@ export default component$(() => {
           </div>
           <div class="patients-header-actions">
             <ManualHelpLink section="pacientes" label="¿Cómo usar pacientes?" />
+            <button
+              class="secondary-button"
+              type="button"
+              onClick$={() => (duplicatesOpen.value = true)}
+            >
+              <Icon name="search" size={17} /> Buscar duplicados
+            </button>
             <button
               class="primary-button"
               type="button"
@@ -362,95 +406,186 @@ export default component$(() => {
               </button>
             </header>
             <div class="drawer-content patient-detail">
-              <dl>
-                <div>
-                  <dt>WhatsApp</dt>
-                  <dd>{whatsappIdentityLabel(selected)}</dd>
-                </div>
-                <div>
-                  <dt>Otro teléfono</dt>
-                  <dd>{selected.alternate_phone_e164 || "No informado"}</dd>
-                </div>
-                <div>
-                  <dt>Email</dt>
-                  <dd>{selected.email || "No informado"}</dd>
-                </div>
-                <div>
-                  <dt>Cobertura</dt>
-                  <dd>{coverageLabel(selected.coverage)}</dd>
-                </div>
-                <div>
-                  <dt>¿Ya era paciente?</dt>
-                  <dd>
-                    {selected.is_existing_patient === null
-                      ? "No informado"
-                      : selected.is_existing_patient
-                        ? "Sí"
-                        : "No"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Próximo turno</dt>
-                  <dd>
-                    {selected.nextAppointment
-                      ? `${formatAppointment(selected.nextAppointment.starts_at)} · ${relationName(selected.nextAppointment.services)}`
-                      : "Sin próximo turno"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Último turno</dt>
-                  <dd>
-                    {selected.lastAppointment
-                      ? `${formatAppointment(selected.lastAppointment.starts_at)} · ${relationName(selected.lastAppointment.services)}`
-                      : "Sin turnos anteriores"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Notas administrativas</dt>
-                  <dd>{selected.administrative_notes || "Sin notas"}</dd>
-                </div>
-              </dl>
-              <section
-                class="patient-history"
-                aria-labelledby="patient-history-title"
+              <nav
+                class="patient-tabs"
+                role="tablist"
+                aria-label="Ficha del paciente"
               >
-                <h3 id="patient-history-title">Historial de turnos</h3>
-                {selected.appointments.length ? (
-                  <ul>
-                    {selected.appointments.map((appointment) => (
-                      <li key={appointment.id}>
-                        <span>
-                          <strong>{relationName(appointment.services)}</strong>
-                          <small>
-                            {formatAppointment(appointment.starts_at)}
-                          </small>
-                        </span>
-                        <span
-                          class={`status-badge status-${appointmentStatusTone(
-                            appointment.status,
-                            effectiveDepositStatus(
+                {(
+                  [
+                    ["datos", "Datos"],
+                    ["turnos", "Turnos"],
+                    ["clinico", "Odontograma"],
+                    ["adjuntos", "Adjuntos"],
+                    ["pagos", "Señas"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    class={{ active: patientTab.value === key }}
+                    aria-selected={patientTab.value === key}
+                    onClick$={() => (patientTab.value = key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
+
+              {patientTab.value === "datos" && (
+                <dl>
+                  <div>
+                    <dt>WhatsApp</dt>
+                    <dd>{whatsappIdentityLabel(selected)}</dd>
+                  </div>
+                  <div>
+                    <dt>Otro teléfono</dt>
+                    <dd>{selected.alternate_phone_e164 || "No informado"}</dd>
+                  </div>
+                  <div>
+                    <dt>Email</dt>
+                    <dd>{selected.email || "No informado"}</dd>
+                  </div>
+                  <div>
+                    <dt>Cobertura</dt>
+                    <dd>{coverageLabel(selected.coverage)}</dd>
+                  </div>
+                  <div>
+                    <dt>¿Ya era paciente?</dt>
+                    <dd>
+                      {selected.is_existing_patient === null
+                        ? "No informado"
+                        : selected.is_existing_patient
+                          ? "Sí"
+                          : "No"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Próximo turno</dt>
+                    <dd>
+                      {selected.nextAppointment
+                        ? `${formatAppointment(selected.nextAppointment.starts_at)} · ${relationName(selected.nextAppointment.services)}`
+                        : "Sin próximo turno"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Último turno</dt>
+                    <dd>
+                      {selected.lastAppointment
+                        ? `${formatAppointment(selected.lastAppointment.starts_at)} · ${relationName(selected.lastAppointment.services)}`
+                        : "Sin turnos anteriores"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Notas administrativas</dt>
+                    <dd>{selected.administrative_notes || "Sin notas"}</dd>
+                  </div>
+                </dl>
+              )}
+
+              {patientTab.value === "turnos" && (
+                <section
+                  class="patient-history"
+                  aria-labelledby="patient-history-title"
+                >
+                  <h3 id="patient-history-title">Historial de turnos</h3>
+                  {selected.appointments.length ? (
+                    <ul>
+                      {selected.appointments.map((appointment) => (
+                        <li key={appointment.id}>
+                          <span>
+                            <strong>
+                              {relationName(appointment.services)}
+                            </strong>
+                            <small>
+                              {formatAppointment(appointment.starts_at)}
+                            </small>
+                          </span>
+                          <span
+                            class={`status-badge status-${appointmentStatusTone(
                               appointment.status,
-                              appointment.deposit_status,
-                              appointment.hold_expires_at,
-                            ),
-                          )}`}
-                        >
-                          {appointmentDisplayStatus(
-                            appointment.status,
-                            effectiveDepositStatus(
+                              effectiveDepositStatus(
+                                appointment.status,
+                                appointment.deposit_status,
+                                appointment.hold_expires_at,
+                              ),
+                            )}`}
+                          >
+                            {appointmentDisplayStatus(
                               appointment.status,
-                              appointment.deposit_status,
-                              appointment.hold_expires_at,
-                            ),
-                          )}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p class="settings-note">No hay turnos registrados.</p>
-                )}
-              </section>
+                              effectiveDepositStatus(
+                                appointment.status,
+                                appointment.deposit_status,
+                                appointment.hold_expires_at,
+                              ),
+                            )}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p class="settings-note">No hay turnos registrados.</p>
+                  )}
+                </section>
+              )}
+
+              {patientTab.value === "clinico" && (
+                <section class="patient-clinical">
+                  <h3>Odontograma</h3>
+                  <p class="settings-note">
+                    La historia clínica se carga y se consulta en su propia
+                    pantalla: es append-only y sólo la ve una persona
+                    administradora.
+                  </p>
+                  <Link
+                    class="secondary-button"
+                    href={`/app/odontogram?patient=${selected.id}`}
+                  >
+                    <Icon name="smile" size={17} /> Abrir el odontograma
+                  </Link>
+                </section>
+              )}
+
+              {patientTab.value === "adjuntos" && (
+                <section class="patient-clinical">
+                  <h3>Estudios y documentos</h3>
+                  <PatientAttachments
+                    contactId={selected.id}
+                    isAdmin={appUser.isAdmin}
+                  />
+                </section>
+              )}
+
+              {patientTab.value === "pagos" && (
+                <section class="patient-history">
+                  <h3>Señas por turno</h3>
+                  {depositHistory.length ? (
+                    <ul>
+                      {depositHistory.map((appointment) => (
+                        <li key={appointment.id}>
+                          <span>
+                            <strong>
+                              {relationName(appointment.services)}
+                            </strong>
+                            <small>
+                              {formatAppointment(appointment.starts_at)}
+                            </small>
+                          </span>
+                          <span class="status-badge">
+                            {depositLabel(appointment)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p class="settings-note">
+                      Ningún turno de este paciente requirió seña.
+                    </p>
+                  )}
+                </section>
+              )}
+
               <div class="patient-actions">
                 {selected.conversationId ? (
                   <Link
@@ -477,6 +612,20 @@ export default component$(() => {
                   onClick$={() => openEditor(selected)}
                 >
                   Editar datos
+                </button>
+                <button
+                  class="secondary-button"
+                  type="button"
+                  onClick$={() => {
+                    printingId.value = selected.id;
+                    // El navegador imprime la hoja recién cuando existe en el
+                    // documento, así que se espera un cuadro.
+                    requestAnimationFrame(() =>
+                      requestAnimationFrame(() => window.print()),
+                    );
+                  }}
+                >
+                  <Icon name="printer" size={17} /> Exportar ficha
                 </button>
               </div>
             </div>
@@ -721,6 +870,79 @@ export default component$(() => {
             ×
           </button>
         </div>
+      )}
+
+      {duplicatesOpen.value && (
+        <DuplicateAssistant
+          isAdmin={appUser.isAdmin}
+          candidates={state.patients.map((patient) => ({
+            id: patient.id,
+            name: patient.name,
+            phoneE164: patient.phone_e164,
+            alternatePhoneE164: patient.alternate_phone_e164,
+            createdAt: patient.created_at,
+            appointmentCount: patient.appointments.length,
+            // El odontograma es de ADMIN y no se carga en esta pantalla; la
+            // base vuelve a verificarlo y rechaza la fusión si existe.
+            hasClinicalHistory: false,
+          }))}
+          onClose$={$(() => (duplicatesOpen.value = false))}
+          onMerged$={$((message: string) => {
+            duplicatesOpen.value = false;
+            notice.value = message;
+            reloadVersion.value += 1;
+          })}
+        />
+      )}
+
+      {printingPatient && (
+        <section class="patient-print-sheet" aria-hidden="true">
+          <header>
+            <h1>Ficha de {printingPatient.name}</h1>
+            <p>
+              {whatsappIdentityLabel(printingPatient)} ·{" "}
+              {coverageLabel(printingPatient.coverage)}
+            </p>
+          </header>
+          <h2>Turnos</h2>
+          {printingPatient.appointments.length ? (
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Fecha</th>
+                  <th scope="col">Motivo</th>
+                  <th scope="col">Estado</th>
+                  <th scope="col">Seña</th>
+                </tr>
+              </thead>
+              <tbody>
+                {printingPatient.appointments.map((appointment) => (
+                  <tr key={appointment.id}>
+                    <td>{formatAppointment(appointment.starts_at)}</td>
+                    <td>{relationName(appointment.services)}</td>
+                    <td>
+                      {appointmentDisplayStatus(
+                        appointment.status,
+                        effectiveDepositStatus(
+                          appointment.status,
+                          appointment.deposit_status,
+                          appointment.hold_expires_at,
+                        ),
+                      )}
+                    </td>
+                    <td>{depositLabel(appointment)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p>Sin turnos registrados.</p>
+          )}
+          <p class="patient-print-note">
+            Resumen administrativo. No incluye la historia clínica: el
+            odontograma se exporta desde su propia pantalla.
+          </p>
+        </section>
       )}
     </main>
   );

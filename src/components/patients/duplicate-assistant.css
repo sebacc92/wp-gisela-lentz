@@ -1,0 +1,124 @@
+/* Asistente de fichas duplicadas. Las dos fichas se muestran con el mismo peso
+   salvo por la etiqueta: la propuesta no debe leerse como una decisión tomada. */
+
+.duplicate-assistant {
+  max-width: 640px;
+}
+
+.duplicate-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.duplicate-list li {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.duplicate-reason {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.duplicate-reason strong {
+  color: var(--ink-900);
+  font-size: 14px;
+}
+
+.duplicate-reason small {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.duplicate-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  color: var(--ink-400);
+}
+
+.duplicate-card {
+  display: grid;
+  gap: 1px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.duplicate-card.keep {
+  border-color: var(--success);
+}
+
+.duplicate-card-label {
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.duplicate-card strong {
+  overflow: hidden;
+  color: var(--ink-900);
+  font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.duplicate-card small {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.duplicate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.duplicate-blocked {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.duplicate-empty {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.duplicate-error {
+  margin: 0 0 10px;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+@media (max-width: 560px) {
+  .duplicate-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .duplicate-pair > svg {
+    transform: rotate(-90deg);
+    justify-self: center;
+  }
+}
