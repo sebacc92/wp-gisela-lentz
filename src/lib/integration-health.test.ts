@@ -135,3 +135,19 @@ test("una resincronización completa pendiente sólo advierte", () => {
   });
   assert.equal(alert.severity, "warning");
 });
+
+test("sin Calendar en la entrada, el aviso sólo evalúa WhatsApp", () => {
+  const alerts = integrationHealthAlerts({
+    whatsapp: whatsapp({ integrationStatus: "error" }),
+  });
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].id, "whatsapp");
+});
+
+test("sin Calendar en la entrada no hay aviso de Calendar aunque falte el dato", () => {
+  assert.deepEqual(
+    integrationHealthAlerts({ whatsapp: whatsapp() }),
+    [],
+    "no evaluar no es lo mismo que no poder leer",
+  );
+});

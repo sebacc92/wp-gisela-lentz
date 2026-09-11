@@ -2,8 +2,11 @@
    Las dos columnas tienen el mismo peso visual a propósito: la pantalla no
    sugiere una respuesta, la decisión es de quien mira. */
 
-.calendar-conflict-dialog {
-  max-width: 720px;
+/* Comparar dos versiones lado a lado no entra en los 400px del drawer común:
+   las fechas se partían en tres renglones y los botones en dos. */
+.drawer.calendar-conflict-dialog {
+  width: clamp(480px, 42vw, 720px);
+  max-width: 100vw;
 }
 
 .calendar-conflict-lead {

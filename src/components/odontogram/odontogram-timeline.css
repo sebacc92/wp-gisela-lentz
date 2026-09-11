@@ -106,3 +106,9 @@
   color: var(--ink-500);
   font-size: 13px;
 }
+
+.odontogram-timeline-range {
+  margin: 0;
+  color: var(--ink-700);
+  font-size: 14px;
+}

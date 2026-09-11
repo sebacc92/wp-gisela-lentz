@@ -49,25 +49,34 @@ export const OdontogramTimeline = component$<Props>(({ entries }) => {
         asientos registrados; no se inventa nada entre medio.
       </p>
 
-      <label class="odontogram-timeline-slider">
-        <span>
+      {points.length > 2 ? (
+        <label class="odontogram-timeline-slider">
+          <span>
+            Desde <strong>{label(from.recordedAt)}</strong> hasta{" "}
+            <strong>{label(to.recordedAt)}</strong>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={points.length - 2}
+            step={1}
+            value={safeFrom}
+            aria-label="Día con el que comparar"
+            onInput$={(_, element) => (fromIndex.value = Number(element.value))}
+          />
+          <span class="odontogram-timeline-scale" aria-hidden="true">
+            <small>{label(points[0].recordedAt)}</small>
+            <small>{label(points[points.length - 2].recordedAt)}</small>
+          </span>
+        </label>
+      ) : (
+        // Con dos fechas no hay nada que elegir: un deslizador de una sola
+        // posición confunde más de lo que informa.
+        <p class="odontogram-timeline-range">
           Desde <strong>{label(from.recordedAt)}</strong> hasta{" "}
           <strong>{label(to.recordedAt)}</strong>
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={points.length - 2}
-          step={1}
-          value={safeFrom}
-          aria-label="Día con el que comparar"
-          onInput$={(_, element) => (fromIndex.value = Number(element.value))}
-        />
-        <span class="odontogram-timeline-scale" aria-hidden="true">
-          <small>{label(points[0].recordedAt)}</small>
-          <small>{label(points[points.length - 2].recordedAt)}</small>
-        </span>
-      </label>
+        </p>
+      )}
 
       {changes.length === 0 ? (
         <p class="odontogram-timeline-empty">

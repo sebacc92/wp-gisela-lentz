@@ -23,6 +23,7 @@ import {
   effectiveDepositStatus,
 } from "~/lib/booking";
 import type { DepositStatus, PatientCoverage } from "~/lib/inbox-types";
+import { foldForSearch } from "~/lib/message-search";
 import { normalizePhoneE164 } from "~/lib/phone";
 import { getSupabaseClient } from "~/lib/supabase/client";
 
@@ -140,6 +141,9 @@ export default component$(() => {
             .select(
               "id,name,phone_e164,whatsapp_user_id,email,administrative_notes,created_at,coverage,is_existing_patient,alternate_phone_e164",
             )
+            // Una ficha fusionada sigue existiendo para que las referencias
+            // históricas resuelvan, pero no se ofrece: su paciente es la principal.
+            .is("merged_into_contact_id", null)
             .order("name"),
           client
             .from("appointments")
@@ -223,15 +227,18 @@ export default component$(() => {
     editorOpen.value = true;
   });
 
-  const normalizedQuery = query.value.trim().toLocaleLowerCase("es-AR");
+  // Sin acentos: «perez» encuentra a «Pérez».
+  const normalizedQuery = foldForSearch(query.value.trim());
   const patients = state.patients.filter(
     (patient) =>
       !normalizedQuery ||
-      patient.name.toLocaleLowerCase("es-AR").includes(normalizedQuery) ||
+      foldForSearch(patient.name).includes(normalizedQuery) ||
       patient.phone_e164?.includes(normalizedQuery) ||
       patient.whatsapp_user_id?.includes(normalizedQuery) ||
       patient.alternate_phone_e164?.includes(normalizedQuery) ||
-      patient.email?.toLocaleLowerCase("es-AR").includes(normalizedQuery),
+      (patient.email
+        ? foldForSearch(patient.email).includes(normalizedQuery)
+        : false),
   );
   const selected = state.patients.find(
     (patient) => patient.id === selectedId.value,
@@ -389,7 +396,7 @@ export default component$(() => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="patient-title"
-            onClick$={(event) => event.stopPropagation()}
+            stoppropagation:click
           >
             <header class="drawer-header">
               <div>
@@ -644,7 +651,7 @@ export default component$(() => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="patient-editor-title"
-            onClick$={(event) => event.stopPropagation()}
+            stoppropagation:click
           >
             <header class="drawer-header">
               <div>
@@ -686,12 +693,15 @@ export default component$(() => {
                   if (!editor.id) {
                     const { data: existing, error: lookupError } = await client
                       .from("contacts")
-                      .select("id")
+                      .select("id,merged_into_contact_id")
                       .eq("phone_e164", phone)
                       .maybeSingle();
                     if (lookupError) throw lookupError;
                     if (existing) {
-                      selectedId.value = existing.id as string;
+                      // Si el teléfono es de una ficha fusionada, la ficha
+                      // que vale es aquella en la que se unió.
+                      selectedId.value = (existing.merged_into_contact_id ??
+                        existing.id) as string;
                       editorOpen.value = false;
                       notice.value =
                         "Ese teléfono ya pertenece a un paciente. Abrimos su ficha existente.";

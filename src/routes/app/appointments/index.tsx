@@ -798,739 +798,785 @@ export default component$(() => {
           </div>
         </header>
 
-        <GoogleCalendarStatusBlock variant="agenda" />
-
-        {!futureDepositMode.value && viewMode.value === "day" && (
-          <nav class="agenda-week" aria-label="Días de la semana">
-            {weekDays.map((date) => (
-              <button
-                key={date}
-                type="button"
-                class={{
-                  "agenda-week-day": true,
-                  selected: date === selectedDate.value,
-                  today: date === businessDateInput(),
-                }}
-                aria-label={formatSelectedDate(date)}
-                aria-pressed={date === selectedDate.value}
-                aria-current={date === businessDateInput() ? "date" : undefined}
-                onClick$={() => {
-                  selectedDate.value = date;
-                  selectedId.value = "";
-                }}
-              >
-                <span>
-                  {new Intl.DateTimeFormat("es-AR", {
-                    weekday: "short",
-                    timeZone: "UTC",
-                  })
-                    .format(new Date(`${date}T12:00:00Z`))
-                    .replace(".", "")}
-                </span>
-                <strong>{Number(date.slice(-2))}</strong>
-                <small>{date === businessDateInput() ? "Hoy" : "\u00a0"}</small>
-              </button>
-            ))}
-          </nav>
-        )}
-
-        <div class="section-toolbar agenda-toolbar">
-          <div class="agenda-date-nav" aria-label="Cambiar día">
-            <button
-              class="secondary-button small"
-              type="button"
-              aria-label={
-                viewMode.value === "month"
-                  ? "Mes anterior"
-                  : viewMode.value === "week"
-                    ? "Semana anterior"
-                    : "Día anterior"
-              }
-              onClick$={() => {
-                futureDepositMode.value = false;
-                selectedDate.value = shiftAgendaDate(
-                  viewMode.value,
-                  selectedDate.value,
-                  -1,
-                );
-              }}
-            >
-              ←
-            </button>
-            <input
-              aria-label="Fecha de agenda"
-              type="date"
-              value={selectedDate.value}
-              onInput$={(_, element) => {
-                if (element.value) {
-                  futureDepositMode.value = false;
-                  selectedDate.value = element.value;
-                } else element.value = selectedDate.value;
-              }}
-            />
-            <button
-              class="secondary-button small"
-              type="button"
-              aria-label={
-                viewMode.value === "month"
-                  ? "Mes siguiente"
-                  : viewMode.value === "week"
-                    ? "Semana siguiente"
-                    : "Día siguiente"
-              }
-              onClick$={() => {
-                futureDepositMode.value = false;
-                selectedDate.value = shiftAgendaDate(
-                  viewMode.value,
-                  selectedDate.value,
-                  1,
-                );
-              }}
-            >
-              →
-            </button>
-            <button
-              class={{
-                "filter-pill": true,
-                active: isToday && !futureDepositMode.value,
-              }}
-              type="button"
-              onClick$={() => {
-                futureDepositMode.value = false;
-                selectedDate.value = businessDateInput();
-              }}
-            >
-              Hoy
-            </button>
-            <button
-              class="filter-pill"
-              type="button"
-              onClick$={() => {
-                futureDepositMode.value = false;
-                selectedDate.value = shiftDate(businessDateInput(), 1);
-              }}
-            >
-              Mañana
-            </button>
-          </div>
-
-          <div
-            class="agenda-view-switch"
-            role="group"
-            aria-label="Cómo ver la agenda"
-          >
-            {(["day", "week", "month"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                class={{
-                  "filter-pill": true,
-                  active: viewMode.value === mode && !futureDepositMode.value,
-                }}
-                aria-pressed={
-                  viewMode.value === mode && !futureDepositMode.value
-                }
-                onClick$={() => {
-                  futureDepositMode.value = false;
-                  viewMode.value = mode;
-                  selectedId.value = "";
-                }}
-              >
-                {mode === "day" ? "Día" : mode === "week" ? "Semana" : "Mes"}
-              </button>
-            ))}
-          </div>
-          <label class="search-field compact-search">
-            <Icon name="search" size={17} />
-            <span class="sr-only">Buscar paciente o servicio</span>
-            <input
-              type="search"
-              value={query.value}
-              placeholder="Buscar paciente o servicio"
-              autoComplete="off"
-              enterKeyHint="search"
-              onInput$={(_, element) => (query.value = element.value)}
-            />
-            {query.value && (
-              <button
-                class="search-clear"
-                type="button"
-                aria-label="Limpiar búsqueda"
-                title="Limpiar búsqueda"
-                onClick$={() => (query.value = "")}
-              >
-                <Icon name="x" size={16} />
-              </button>
+        <div class="agenda-layout">
+          <div class="agenda-main">
+            {!futureDepositMode.value && viewMode.value === "day" && (
+              <nav class="agenda-week" aria-label="Días de la semana">
+                {weekDays.map((date) => (
+                  <button
+                    key={date}
+                    type="button"
+                    class={{
+                      "agenda-week-day": true,
+                      selected: date === selectedDate.value,
+                      today: date === businessDateInput(),
+                    }}
+                    aria-label={formatSelectedDate(date)}
+                    aria-pressed={date === selectedDate.value}
+                    aria-current={
+                      date === businessDateInput() ? "date" : undefined
+                    }
+                    onClick$={() => {
+                      selectedDate.value = date;
+                      selectedId.value = "";
+                    }}
+                  >
+                    <span>
+                      {new Intl.DateTimeFormat("es-AR", {
+                        weekday: "short",
+                        timeZone: "UTC",
+                      })
+                        .format(new Date(`${date}T12:00:00Z`))
+                        .replace(".", "")}
+                    </span>
+                    <strong>{Number(date.slice(-2))}</strong>
+                    <small>
+                      {date === businessDateInput() ? "Hoy" : "\u00a0"}
+                    </small>
+                  </button>
+                ))}
+              </nav>
             )}
-          </label>
-          <label class="agenda-status-filter">
-            <span>Mostrar</span>
-            <div class="select-wrap">
-              <select
-                value={statusFilter.value}
-                onChange$={(_, element) =>
-                  (statusFilter.value =
-                    element.value as typeof statusFilter.value)
-                }
-              >
-                <option value="">Todos los estados</option>
-                <option value="scheduled">Esperando seña o comprobante</option>
-                <option value="confirmed">Confirmados</option>
-                <option value="completed">Atendidos</option>
-                <option value="no_show">No asistieron</option>
-                <option value="cancelled">Cancelados</option>
-              </select>
-              <Icon name="chevron-down" size={17} />
-            </div>
-          </label>
-          {depositFilter.value && (
-            <button
-              class="filter-pill active"
-              type="button"
-              onClick$={() => {
-                depositFilter.value = "";
-                futureDepositMode.value = false;
-              }}
-            >
-              {depositFilter.value === "proof_received"
-                ? "Comprobantes recibidos"
-                : "Esperando seña"}{" "}
-              ×
-            </button>
-          )}
 
-          <button
-            class={{ "filter-pill": true, active: filtersOpen.value }}
-            type="button"
-            aria-expanded={filtersOpen.value}
-            aria-controls="agenda-filter-panel"
-            onClick$={() => (filtersOpen.value = !filtersOpen.value)}
-          >
-            Más filtros
-            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
-          </button>
-        </div>
-
-        {filtersOpen.value && (
-          <div
-            id="agenda-filter-panel"
-            class="agenda-filter-panel"
-            role="group"
-            aria-label="Filtros combinados"
-          >
-            <label class="agenda-status-filter">
-              <span>Cobertura</span>
-              <div class="select-wrap">
-                <select
-                  value={coverageFilter.value}
-                  onChange$={(_, element) =>
-                    (coverageFilter.value = element.value as
-                      | PatientCoverage
-                      | "")
+            <div class="section-toolbar agenda-toolbar">
+              <div class="agenda-date-nav" aria-label="Cambiar día">
+                <button
+                  class="secondary-button small"
+                  type="button"
+                  aria-label={
+                    viewMode.value === "month"
+                      ? "Mes anterior"
+                      : viewMode.value === "week"
+                        ? "Semana anterior"
+                        : "Día anterior"
                   }
-                >
-                  <option value="">Todas</option>
-                  <option value="ioma">IOMA</option>
-                  <option value="particular">Particular</option>
-                </select>
-                <Icon name="chevron-down" size={17} />
-              </div>
-            </label>
-
-            <label class="agenda-status-filter">
-              <span>Seña</span>
-              <div class="select-wrap">
-                <select
-                  value={depositFilter.value}
-                  onChange$={(_, element) => {
-                    depositFilter.value = element.value as DepositStatus | "";
-                    if (!element.value) futureDepositMode.value = false;
+                  onClick$={() => {
+                    futureDepositMode.value = false;
+                    selectedDate.value = shiftAgendaDate(
+                      viewMode.value,
+                      selectedDate.value,
+                      -1,
+                    );
                   }}
                 >
-                  <option value="">Cualquiera</option>
-                  <option value="pending">Esperando seña</option>
-                  <option value="proof_received">Comprobante recibido</option>
-                  <option value="confirmed">Confirmada</option>
-                  <option value="not_required">No requerida</option>
-                </select>
-                <Icon name="chevron-down" size={17} />
-              </div>
-            </label>
-
-            <label class="agenda-status-filter">
-              <span>Motivo</span>
-              <div class="select-wrap">
-                <select
-                  value={serviceFilter.value}
-                  onChange$={(_, element) =>
-                    (serviceFilter.value = element.value)
+                  ←
+                </button>
+                <input
+                  aria-label="Fecha de agenda"
+                  type="date"
+                  value={selectedDate.value}
+                  onInput$={(_, element) => {
+                    if (element.value) {
+                      futureDepositMode.value = false;
+                      selectedDate.value = element.value;
+                    } else element.value = selectedDate.value;
+                  }}
+                />
+                <button
+                  class="secondary-button small"
+                  type="button"
+                  aria-label={
+                    viewMode.value === "month"
+                      ? "Mes siguiente"
+                      : viewMode.value === "week"
+                        ? "Semana siguiente"
+                        : "Día siguiente"
                   }
+                  onClick$={() => {
+                    futureDepositMode.value = false;
+                    selectedDate.value = shiftAgendaDate(
+                      viewMode.value,
+                      selectedDate.value,
+                      1,
+                    );
+                  }}
                 >
-                  <option value="">Todos</option>
-                  {state.services.map((service) => (
-                    <option key={service.id} value={service.id}>
-                      {service.name}
-                    </option>
-                  ))}
-                </select>
-                <Icon name="chevron-down" size={17} />
+                  →
+                </button>
+                <button
+                  class={{
+                    "filter-pill": true,
+                    active: isToday && !futureDepositMode.value,
+                  }}
+                  type="button"
+                  onClick$={() => {
+                    futureDepositMode.value = false;
+                    selectedDate.value = businessDateInput();
+                  }}
+                >
+                  Hoy
+                </button>
+                <button
+                  class="filter-pill"
+                  type="button"
+                  onClick$={() => {
+                    futureDepositMode.value = false;
+                    selectedDate.value = shiftDate(businessDateInput(), 1);
+                  }}
+                >
+                  Mañana
+                </button>
               </div>
-            </label>
 
-            {/* Hoy atiende sólo Gisela; el filtro aparece si algún día se
-                suman más profesionales. */}
-            {state.professionals.length > 1 && (
+              <div
+                class="agenda-view-switch"
+                role="group"
+                aria-label="Cómo ver la agenda"
+              >
+                {(["day", "week", "month"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    class={{
+                      "filter-pill": true,
+                      active:
+                        viewMode.value === mode && !futureDepositMode.value,
+                    }}
+                    aria-pressed={
+                      viewMode.value === mode && !futureDepositMode.value
+                    }
+                    onClick$={() => {
+                      futureDepositMode.value = false;
+                      viewMode.value = mode;
+                      selectedId.value = "";
+                    }}
+                  >
+                    {mode === "day"
+                      ? "Día"
+                      : mode === "week"
+                        ? "Semana"
+                        : "Mes"}
+                  </button>
+                ))}
+              </div>
+              <label class="search-field compact-search">
+                <Icon name="search" size={17} />
+                <span class="sr-only">Buscar paciente o servicio</span>
+                <input
+                  type="search"
+                  value={query.value}
+                  placeholder="Buscar paciente o servicio"
+                  autoComplete="off"
+                  enterKeyHint="search"
+                  onInput$={(_, element) => (query.value = element.value)}
+                />
+                {query.value && (
+                  <button
+                    class="search-clear"
+                    type="button"
+                    aria-label="Limpiar búsqueda"
+                    title="Limpiar búsqueda"
+                    onClick$={() => (query.value = "")}
+                  >
+                    <Icon name="x" size={16} />
+                  </button>
+                )}
+              </label>
               <label class="agenda-status-filter">
-                <span>Profesional</span>
+                <span>Mostrar</span>
                 <div class="select-wrap">
                   <select
-                    value={professionalFilter.value}
+                    value={statusFilter.value}
                     onChange$={(_, element) =>
-                      (professionalFilter.value = element.value)
+                      (statusFilter.value =
+                        element.value as typeof statusFilter.value)
                     }
                   >
-                    <option value="">Todos</option>
-                    {state.professionals.map((professional) => (
-                      <option key={professional.id} value={professional.id}>
-                        {professional.name}
-                      </option>
-                    ))}
+                    <option value="">Todos los estados</option>
+                    <option value="scheduled">
+                      Esperando seña o comprobante
+                    </option>
+                    <option value="confirmed">Confirmados</option>
+                    <option value="completed">Atendidos</option>
+                    <option value="no_show">No asistieron</option>
+                    <option value="cancelled">Cancelados</option>
                   </select>
                   <Icon name="chevron-down" size={17} />
                 </div>
               </label>
-            )}
+              {depositFilter.value && (
+                <button
+                  class="filter-pill active"
+                  type="button"
+                  onClick$={() => {
+                    depositFilter.value = "";
+                    futureDepositMode.value = false;
+                  }}
+                >
+                  {depositFilter.value === "proof_received"
+                    ? "Comprobantes recibidos"
+                    : "Esperando seña"}{" "}
+                  ×
+                </button>
+              )}
 
-            <button
-              class="secondary-button small"
-              type="button"
-              disabled={activeFilterCount === 0}
-              onClick$={() => {
-                query.value = "";
-                statusFilter.value = "";
-                depositFilter.value = "";
-                coverageFilter.value = "";
-                serviceFilter.value = "";
-                professionalFilter.value = "";
-                futureDepositMode.value = false;
-              }}
-            >
-              Limpiar filtros
-            </button>
-          </div>
-        )}
-
-        <div
-          class="agenda-day-summary"
-          aria-label={
-            futureDepositMode.value
-              ? "Resumen de próximos turnos"
-              : "Resumen del día"
-          }
-        >
-          {!state.loading && !state.error && (
-            <>
-              <span>
-                <strong>{activeDayAppointments.length}</strong> turnos activos
-              </span>
-              <span>
-                <strong>{pendingDayAppointments.length}</strong> señas
-                pendientes
-              </span>
-              <span>
-                <strong>{state.blocks.length}</strong> bloqueos de Google
-              </span>
-              <button type="button" onClick$={() => (reloadVersion.value += 1)}>
-                Actualizar agenda
+              <button
+                class={{ "filter-pill": true, active: filtersOpen.value }}
+                type="button"
+                aria-expanded={filtersOpen.value}
+                aria-controls="agenda-filter-panel"
+                onClick$={() => (filtersOpen.value = !filtersOpen.value)}
+              >
+                Más filtros
+                {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
               </button>
-            </>
-          )}
-        </div>
+            </div>
 
-        {!state.loading && !state.error && state.blocks.length > 0 && (
-          <details
-            class="agenda-blocks"
-            aria-label="Bloqueos de Google Calendar"
-          >
-            <summary>
-              <h2>
-                Google Calendar · {state.blocks.length}{" "}
-                {state.blocks.length === 1
-                  ? "horario ocupado"
-                  : "horarios ocupados"}
-              </h2>
-            </summary>
-            <ul>
-              {state.blocks.map((block) => (
-                <li key={block.googleEventId}>
-                  <strong>
-                    {futureDepositMode.value && (
-                      <small>
-                        {formatBusinessDate(new Date(block.startsAt), {
-                          day: "numeric",
-                          month: "short",
-                        })}
-                        {" · "}
-                      </small>
-                    )}
-                    {block.allDay ? (
-                      "Todo el día"
-                    ) : (
-                      <>
-                        {formatBusinessDate(new Date(block.startsAt), {
-                          timeStyle: "short",
-                        })}
-                        {" – "}
-                        {formatBusinessDate(new Date(block.endsAt), {
-                          timeStyle: "short",
-                        })}
-                      </>
-                    )}
-                  </strong>
-                  <span>{block.summary || "Evento sin título"}</span>
-                  {state.isAdmin && (
-                    <button
-                      class="secondary-button agenda-block-action"
-                      type="button"
-                      onClick$={() =>
-                        (convertingBlockId.value = block.googleEventId)
+            {filtersOpen.value && (
+              <div
+                id="agenda-filter-panel"
+                class="agenda-filter-panel"
+                role="group"
+                aria-label="Filtros combinados"
+              >
+                <label class="agenda-status-filter">
+                  <span>Cobertura</span>
+                  <div class="select-wrap">
+                    <select
+                      value={coverageFilter.value}
+                      onChange$={(_, element) =>
+                        (coverageFilter.value = element.value as
+                          | PatientCoverage
+                          | "")
                       }
                     >
-                      Convertir en turno
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-            <small>
-              Vienen de un evento creado a mano en Google Calendar. Ocupan el
-              horario, pero no son turnos de pacientes.
-            </small>
-          </details>
-        )}
+                      <option value="">Todas</option>
+                      <option value="ioma">IOMA</option>
+                      <option value="particular">Particular</option>
+                    </select>
+                    <Icon name="chevron-down" size={17} />
+                  </div>
+                </label>
 
-        {state.conflicts.length > 0 && !state.loading && (
-          <section
-            class="agenda-conflicts"
-            aria-labelledby="agenda-conflicts-title"
-          >
-            <header>
-              <Icon name="alert" size={19} />
-              <div>
-                <strong id="agenda-conflicts-title">
-                  {state.conflicts.length === 1
-                    ? "Hay 1 cambio de Google Calendar para decidir"
-                    : `Hay ${state.conflicts.length} cambios de Google Calendar para decidir`}
-                </strong>
-                <small>
-                  Alguien movió, borró o editó estos turnos en Google. La agenda
-                  no cambió sola.
-                </small>
-              </div>
-            </header>
-            <ul>
-              {state.conflicts.map((conflict) => (
-                <li key={conflict.id}>
-                  <span>
-                    <strong>{conflict.contactName}</strong>
-                    <small>
-                      {conflict.kind === "cancellation_requested"
-                        ? "Se borró el evento en Google"
-                        : conflict.kind === "metadata_changed"
-                          ? "Cambió el texto del evento"
-                          : "Se movió el turno en Google"}
-                    </small>
-                  </span>
-                  <button
-                    class="secondary-button small"
-                    type="button"
-                    onClick$={() => (reviewingConflictId.value = conflict.id)}
-                  >
-                    Comparar y decidir
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-
-        {viewMode.value === "month" &&
-          !futureDepositMode.value &&
-          !state.loading &&
-          !state.error && (
-            <div class="agenda-month" role="grid" aria-label="Agenda del mes">
-              <p class="agenda-month-hint">
-                Tocá un turno para abrirlo o arrastralo a otro día para
-                reprogramarlo. El horario se elige entre los disponibles y se
-                confirma antes de mover nada.
-              </p>
-              <div class="agenda-month-head" role="row">
-                {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map(
-                  (label) => (
-                    <span key={label} role="columnheader">
-                      {label}
-                    </span>
-                  ),
-                )}
-              </div>
-              <div class="agenda-month-grid" role="rowgroup">
-                {monthDays.map((day) => {
-                  const dayAppointments =
-                    appointmentsByDate.get(day.date) ?? [];
-                  const isTodayCell = day.date === businessDateInput();
-                  return (
-                    <div
-                      key={day.date}
-                      role="gridcell"
-                      class={{
-                        "agenda-month-day": true,
-                        outside: !day.inMonth,
-                        today: isTodayCell,
-                        selected: day.date === selectedDate.value,
-                        "drop-target": dragOverDate.value === day.date,
-                      }}
-                      aria-current={isTodayCell ? "date" : undefined}
-                      preventdefault:dragover
-                      onDragOver$={() => {
-                        if (draggingId.value) dragOverDate.value = day.date;
-                      }}
-                      onDragLeave$={() => {
-                        if (dragOverDate.value === day.date) {
-                          dragOverDate.value = "";
-                        }
-                      }}
-                      preventdefault:drop
-                      onDrop$={() => {
-                        const appointmentId = draggingId.value;
-                        draggingId.value = "";
-                        dragOverDate.value = "";
-                        if (!appointmentId) return;
-                        const dragged = state.appointments.find(
-                          (item) => item.id === appointmentId,
-                        );
-                        if (!dragged) return;
-                        // Soltar no reprograma: abre la reprogramación con el
-                        // día elegido para que el horario salga de la
-                        // disponibilidad real y quede confirmado a mano.
-                        if (
-                          businessDateInput(new Date(dragged.startsAt)) ===
-                          day.date
-                        ) {
-                          return;
-                        }
-                        selectedId.value = appointmentId;
-                        rescheduleTargetDate.value = day.date;
-                        rescheduling.value = true;
+                <label class="agenda-status-filter">
+                  <span>Seña</span>
+                  <div class="select-wrap">
+                    <select
+                      value={depositFilter.value}
+                      onChange$={(_, element) => {
+                        depositFilter.value = element.value as
+                          | DepositStatus
+                          | "";
+                        if (!element.value) futureDepositMode.value = false;
                       }}
                     >
-                      <button
-                        class="agenda-month-daynumber"
-                        type="button"
-                        aria-label={`${formatSelectedDate(day.date)}: ${
-                          dayAppointments.length
-                        } ${dayAppointments.length === 1 ? "turno" : "turnos"}`}
-                        onClick$={() => {
-                          selectedDate.value = day.date;
-                          viewMode.value = "day";
-                          selectedId.value = "";
-                        }}
-                      >
-                        {Number(day.date.slice(-2))}
-                      </button>
-                      {dayAppointments.length > 0 && (
-                        <span class="agenda-month-items">
-                          {dayAppointments.slice(0, 3).map((appointment) => {
-                            const movable = !finalStatuses.has(
-                              appointment.status,
-                            );
-                            return (
-                              <button
-                                key={appointment.id}
-                                type="button"
-                                class={{
-                                  "agenda-month-item": true,
-                                  [`status-${statusTone(appointment)}`]: true,
-                                  dragging: draggingId.value === appointment.id,
-                                }}
-                                draggable={movable}
-                                title={`${appointment.contactName} · ${appointment.serviceName}`}
-                                onDragStart$={() => {
-                                  if (movable)
-                                    draggingId.value = appointment.id;
-                                }}
-                                onDragEnd$={() => {
-                                  draggingId.value = "";
-                                  dragOverDate.value = "";
-                                }}
-                                onClick$={() => {
-                                  selectedDate.value = day.date;
-                                  selectedId.value = appointment.id;
-                                }}
-                              >
-                                {formatBusinessDate(
-                                  new Date(appointment.startsAt),
-                                  {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                    hour12: false,
-                                  },
-                                )}{" "}
-                                {appointment.contactName.split(/\s+/)[0]}
-                              </button>
-                            );
-                          })}
-                          {dayAppointments.length > 3 && (
-                            <button
-                              class="agenda-month-more"
-                              type="button"
-                              onClick$={() => {
-                                selectedDate.value = day.date;
-                                viewMode.value = "day";
-                                selectedId.value = "";
-                              }}
-                            >
-                              +{dayAppointments.length - 3} más
-                            </button>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                      <option value="">Cualquiera</option>
+                      <option value="pending">Esperando seña</option>
+                      <option value="proof_received">
+                        Comprobante recibido
+                      </option>
+                      <option value="confirmed">Confirmada</option>
+                      <option value="not_required">No requerida</option>
+                    </select>
+                    <Icon name="chevron-down" size={17} />
+                  </div>
+                </label>
 
-        <div
-          class="agenda-list"
-          aria-busy={state.loading}
-          hidden={
-            viewMode.value === "month" &&
-            !futureDepositMode.value &&
-            !state.loading &&
-            !state.error
-          }
-        >
-          <div class="agenda-label">
-            <span>
-              {visibleAppointments.length}{" "}
-              {visibleAppointments.length === 1 ? "turno" : "turnos"}
-            </span>
-            <i />
-          </div>
-          {state.loading ? (
-            <div class="section-empty" role="status">
-              <span class="small-spinner" aria-hidden="true" />
-              <p>Cargando turnos…</p>
-            </div>
-          ) : state.error ? (
-            <div class="section-empty" role="alert">
-              <Icon name="alert" size={23} />
-              <p>No pudimos cargar la agenda.</p>
-              <button type="button" onClick$={() => (reloadVersion.value += 1)}>
-                Reintentar
-              </button>
-            </div>
-          ) : visibleAppointments.length === 0 &&
-            state.appointments.length > 0 ? (
-            <div class="section-empty">
-              <Icon name="search" size={25} />
-              <p>No encontramos turnos con esos filtros.</p>
-              <button
-                type="button"
-                onClick$={() => {
-                  query.value = "";
-                  statusFilter.value = "";
-                  depositFilter.value = "";
-                  coverageFilter.value = "";
-                  serviceFilter.value = "";
-                  professionalFilter.value = "";
-                  futureDepositMode.value = false;
-                }}
-              >
-                {viewMode.value === "week"
-                  ? "Ver todos los turnos de la semana"
-                  : viewMode.value === "month"
-                    ? "Ver todos los turnos del mes"
-                    : "Ver todos los turnos del día"}
-              </button>
-            </div>
-          ) : visibleAppointments.length === 0 ? (
-            <div class="section-empty">
-              <Icon name="calendar" size={25} />
-              <p>
-                {viewMode.value === "week"
-                  ? "No hay turnos en esta semana."
-                  : viewMode.value === "month"
-                    ? "No hay turnos en este mes."
-                    : "No hay turnos para este día."}
-              </p>
-              <button type="button" onClick$={() => (creating.value = true)}>
-                Crear un turno
-              </button>
-            </div>
-          ) : (
-            visibleAppointments.map((appointment) => {
-              const statusLabel = displayStatus(appointment);
-              return (
+                <label class="agenda-status-filter">
+                  <span>Motivo</span>
+                  <div class="select-wrap">
+                    <select
+                      value={serviceFilter.value}
+                      onChange$={(_, element) =>
+                        (serviceFilter.value = element.value)
+                      }
+                    >
+                      <option value="">Todos</option>
+                      {state.services.map((service) => (
+                        <option key={service.id} value={service.id}>
+                          {service.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Icon name="chevron-down" size={17} />
+                  </div>
+                </label>
+
+                {/* Hoy atiende sólo Gisela; el filtro aparece si algún día se
+                suman más profesionales. */}
+                {state.professionals.length > 1 && (
+                  <label class="agenda-status-filter">
+                    <span>Profesional</span>
+                    <div class="select-wrap">
+                      <select
+                        value={professionalFilter.value}
+                        onChange$={(_, element) =>
+                          (professionalFilter.value = element.value)
+                        }
+                      >
+                        <option value="">Todos</option>
+                        {state.professionals.map((professional) => (
+                          <option key={professional.id} value={professional.id}>
+                            {professional.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Icon name="chevron-down" size={17} />
+                    </div>
+                  </label>
+                )}
+
                 <button
-                  class="agenda-item"
+                  class="secondary-button small"
                   type="button"
-                  key={appointment.id}
-                  onClick$={() => (selectedId.value = appointment.id)}
+                  disabled={activeFilterCount === 0}
+                  onClick$={() => {
+                    query.value = "";
+                    statusFilter.value = "";
+                    depositFilter.value = "";
+                    coverageFilter.value = "";
+                    serviceFilter.value = "";
+                    professionalFilter.value = "";
+                    futureDepositMode.value = false;
+                  }}
                 >
-                  <time dateTime={appointment.startsAt}>
-                    {(futureDepositMode.value || viewMode.value !== "day") && (
-                      <small>
-                        {formatBusinessDate(new Date(appointment.startsAt), {
-                          weekday: "short",
-                          day: "numeric",
-                          month: "short",
-                        })}
-                      </small>
-                    )}
-                    <strong>
-                      {formatBusinessDate(new Date(appointment.startsAt), {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: false,
-                      })}
-                    </strong>
-                    <small class="agenda-end-time">
-                      hasta{" "}
-                      {formatBusinessDate(new Date(appointment.endsAt), {
-                        timeStyle: "short",
-                      })}
-                    </small>
-                  </time>
-                  <span class="agenda-avatar">
-                    {appointment.contactName
-                      .split(/\s+/)
-                      .slice(0, 2)
-                      .map((part) => part[0])
-                      .join("")}
-                  </span>
-                  <span class="agenda-copy">
-                    <strong>{appointment.contactName}</strong>
-                    <span class="agenda-service">
-                      {appointment.serviceName}
-                    </span>
-                    <small>
-                      {coverageAndDuration(
-                        appointment.coverage,
-                        appointment.durationMinutes,
-                      )}
-                    </small>
-                  </span>
-                  <span
-                    class={`status-badge status-${statusTone(appointment)}`}
-                  >
-                    {statusLabel}
-                  </span>
+                  Limpiar filtros
                 </button>
-              );
-            })
-          )}
+              </div>
+            )}
+
+            {viewMode.value === "month" &&
+              !futureDepositMode.value &&
+              !state.loading &&
+              !state.error && (
+                <div
+                  class="agenda-month"
+                  role="grid"
+                  aria-label="Agenda del mes"
+                >
+                  <p class="agenda-month-hint">
+                    Tocá un turno para abrirlo o arrastralo a otro día para
+                    reprogramarlo. El horario se elige entre los disponibles y
+                    se confirma antes de mover nada.
+                  </p>
+                  <div class="agenda-month-head" role="row">
+                    {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map(
+                      (label) => (
+                        <span key={label} role="columnheader">
+                          {label}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                  <div class="agenda-month-grid" role="rowgroup">
+                    {monthDays.map((day) => {
+                      const dayAppointments =
+                        appointmentsByDate.get(day.date) ?? [];
+                      const isTodayCell = day.date === businessDateInput();
+                      return (
+                        <div
+                          key={day.date}
+                          role="gridcell"
+                          class={{
+                            "agenda-month-day": true,
+                            outside: !day.inMonth,
+                            today: isTodayCell,
+                            selected: day.date === selectedDate.value,
+                            "drop-target": dragOverDate.value === day.date,
+                          }}
+                          aria-current={isTodayCell ? "date" : undefined}
+                          preventdefault:dragover
+                          onDragOver$={() => {
+                            if (draggingId.value) dragOverDate.value = day.date;
+                          }}
+                          onDragLeave$={() => {
+                            if (dragOverDate.value === day.date) {
+                              dragOverDate.value = "";
+                            }
+                          }}
+                          preventdefault:drop
+                          onDrop$={() => {
+                            const appointmentId = draggingId.value;
+                            draggingId.value = "";
+                            dragOverDate.value = "";
+                            if (!appointmentId) return;
+                            const dragged = state.appointments.find(
+                              (item) => item.id === appointmentId,
+                            );
+                            if (!dragged) return;
+                            // Soltar no reprograma: abre la reprogramación con el
+                            // día elegido para que el horario salga de la
+                            // disponibilidad real y quede confirmado a mano.
+                            if (
+                              businessDateInput(new Date(dragged.startsAt)) ===
+                              day.date
+                            ) {
+                              return;
+                            }
+                            selectedId.value = appointmentId;
+                            rescheduleTargetDate.value = day.date;
+                            rescheduling.value = true;
+                          }}
+                        >
+                          <button
+                            class="agenda-month-daynumber"
+                            type="button"
+                            aria-label={`${formatSelectedDate(day.date)}: ${
+                              dayAppointments.length
+                            } ${dayAppointments.length === 1 ? "turno" : "turnos"}`}
+                            onClick$={() => {
+                              selectedDate.value = day.date;
+                              viewMode.value = "day";
+                              selectedId.value = "";
+                            }}
+                          >
+                            {Number(day.date.slice(-2))}
+                          </button>
+                          {dayAppointments.length > 0 && (
+                            <span class="agenda-month-items">
+                              {dayAppointments
+                                .slice(0, 3)
+                                .map((appointment) => {
+                                  const movable = !finalStatuses.has(
+                                    appointment.status,
+                                  );
+                                  return (
+                                    <button
+                                      key={appointment.id}
+                                      type="button"
+                                      class={{
+                                        "agenda-month-item": true,
+                                        [`status-${statusTone(appointment)}`]: true,
+                                        dragging:
+                                          draggingId.value === appointment.id,
+                                      }}
+                                      draggable={movable}
+                                      title={`${appointment.contactName} · ${appointment.serviceName}`}
+                                      onDragStart$={() => {
+                                        if (movable)
+                                          draggingId.value = appointment.id;
+                                      }}
+                                      onDragEnd$={() => {
+                                        draggingId.value = "";
+                                        dragOverDate.value = "";
+                                      }}
+                                      onClick$={() => {
+                                        selectedDate.value = day.date;
+                                        selectedId.value = appointment.id;
+                                      }}
+                                    >
+                                      {formatBusinessDate(
+                                        new Date(appointment.startsAt),
+                                        {
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                          hour12: false,
+                                        },
+                                      )}{" "}
+                                      {appointment.contactName.split(/\s+/)[0]}
+                                    </button>
+                                  );
+                                })}
+                              {dayAppointments.length > 3 && (
+                                <button
+                                  class="agenda-month-more"
+                                  type="button"
+                                  onClick$={() => {
+                                    selectedDate.value = day.date;
+                                    viewMode.value = "day";
+                                    selectedId.value = "";
+                                  }}
+                                >
+                                  +{dayAppointments.length - 3} más
+                                </button>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+            <div
+              class="agenda-list"
+              aria-busy={state.loading}
+              hidden={
+                viewMode.value === "month" &&
+                !futureDepositMode.value &&
+                !state.loading &&
+                !state.error
+              }
+            >
+              <div class="agenda-label">
+                <span>
+                  {visibleAppointments.length}{" "}
+                  {visibleAppointments.length === 1 ? "turno" : "turnos"}
+                </span>
+                <i />
+              </div>
+              {state.loading ? (
+                <div class="section-empty" role="status">
+                  <span class="small-spinner" aria-hidden="true" />
+                  <p>Cargando turnos…</p>
+                </div>
+              ) : state.error ? (
+                <div class="section-empty" role="alert">
+                  <Icon name="alert" size={23} />
+                  <p>No pudimos cargar la agenda.</p>
+                  <button
+                    type="button"
+                    onClick$={() => (reloadVersion.value += 1)}
+                  >
+                    Reintentar
+                  </button>
+                </div>
+              ) : visibleAppointments.length === 0 &&
+                state.appointments.length > 0 ? (
+                <div class="section-empty">
+                  <Icon name="search" size={25} />
+                  <p>No encontramos turnos con esos filtros.</p>
+                  <button
+                    type="button"
+                    onClick$={() => {
+                      query.value = "";
+                      statusFilter.value = "";
+                      depositFilter.value = "";
+                      coverageFilter.value = "";
+                      serviceFilter.value = "";
+                      professionalFilter.value = "";
+                      futureDepositMode.value = false;
+                    }}
+                  >
+                    {viewMode.value === "week"
+                      ? "Ver todos los turnos de la semana"
+                      : viewMode.value === "month"
+                        ? "Ver todos los turnos del mes"
+                        : "Ver todos los turnos del día"}
+                  </button>
+                </div>
+              ) : visibleAppointments.length === 0 ? (
+                <div class="section-empty">
+                  <Icon name="calendar" size={25} />
+                  <p>
+                    {viewMode.value === "week"
+                      ? "No hay turnos en esta semana."
+                      : viewMode.value === "month"
+                        ? "No hay turnos en este mes."
+                        : "No hay turnos para este día."}
+                  </p>
+                  <button
+                    type="button"
+                    onClick$={() => (creating.value = true)}
+                  >
+                    Crear un turno
+                  </button>
+                </div>
+              ) : (
+                visibleAppointments.map((appointment) => {
+                  const statusLabel = displayStatus(appointment);
+                  return (
+                    <button
+                      class="agenda-item"
+                      type="button"
+                      key={appointment.id}
+                      onClick$={() => (selectedId.value = appointment.id)}
+                    >
+                      <time dateTime={appointment.startsAt}>
+                        {(futureDepositMode.value ||
+                          viewMode.value !== "day") && (
+                          <small>
+                            {formatBusinessDate(
+                              new Date(appointment.startsAt),
+                              {
+                                weekday: "short",
+                                day: "numeric",
+                                month: "short",
+                              },
+                            )}
+                          </small>
+                        )}
+                        <strong>
+                          {formatBusinessDate(new Date(appointment.startsAt), {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            hour12: false,
+                          })}
+                        </strong>
+                        <small class="agenda-end-time">
+                          hasta{" "}
+                          {formatBusinessDate(new Date(appointment.endsAt), {
+                            timeStyle: "short",
+                          })}
+                        </small>
+                      </time>
+                      <span class="agenda-avatar">
+                        {appointment.contactName
+                          .split(/\s+/)
+                          .slice(0, 2)
+                          .map((part) => part[0])
+                          .join("")}
+                      </span>
+                      <span class="agenda-copy">
+                        <strong>{appointment.contactName}</strong>
+                        <span class="agenda-service">
+                          {appointment.serviceName}
+                        </span>
+                        <small>
+                          {coverageAndDuration(
+                            appointment.coverage,
+                            appointment.durationMinutes,
+                          )}
+                        </small>
+                      </span>
+                      <span
+                        class={`status-badge status-${statusTone(appointment)}`}
+                      >
+                        {statusLabel}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <div class="agenda-aside">
+            <GoogleCalendarStatusBlock
+              variant="agenda"
+              conflictsHandledInPage={state.conflicts.length > 0}
+            />
+
+            <div
+              class="agenda-day-summary"
+              aria-label={
+                futureDepositMode.value
+                  ? "Resumen de próximos turnos"
+                  : "Resumen del día"
+              }
+            >
+              {!state.loading && !state.error && (
+                <>
+                  <span>
+                    <strong>{activeDayAppointments.length}</strong> turnos
+                    activos
+                  </span>
+                  <span>
+                    <strong>{pendingDayAppointments.length}</strong> señas
+                    pendientes
+                  </span>
+                  <span>
+                    <strong>{state.blocks.length}</strong> bloqueos de Google
+                  </span>
+                  <button
+                    type="button"
+                    onClick$={() => (reloadVersion.value += 1)}
+                  >
+                    Actualizar agenda
+                  </button>
+                </>
+              )}
+            </div>
+
+            {!state.loading && !state.error && state.blocks.length > 0 && (
+              <details
+                class="agenda-blocks"
+                aria-label="Bloqueos de Google Calendar"
+              >
+                <summary>
+                  <h2>
+                    Google Calendar · {state.blocks.length}{" "}
+                    {state.blocks.length === 1
+                      ? "horario ocupado"
+                      : "horarios ocupados"}
+                  </h2>
+                </summary>
+                <ul>
+                  {state.blocks.map((block) => (
+                    <li key={block.googleEventId}>
+                      <strong>
+                        {futureDepositMode.value && (
+                          <small>
+                            {formatBusinessDate(new Date(block.startsAt), {
+                              day: "numeric",
+                              month: "short",
+                            })}
+                            {" · "}
+                          </small>
+                        )}
+                        {block.allDay ? (
+                          "Todo el día"
+                        ) : (
+                          <>
+                            {formatBusinessDate(new Date(block.startsAt), {
+                              timeStyle: "short",
+                            })}
+                            {" – "}
+                            {formatBusinessDate(new Date(block.endsAt), {
+                              timeStyle: "short",
+                            })}
+                          </>
+                        )}
+                      </strong>
+                      <span>{block.summary || "Evento sin título"}</span>
+                      {state.isAdmin && (
+                        <button
+                          class="secondary-button agenda-block-action"
+                          type="button"
+                          onClick$={() =>
+                            (convertingBlockId.value = block.googleEventId)
+                          }
+                        >
+                          Convertir en turno
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <small>
+                  Vienen de un evento creado a mano en Google Calendar. Ocupan
+                  el horario, pero no son turnos de pacientes.
+                </small>
+              </details>
+            )}
+
+            {state.conflicts.length > 0 && !state.loading && (
+              <section
+                class="agenda-conflicts"
+                aria-labelledby="agenda-conflicts-title"
+              >
+                <header>
+                  <Icon name="alert" size={19} />
+                  <div>
+                    <strong id="agenda-conflicts-title">
+                      {state.conflicts.length === 1
+                        ? "Hay 1 cambio de Google Calendar para decidir"
+                        : `Hay ${state.conflicts.length} cambios de Google Calendar para decidir`}
+                    </strong>
+                    <small>
+                      Alguien movió, borró o editó estos turnos en Google. La
+                      agenda no cambió sola.
+                    </small>
+                  </div>
+                </header>
+                <ul>
+                  {state.conflicts.map((conflict) => (
+                    <li key={conflict.id}>
+                      <span>
+                        <strong>{conflict.contactName}</strong>
+                        <small>
+                          {conflict.kind === "cancellation_requested"
+                            ? "Se borró el evento en Google"
+                            : conflict.kind === "metadata_changed"
+                              ? "Cambió el texto del evento"
+                              : "Se movió el turno en Google"}
+                        </small>
+                      </span>
+                      <button
+                        class="secondary-button small"
+                        type="button"
+                        onClick$={() =>
+                          (reviewingConflictId.value = conflict.id)
+                        }
+                      >
+                        Comparar y decidir
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+          </div>
         </div>
       </section>
 

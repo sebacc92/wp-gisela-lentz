@@ -120,6 +120,9 @@ export const ManualAppointmentDrawer = component$<ManualAppointmentDrawerProps>(
         const { data, error: patientError } = await getSupabaseClient()
           .from("contacts")
           .select("id,name,phone_e164,coverage,is_existing_patient")
+          // Una ficha fusionada sigue existiendo para que las referencias
+          // históricas resuelvan, pero no se ofrece: su paciente es la principal.
+          .is("merged_into_contact_id", null)
           .order("name");
         if (patientError) throw patientError;
         if (cancelled) return;

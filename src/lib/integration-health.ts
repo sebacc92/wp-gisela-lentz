@@ -168,11 +168,18 @@ const SEVERITY_ORDER: Record<IntegrationHealthSeverity, number> = {
 
 export function integrationHealthAlerts(input: {
   whatsapp: WhatsAppHealthInput;
-  googleCalendar: GoogleCalendarOperationalStatus | null;
+  /**
+   * `undefined` = no se evalúa acá. El inicio ya muestra
+   * `GoogleCalendarStatusBlock`, que cubre la reconexión con más detalle;
+   * repetirlo en este aviso sería decir lo mismo dos veces seguidas.
+   */
+  googleCalendar?: GoogleCalendarOperationalStatus | null;
 }): IntegrationHealthAlert[] {
   return [
     whatsappAlert(input.whatsapp),
-    googleCalendarAlert(input.googleCalendar),
+    input.googleCalendar === undefined
+      ? null
+      : googleCalendarAlert(input.googleCalendar),
   ]
     .filter((alert): alert is IntegrationHealthAlert => alert !== null)
     .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);

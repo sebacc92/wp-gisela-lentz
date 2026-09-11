@@ -284,7 +284,7 @@ export const QuickActionsFab = component$<QuickActionsFabProps>((props) => {
                 confirmados no se cancelan solos.
               </p>
 
-              <label class="field">
+              <label class="form-field">
                 <span>Fecha</span>
                 <input
                   type="date"
@@ -294,7 +294,7 @@ export const QuickActionsFab = component$<QuickActionsFabProps>((props) => {
               </label>
 
               <div class="quick-block-range">
-                <label class="field">
+                <label class="form-field">
                   <span>Desde</span>
                   <input
                     type="time"
@@ -302,7 +302,7 @@ export const QuickActionsFab = component$<QuickActionsFabProps>((props) => {
                     onInput$={(_, element) => (block.start = element.value)}
                   />
                 </label>
-                <label class="field">
+                <label class="form-field">
                   <span>Hasta</span>
                   <input
                     type="time"
@@ -315,7 +315,7 @@ export const QuickActionsFab = component$<QuickActionsFabProps>((props) => {
                 Dejá las dos horas vacías para cerrar el día completo.
               </p>
 
-              <label class="field">
+              <label class="form-field">
                 <span>Motivo (opcional)</span>
                 <input
                   type="text"

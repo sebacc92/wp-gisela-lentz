@@ -111,6 +111,9 @@ export const ConvertBlockDrawer = component$<ConvertBlockDrawerProps>(
         const { data, error: patientsError } = await getSupabaseClient()
           .from("contacts")
           .select("id,name,phone_e164,alternate_phone_e164,coverage")
+          // Una ficha fusionada sigue existiendo para que las referencias
+          // históricas resuelvan, pero no se ofrece: su paciente es la principal.
+          .is("merged_into_contact_id", null)
           .order("name");
         if (patientsError) throw patientsError;
         if (cancelled) return;

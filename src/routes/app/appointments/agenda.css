@@ -570,3 +570,116 @@
   color: var(--ink-500);
   font-size: 13px;
 }
+
+/* ---------------------------------------------------------------------------
+   Agenda en dos columnas.
+
+   Antes había siete bloques apilados antes del primer turno: en un monitor
+   ancho la lista quedaba fuera de la pantalla. Desde 1200px los turnos ocupan
+   la columna principal y el estado de Calendar, el resumen y los conflictos
+   pasan a una columna lateral que acompaña el scroll.
+
+   Debajo de ese ancho la agenda conserva exactamente su orden de siempre:
+   los contenedores se vuelven transparentes (`display: contents`) y cada
+   bloque recupera su lugar con `order`.
+   --------------------------------------------------------------------------- */
+
+.agenda-layout {
+  display: flex;
+  flex-direction: column;
+}
+
+.agenda-main,
+.agenda-aside {
+  display: contents;
+}
+
+.agenda-layout .calendar-operational-status {
+  order: 1;
+}
+.agenda-layout .agenda-week {
+  order: 2;
+  /* En flex los márgenes no colapsan: 18px del bloque de estado más 22px de
+     éste darían 40px. Así el espacio queda en los 22px de siempre. */
+  margin-top: 4px;
+}
+.agenda-layout .agenda-toolbar {
+  order: 3;
+}
+.agenda-layout .agenda-filter-panel {
+  order: 4;
+}
+.agenda-layout .agenda-day-summary {
+  order: 5;
+}
+.agenda-layout .agenda-blocks {
+  order: 6;
+}
+.agenda-layout .agenda-conflicts {
+  order: 7;
+}
+.agenda-layout .agenda-month {
+  order: 8;
+}
+.agenda-layout .agenda-list {
+  order: 9;
+}
+
+@media (min-width: 1200px) {
+  .agenda-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    gap: 24px;
+    align-items: start;
+  }
+
+  .agenda-main,
+  .agenda-aside {
+    display: block;
+    min-width: 0;
+  }
+
+  /* La columna lateral acompaña el scroll: el estado y los conflictos siguen
+     a la vista mientras se recorre una lista larga de turnos. */
+  .agenda-aside {
+    position: sticky;
+    top: 20px;
+  }
+
+  /* Las dos columnas arrancan a la misma altura. */
+  .agenda-layout .agenda-week {
+    margin-top: 0;
+  }
+
+  /* En una columna angosta el bloque de Calendar apila título y acciones en
+     vez de apretarlos lado a lado.
+
+     La especificidad es a propósito: `calendar-status.css` fija las acciones
+     en la segunda columna con `.section-shell …`, y el orden de carga entre
+     las hojas de dos chunks distintos no está garantizado. Con el mismo peso
+     ganaba a veces una y a veces la otra; así gana siempre esta. */
+  .agenda-layout .agenda-aside .calendar-operational-status {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .agenda-layout .agenda-aside .calendar-operational-heading,
+  .agenda-layout .agenda-aside .calendar-operational-actions,
+  .agenda-layout .agenda-aside .calendar-status-disclosure,
+  .agenda-layout .agenda-aside .calendar-operational-feedback {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .agenda-layout .agenda-aside .calendar-operational-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-start;
+  }
+
+  .agenda-aside .agenda-day-summary {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+}

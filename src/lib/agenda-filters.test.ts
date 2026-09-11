@@ -155,3 +155,16 @@ test("se cuentan los criterios puestos", () => {
     "una búsqueda en blanco no es un filtro",
   );
 });
+
+test("la búsqueda de la agenda ignora acentos", () => {
+  const target = appointment({
+    contactName: "Ana Pérez",
+    serviceName: "Extracción",
+  });
+  assert.equal(matchesAgendaFilters(target, filters({ query: "perez" })), true);
+  assert.equal(matchesAgendaFilters(target, filters({ query: "PÉREZ" })), true);
+  assert.equal(
+    matchesAgendaFilters(target, filters({ query: "extraccion" })),
+    true,
+  );
+});

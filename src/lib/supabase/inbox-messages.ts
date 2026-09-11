@@ -1,4 +1,4 @@
-import { messageSearchPattern } from "../message-search.ts";
+import { accentInsensitivePattern } from "../message-search.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Message } from "../inbox-types";
 
@@ -206,7 +206,8 @@ export async function searchInboxMessages(
   query: string,
   limit = 25,
 ): Promise<MessageSearchResult[]> {
-  const pattern = messageSearchPattern(query);
+  // Sin acentos: «sena» encuentra «seña».
+  const pattern = accentInsensitivePattern(query);
   if (!pattern) return [];
 
   const { data, error } = await client
@@ -214,7 +215,7 @@ export async function searchInboxMessages(
     .select(
       "id,conversation_id,body,direction,created_at,contacts!messages_contact_id_fkey(name)",
     )
-    .ilike("body", pattern)
+    .filter("body", "imatch", pattern)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw error;

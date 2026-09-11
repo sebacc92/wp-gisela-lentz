@@ -296,6 +296,9 @@ export default component$(() => {
     const { data: patients, error } = await client
       .from("contacts")
       .select("id,name,phone_e164")
+      // Una ficha fusionada sigue existiendo para que las referencias
+      // históricas resuelvan, pero no se ofrece: su paciente es la principal.
+      .is("merged_into_contact_id", null)
       .order("name");
     state.patients = (patients ?? []) as PatientOption[];
     if (error)

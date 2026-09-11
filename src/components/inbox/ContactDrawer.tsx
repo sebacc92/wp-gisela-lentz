@@ -93,7 +93,7 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
         aria-labelledby="contact-drawer-title"
         aria-describedby="contact-drawer-description"
         tabIndex={-1}
-        onClick$={(event) => event.stopPropagation()}
+        stoppropagation:click
         onKeyDown$={(event, element) => {
           if (event.key === "Escape") {
             props.onClose$();
@@ -415,7 +415,10 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
             </button>
           </section>
 
-          <ConversationNotes conversationId={props.conversation.id} />
+          {/* Mismo margen que el resto de las secciones del panel. */}
+          <section class="drawer-section">
+            <ConversationNotes conversationId={props.conversation.id} />
+          </section>
         </div>
       </aside>
     </div>

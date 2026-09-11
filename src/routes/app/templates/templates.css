@@ -2,9 +2,33 @@
    contenido. La burbuja imita el chat para poder juzgar el texto como lo va a
    leer el paciente, no como una fila de una tabla. */
 
-.template-item {
+/* `.template-list` sube la especificidad a propósito: `global.css` define
+   `.template-item { display: flex }`, y con el mismo peso el orden de carga
+   entre las dos hojas decidía la disposición. Así es siempre la misma.
+
+   La fila principal y las acciones comparten el primer renglón; las
+   observaciones y la vista previa ocupan el ancho completo debajo, en vez de
+   quedar aplastadas dentro de la fila. */
+.template-list .template-item {
   display: grid;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.template-list .template-item-main {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.template-list .template-actions {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.template-list .template-issues,
+.template-list .template-preview {
+  grid-column: 1 / -1;
 }
 
 .template-item-main {
@@ -107,5 +131,19 @@
 
   .template-states {
     grid-column: 1 / -1;
+  }
+
+  /* `global.css` achicaba el texto de los estados a cero en el celular para
+     que entraran en la fila vieja: quedaban dos puntos de color que no decían
+     cuál era cuál. Ahora los estados tienen su propio renglón y hay lugar. */
+  .template-list .template-item .integration-state {
+    font-size: 12px;
+  }
+
+  /* En el celular las acciones bajan: al costado no entran. */
+  .template-list .template-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    justify-content: flex-start;
   }
 }

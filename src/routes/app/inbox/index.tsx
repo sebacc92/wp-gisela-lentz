@@ -43,7 +43,7 @@ import {
   searchInboxMessages,
   type MessageSearchResult,
 } from "~/lib/supabase/inbox-messages";
-import { MESSAGE_SEARCH_MIN_LENGTH } from "~/lib/message-search";
+import { foldForSearch, MESSAGE_SEARCH_MIN_LENGTH } from "~/lib/message-search";
 import { getWhatsAppConsentStatus } from "~/lib/whatsapp-compliance";
 import { confirmDepositAndNotify } from "~/lib/deposit-confirmation";
 import {
@@ -247,7 +247,8 @@ export default component$(() => {
       (appointment) => appointment.depositStatus === "proof_received",
     );
 
-  const normalizedQuery = query.value.trim().toLocaleLowerCase("es-AR");
+  // Sin acentos: «perez» encuentra a «Pérez».
+  const normalizedQuery = foldForSearch(query.value.trim());
   // Búsqueda dentro del texto de los mensajes. Va con rebote para no consultar
   // en cada tecla, y un fallo deja la lista vacía sin romper la bandeja.
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -282,7 +283,7 @@ export default component$(() => {
   const filteredConversations = state.conversations.filter((conversation) => {
     const matchesSearch =
       !normalizedQuery ||
-      conversation.name.toLocaleLowerCase("es-AR").includes(normalizedQuery) ||
+      foldForSearch(conversation.name).includes(normalizedQuery) ||
       conversation.phone
         .replace(/\s|-/g, "")
         .includes(normalizedQuery.replace(/\s|-/g, ""));

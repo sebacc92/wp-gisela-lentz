@@ -15,7 +15,6 @@ import {
   type WhatsAppHealthInput,
 } from "~/lib/integration-health";
 import { getSupabaseClient } from "~/lib/supabase/client";
-import { loadGoogleCalendarOperationalStatus } from "~/lib/supabase/google-calendar-status";
 import "./integration-health.css";
 
 /**
@@ -38,16 +37,13 @@ export const IntegrationHealthBanner = component$(() => {
       sendingPauseReason: null,
     };
 
-    const [settingsResult, calendarStatus] = await Promise.all([
-      getSupabaseClient()
-        .from("whatsapp_settings")
-        .select(
-          "integration_status,last_error,sending_paused,sending_pause_reason",
-        )
-        .eq("id", true)
-        .maybeSingle(),
-      loadGoogleCalendarOperationalStatus(),
-    ]);
+    const settingsResult = await getSupabaseClient()
+      .from("whatsapp_settings")
+      .select(
+        "integration_status,last_error,sending_paused,sending_pause_reason",
+      )
+      .eq("id", true)
+      .maybeSingle();
 
     const row = settingsResult.error ? null : settingsResult.data;
     if (row) {
@@ -66,10 +62,8 @@ export const IntegrationHealthBanner = component$(() => {
           : null;
     }
 
-    state.alerts = integrationHealthAlerts({
-      whatsapp,
-      googleCalendar: calendarStatus,
-    });
+    // Calendar no se evalúa acá: el bloque de Calendar del inicio ya lo cubre.
+    state.alerts = integrationHealthAlerts({ whatsapp });
     state.loaded = true;
   });
 

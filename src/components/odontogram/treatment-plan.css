@@ -85,9 +85,30 @@
   gap: 6px;
 }
 
+.treatment-suggestions .filter-pill {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  white-space: nowrap;
+  /* Como en el probador del bot: son acciones, no filtros. */
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--ink-700);
+}
+
+.treatment-suggestions .filter-pill:hover:not(:disabled) {
+  border-color: var(--brand-600);
+  background: var(--brand-50);
+  color: var(--brand-900);
+}
+
+.treatment-composer .form-field {
+  margin-bottom: 0;
+}
+
 .treatment-composer {
   display: grid;
-  grid-template-columns: 90px minmax(0, 1fr) 130px auto;
+  grid-template-columns: 124px minmax(0, 1fr) 140px auto;
   gap: 10px;
   align-items: end;
 }
@@ -211,7 +232,7 @@
 
 @media (max-width: 700px) {
   .treatment-composer {
-    grid-template-columns: 90px minmax(0, 1fr);
+    grid-template-columns: 124px minmax(0, 1fr);
   }
 
   .treatment-composer .primary-button {

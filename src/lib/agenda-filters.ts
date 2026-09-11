@@ -1,5 +1,6 @@
 import { appointmentDisplayStatus, type AppointmentStatus } from "./booking.ts";
 import type { DepositStatus, PatientCoverage } from "./inbox-types";
+import { foldForSearch } from "./message-search.ts";
 
 /**
  * Filtros combinables de la agenda.
@@ -74,13 +75,14 @@ export function matchesStatusFilter(
   return appointment.status === filter;
 }
 
+/** Sin acentos: «perez» encuentra a «Pérez», como se escribe en el celular. */
 function matchesQuery(appointment: AgendaFilterable, query: string): boolean {
-  const normalized = query.trim().toLocaleLowerCase("es-AR");
+  const normalized = foldForSearch(query.trim());
   if (!normalized) return true;
   return (
-    appointment.contactName.toLocaleLowerCase("es-AR").includes(normalized) ||
+    foldForSearch(appointment.contactName).includes(normalized) ||
     appointment.contactPhone.includes(normalized) ||
-    appointment.serviceName.toLocaleLowerCase("es-AR").includes(normalized)
+    foldForSearch(appointment.serviceName).includes(normalized)
   );
 }
 

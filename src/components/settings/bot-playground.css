@@ -13,6 +13,20 @@
   margin-bottom: 4px;
 }
 
+/* `.filter-pill` es transparente por diseño (sólo la activa tiene fondo). Acá
+   son ejemplos para tocar, así que tienen que verse como botones. */
+.bot-playground-examples .filter-pill {
+  border-color: var(--line-strong);
+  background: var(--surface);
+  color: var(--ink-700);
+}
+
+.bot-playground-examples .filter-pill:hover {
+  border-color: var(--brand-600);
+  background: var(--brand-50);
+  color: var(--brand-900);
+}
+
 .bot-playground-controls {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

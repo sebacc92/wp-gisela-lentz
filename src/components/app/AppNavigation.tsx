@@ -255,7 +255,7 @@ export const AppNavigation = component$<AppNavigationProps>(({ active }) => {
             aria-modal="true"
             aria-labelledby="mobile-more-title"
             tabIndex={-1}
-            onClick$={(event) => event.stopPropagation()}
+            stoppropagation:click
             onKeyDown$={async (event, element) => {
               if (event.key === "Escape") {
                 event.preventDefault();

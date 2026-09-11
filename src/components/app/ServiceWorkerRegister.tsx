@@ -11,17 +11,23 @@ import { component$, useVisibleTask$ } from "@qwik.dev/core";
  * de instalación, nunca un requisito.
  */
 export const ServiceWorkerRegister = component$(() => {
+  // El componente no dibuja nada, así que no hay elemento que observar: se
+  // pide `document-ready` explícito en vez de que Qwik lo deduzca con una
+  // advertencia en cada carga.
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(() => {
-    if (!("serviceWorker" in navigator)) return;
-    // En desarrollo un worker activo confunde más de lo que ayuda: deja
-    // servido un bundle viejo mientras se está editando.
-    if (import.meta.env.DEV) return;
+  useVisibleTask$(
+    () => {
+      if (!("serviceWorker" in navigator)) return;
+      // En desarrollo un worker activo confunde más de lo que ayuda: deja
+      // servido un bundle viejo mientras se está editando.
+      if (import.meta.env.DEV) return;
 
-    void navigator.serviceWorker.register("/service-worker.js").catch(() => {
-      // Sin service worker la aplicación sigue andando igual.
-    });
-  });
+      void navigator.serviceWorker.register("/service-worker.js").catch(() => {
+        // Sin service worker la aplicación sigue andando igual.
+      });
+    },
+    { strategy: "document-ready" },
+  );
 
   return null;
 });

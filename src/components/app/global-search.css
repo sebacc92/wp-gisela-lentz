@@ -117,3 +117,9 @@
   color: var(--ink-500);
   font-size: 14px;
 }
+
+/* El botón nativo de limpiar de `type="search"` sale azul, fuera de la
+   paleta, y repite lo que ya hace Esc. */
+.global-search-field input::-webkit-search-cancel-button {
+  display: none;
+}

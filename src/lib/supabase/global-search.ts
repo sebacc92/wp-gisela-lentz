@@ -8,7 +8,7 @@ import {
   GLOBAL_SEARCH_MIN_LENGTH,
   type GlobalSearchResult,
 } from "~/lib/global-search";
-import { escapeLikePattern } from "~/lib/message-search";
+import { accentInsensitivePattern } from "~/lib/message-search";
 
 /**
  * Consulta de la búsqueda global.
@@ -36,39 +36,69 @@ export async function runGlobalSearch(
   const trimmed = query.trim();
   if (trimmed.length < GLOBAL_SEARCH_MIN_LENGTH) return [];
 
-  const pattern = `%${escapeLikePattern(trimmed)}%`;
+  // Ignora acentos: «Lopez» encuentra «López». Ver `accentInsensitivePattern`.
+  const namePattern = accentInsensitivePattern(
+    trimmed,
+    GLOBAL_SEARCH_MIN_LENGTH,
+  );
   const digits = digitsOnly(trimmed);
   // Un teléfono se escribe con espacios y guiones; se busca por sus dígitos.
   const phonePattern = digits.length >= 4 ? `%${digits}%` : null;
 
-  const contactFilter = phonePattern
-    ? `name.ilike.${pattern},phone_e164.ilike.${phonePattern}`
-    : `name.ilike.${pattern}`;
-
-  const [contacts, appointments, conversations] = await Promise.all([
+  const contactsBase = () =>
     client
       .from("contacts")
       .select("id,name,phone_e164,coverage")
-      .or(contactFilter)
+      .is("merged_into_contact_id", null)
       .order("name")
-      .limit(PER_KIND_LIMIT),
-    client
-      .from("appointments")
-      .select("id,starts_at,status,contacts!appointments_contact_id_fkey(name)")
-      .ilike("contacts.name", pattern)
-      .not("contacts", "is", null)
-      .order("starts_at", { ascending: false })
-      .limit(PER_KIND_LIMIT * 3),
-    client
-      .from("conversations")
-      .select(
-        "id,unread_count,contacts!conversations_contact_id_fkey(name,phone_e164)",
-      )
-      .ilike("contacts.name", pattern)
-      .not("contacts", "is", null)
-      .order("last_message_at", { ascending: false })
-      .limit(PER_KIND_LIMIT),
+      .limit(PER_KIND_LIMIT);
+
+  // Nombre y teléfono van en consultas separadas en lugar de un `.or()`:
+  // así la expresión nunca pasa por la sintaxis de filtros combinados, donde
+  // una coma o un paréntesis se leerían como parte del filtro.
+  const [byName, byPhone, appointments, conversations] = await Promise.all([
+    namePattern
+      ? contactsBase().filter("name", "imatch", namePattern)
+      : Promise.resolve({ data: [], error: null }),
+    phonePattern
+      ? contactsBase().ilike("phone_e164", phonePattern)
+      : Promise.resolve({ data: [], error: null }),
+    namePattern
+      ? client
+          .from("appointments")
+          .select(
+            "id,starts_at,status,contacts!appointments_contact_id_fkey(name)",
+          )
+          .filter("contacts.name", "imatch", namePattern)
+          .not("contacts", "is", null)
+          .order("starts_at", { ascending: false })
+          .limit(PER_KIND_LIMIT * 3)
+      : Promise.resolve({ data: [], error: null }),
+    namePattern
+      ? client
+          .from("conversations")
+          .select(
+            "id,unread_count,contacts!conversations_contact_id_fkey(name,phone_e164)",
+          )
+          .filter("contacts.name", "imatch", namePattern)
+          .not("contacts", "is", null)
+          .order("last_message_at", { ascending: false })
+          .limit(PER_KIND_LIMIT)
+      : Promise.resolve({ data: [], error: null }),
   ]);
+
+  // Une las dos búsquedas de pacientes sin repetir a nadie.
+  const contactRows = new Map<string, unknown>();
+  for (const result of [byName, byPhone]) {
+    if (result.error) continue;
+    for (const row of result.data ?? []) {
+      contactRows.set((row as { id: string }).id, row);
+    }
+  }
+  const contacts = {
+    error: byName.error && byPhone.error ? byName.error : null,
+    data: [...contactRows.values()].slice(0, PER_KIND_LIMIT),
+  };
 
   const results: GlobalSearchResult[] = [];
 

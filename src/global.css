@@ -9172,3 +9172,171 @@ textarea::placeholder {
     font-size: 8pt;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Aprovechar el ancho en pantallas grandes.
+
+   Las secciones topeaban en 980px fijos: en un monitor ancho quedaban ~700px
+   vacíos a los costados mientras la agenda empujaba los turnos hacia abajo.
+   Sólo aplica desde 1100px, así las reglas de mobile y tablet no cambian.
+
+   El manual queda angosto a propósito: es texto de lectura, y una línea de 140
+   caracteres cansa más de lo que ayuda.
+   --------------------------------------------------------------------------- */
+
+@media (min-width: 1100px) {
+  .section-page,
+  .section-page.dashboard-page {
+    width: min(1440px, calc(100% - 64px));
+  }
+
+  .section-page.settings-page {
+    width: min(1320px, calc(100% - 64px));
+  }
+
+  .section-page.manual-page {
+    width: min(980px, calc(100% - 48px));
+  }
+
+  /* Un párrafo explicativo no se estira con la página: se lee mejor así. */
+  .section-page-header p,
+  .settings-block > div > p {
+    max-width: 72ch;
+  }
+}
+
+/* Listas en dos columnas en pantallas muy anchas.
+
+   Una fila de paciente o de plantilla estirada a 1440px deja un hueco enorme
+   entre el nombre y el dato de la derecha. Desde 1400px la lista pasa a
+   tarjetas en dos columnas: entra el doble en pantalla y cada tarjeta conserva
+   un ancho que se lee de un vistazo. Debajo de ese ancho sigue siendo la lista
+   de siempre. */
+@media (min-width: 1400px) {
+  .patients-list,
+  .template-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .patients-list .patient-row,
+  .patients-list .patient-row:last-child,
+  .template-list .template-item,
+  .template-list .template-item:last-child {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgb(75 52 66 / 4%);
+  }
+
+  /* Cada tarjeta mide lo que necesita: si una abre la vista previa, la vecina
+     no se estira para acompañarla y deja un hueco vacío. */
+  .patients-list,
+  .template-list {
+    align-items: start;
+  }
+}
+
+/* Campos de formulario fuera de Configuración.
+
+   `@import "tailwindcss"` trae el preflight de Tailwind, que deja todos los
+   `input` sin borde. Configuración se los devuelve con
+   `.settings-block .form-field input`, pero el plan de tratamiento, los
+   adjuntos del paciente y el cierre rápido de horario viven fuera de ese
+   bloque: sus campos se veían como texto suelto y no se entendía que se podía
+   escribir. Misma apariencia que en Configuración, en un solo lugar. */
+:is(.treatment-plan, .patient-attachments, .quick-block-drawer)
+  .form-field
+  :is(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+    select
+  ) {
+  width: 100%;
+  min-height: 43px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: 0;
+  padding: 0 12px;
+  background: #fff;
+  color: var(--ink-900);
+  font-size: var(--app-text-small, 12px);
+}
+
+:is(.treatment-plan, .patient-attachments, .quick-block-drawer)
+  .form-field
+  :is(input, select):focus {
+  border-color: #91b8b6;
+  box-shadow: 0 0 0 3px rgb(36 123 129 / 7%);
+}
+
+:is(.treatment-plan, .patient-attachments, .quick-block-drawer)
+  .form-field
+  :is(input, select):disabled {
+  background: var(--surface-soft);
+  color: var(--ink-400);
+}
+
+/* Cuerpo y acciones de los diálogos nuevos (cerrar un horario, conflictos de
+   Calendar y fichas duplicadas).
+
+   Se habían escrito con `.drawer-body`, que no existía: el contenido quedaba
+   pegado al borde mientras el encabezado sí tenía margen. Sigue la convención
+   de `.drawer-content` + `.drawer-section` (scroll propio y 22px a los
+   costados). Las acciones se acotan a esos tres diálogos por su clase: los
+   drawers existentes ponen `.drawer-form-actions` dentro de un formulario y no
+   deben cambiar. */
+.drawer-body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 22px;
+}
+
+.drawer-body > .form-field {
+  margin-bottom: 0;
+}
+
+:is(.quick-block-drawer, .calendar-conflict-dialog, .duplicate-assistant)
+  > .drawer-form-actions {
+  padding: 14px 22px 20px;
+  border-top: 1px solid var(--line);
+}
+
+/* Ficha 360° del paciente: mismo remedio que el detalle de turno.
+
+   Tenía el defecto que ya se documentó arriba para el turno: `.drawer-content`
+   sólo aporta el scroll, así que el contenido quedaba pegado al borde. Con las
+   pestañas nuevas además no entraban cinco en 400px y «Señas» bajaba a otra
+   línea. Se ensancha como el detalle de turno y recupera el margen lateral. */
+.drawer.patient-drawer {
+  width: clamp(440px, 36vw, 580px);
+  max-width: 100vw;
+}
+
+.patient-drawer .drawer-content {
+  padding: 16px 24px 24px;
+}
+
+.patient-drawer .patient-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.patient-drawer .patient-tabs button {
+  flex: 0 0 auto;
+}
+
+/* Las pestañas ya separan: el historial no necesita su propia raya arriba. */
+.patient-drawer .patient-history {
+  border-top: 0;
+  padding-top: 4px;
+}

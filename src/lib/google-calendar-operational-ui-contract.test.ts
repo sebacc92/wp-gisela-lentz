@@ -12,7 +12,16 @@ test("Inicio y Agenda reutilizan el mismo resumen operativo", () => {
   const agenda = source("src/routes/app/appointments/index.tsx");
 
   assert.match(home, /<GoogleCalendarStatusBlock variant="home" \/>/);
-  assert.match(agenda, /<GoogleCalendarStatusBlock variant="agenda" \/>/);
+  // La agenda le avisa además que ya lista los conflictos: sigue siendo el
+  // mismo bloque y la misma variante, con una prop más.
+  assert.match(
+    agenda,
+    /<GoogleCalendarStatusBlock\s+variant="agenda"[\s\S]*?\/>/,
+  );
+  assert.match(
+    agenda,
+    /conflictsHandledInPage=\{state\.conflicts\.length > 0\}/,
+  );
 });
 
 test("consultar el bloque no dispara sincronización ni cron", () => {
