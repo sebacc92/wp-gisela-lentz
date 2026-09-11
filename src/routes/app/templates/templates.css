@@ -1,0 +1,111 @@
+/* Plantillas: vista previa como burbuja de WhatsApp y observaciones de
+   contenido. La burbuja imita el chat para poder juzgar el texto como lo va a
+   leer el paciente, no como una fila de una tabla. */
+
+.template-item {
+  display: grid;
+  gap: 10px;
+}
+
+.template-item-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.template-issues {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.template-issues li {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.template-issues li.blocker {
+  background: var(--rose-soft);
+  color: var(--danger);
+}
+
+.template-issues li.warning {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.template-preview {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  /* Verde apagado del chat de WhatsApp, sin copiar la marca. */
+  background: var(--surface-chat);
+}
+
+.template-preview-label {
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.whatsapp-bubble {
+  position: relative;
+  max-width: min(420px, 100%);
+  padding: 8px 10px 6px;
+  border-radius: 10px 10px 10px 2px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(30 22 27 / 14%);
+}
+
+.whatsapp-bubble p {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.whatsapp-bubble-meta {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 2px;
+  color: var(--ink-400);
+  font-size: 11px;
+}
+
+.template-preview-note {
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 640px) {
+  .template-item-main {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .template-states {
+    grid-column: 1 / -1;
+  }
+}
