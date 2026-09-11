@@ -12,6 +12,8 @@ import {
   APP_USER_CONTEXT,
   type AppUserContextValue,
 } from "~/components/app/AppUserContext";
+import { GlobalSearch } from "~/components/app/GlobalSearch";
+import { InboxNotifications } from "~/components/app/InboxNotifications";
 import {
   BOT_AUTOMATION_CONTEXT,
   type BotAutomationContextValue,
@@ -120,7 +122,15 @@ export default component$(() => {
     );
   }
 
-  return <Slot />;
+  // Ambos son globales del panel y viven acá para estar en todas las
+  // pantallas sin que cada ruta los repita.
+  return (
+    <>
+      <Slot />
+      <GlobalSearch />
+      <InboxNotifications />
+    </>
+  );
 });
 
 export const head: DocumentHead = {

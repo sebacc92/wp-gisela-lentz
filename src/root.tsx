@@ -4,6 +4,7 @@ import {
   QwikRouterProvider,
   RouterOutlet,
 } from "@qwik.dev/router";
+import { ServiceWorkerRegister } from "~/components/app/ServiceWorkerRegister";
 import { BUSINESS_CONFIG } from "~/config/business";
 
 import "./global.css";
@@ -38,6 +39,7 @@ const RouterDocument = component$(() => {
       </head>
       <body>
         <RouterOutlet />
+        <ServiceWorkerRegister />
       </body>
     </>
   );

@@ -9058,3 +9058,117 @@ textarea::placeholder {
     line-height: 1.5;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Ficha 360° del paciente: pestañas y hoja imprimible.
+   --------------------------------------------------------------------------- */
+
+.patient-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.patient-tabs button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-600);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.patient-tabs button:hover {
+  background: var(--surface-soft);
+}
+
+.patient-tabs button.active {
+  border-color: var(--brand-600);
+  background: var(--brand-50);
+  color: var(--brand-900);
+  font-weight: 600;
+}
+
+.patient-tabs button:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 1px;
+}
+
+.patient-clinical {
+  display: grid;
+  gap: 10px;
+}
+
+.patient-clinical h3 {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 15px;
+}
+
+/* La hoja sólo existe al imprimir. */
+.patient-print-sheet {
+  display: none;
+}
+
+@media print {
+  .section-shell > *:not(.patient-print-sheet),
+  .drawer-layer,
+  .toast {
+    display: none !important;
+  }
+
+  .patient-print-sheet {
+    display: block;
+    color: #172033;
+    font-family: Arial, sans-serif;
+  }
+
+  .patient-print-sheet h1 {
+    margin: 0;
+    color: #4a3341;
+    font-size: 17pt;
+  }
+
+  .patient-print-sheet header p {
+    margin: 2mm 0 6mm;
+    color: #5f6b72;
+    font-size: 9pt;
+  }
+
+  .patient-print-sheet h2 {
+    margin: 0 0 3mm;
+    font-size: 11pt;
+  }
+
+  .patient-print-sheet table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+  }
+
+  .patient-print-sheet th,
+  .patient-print-sheet td {
+    padding: 2.5mm;
+    border: 1px solid #cfd6d8;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .patient-print-sheet th {
+    background: #f5ecef;
+    font-size: 8pt;
+    text-transform: uppercase;
+  }
+
+  .patient-print-note {
+    margin-top: 6mm;
+    color: #5f6b72;
+    font-size: 8pt;
+  }
+}

@@ -1,0 +1,119 @@
+/* Búsqueda global. Se abre sobre la pantalla, cerca del borde superior, para
+   que la lista de resultados quede a la vista sin tapar el contenido. */
+
+.global-search-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  padding: 10vh 16px 16px;
+  background: rgb(30 22 27 / 55%);
+}
+
+.global-search {
+  display: grid;
+  width: min(620px, 100%);
+  max-height: 70vh;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgb(30 22 27 / 34%);
+}
+
+.global-search-field {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-500);
+}
+
+.global-search-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-900);
+  font: inherit;
+  font-size: 16px;
+}
+
+.global-search-field input:focus {
+  outline: none;
+}
+
+.global-search-field kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--ink-500);
+  font-size: 11px;
+}
+
+.global-search-results {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.global-search-results h2 {
+  margin: 8px 8px 4px;
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.global-search-results ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.global-search-results button {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.global-search-results button.active,
+.global-search-results button:hover {
+  background: var(--brand-50);
+}
+
+.global-search-results button:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: -2px;
+}
+
+.global-search-results strong {
+  color: var(--ink-900);
+  font-size: 15px;
+}
+
+.global-search-results small {
+  color: var(--ink-500);
+  font-size: 13px;
+}
+
+.global-search-hint {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 18px 12px;
+  color: var(--ink-500);
+  font-size: 14px;
+}

@@ -1,0 +1,105 @@
+/* Avisos de mensajes y señas.
+   Van abajo a la izquierda: el `.toast` de cada pantalla ocupa la derecha y el
+   botón de acciones rápidas también, así que este rincón queda libre. */
+
+.inbox-notifications {
+  position: fixed;
+  left: 18px;
+  bottom: calc(var(--gl-mobile-nav-height, 70px) + 18px);
+  z-index: 110;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  max-width: min(360px, calc(100vw - 36px));
+  pointer-events: none;
+}
+
+@media (min-width: 900px) {
+  .inbox-notifications {
+    bottom: 22px;
+  }
+}
+
+.inbox-notification,
+.inbox-notification-sound {
+  pointer-events: auto;
+}
+
+.inbox-notification {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 8px 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 10px 26px rgb(30 22 27 / 16%);
+}
+
+.inbox-notification-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--brand-50);
+  color: var(--brand-900);
+}
+
+.inbox-notification a {
+  color: var(--ink-900);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.inbox-notification a:hover {
+  text-decoration: underline;
+}
+
+.inbox-notification button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  margin-left: auto;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500);
+  cursor: pointer;
+}
+
+.inbox-notification button:hover {
+  background: var(--surface-soft);
+  color: var(--ink-900);
+}
+
+.inbox-notification-sound {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-500);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.inbox-notification-sound[aria-pressed="true"] {
+  border-color: var(--brand-600);
+  color: var(--brand-900);
+}
+
+.inbox-notification-sound:focus-visible,
+.inbox-notification button:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 2px;
+}
