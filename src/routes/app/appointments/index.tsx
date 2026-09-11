@@ -13,6 +13,7 @@ import { AppNavigation } from "~/components/app/AppNavigation";
 import { GoogleCalendarStatusBlock } from "~/components/app/GoogleCalendarStatusBlock";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
 import { ConvertBlockDrawer } from "~/components/appointments/ConvertBlockDrawer";
+import { CalendarConflictModal } from "~/components/appointments/CalendarConflictModal";
 import { ManualAppointmentDrawer } from "~/components/appointments/ManualAppointmentDrawer";
 import { RescheduleAppointmentDrawer } from "~/components/appointments/RescheduleAppointmentDrawer";
 import { BusinessLogo } from "~/components/brand/BusinessLogo";
@@ -29,7 +30,24 @@ import {
   getBusinessCalendarDayRange,
 } from "~/lib/date-time";
 import type { ProfessionalOption, ServiceOption } from "~/lib/inbox-types";
-import type { BookingDurationSettings, DepositStatus } from "~/lib/inbox-types";
+import type {
+  BookingDurationSettings,
+  DepositStatus,
+  PatientCoverage,
+} from "~/lib/inbox-types";
+import {
+  activeAgendaFilterCount,
+  matchesAgendaFilters,
+  type AgendaFilters,
+} from "~/lib/agenda-filters";
+import {
+  agendaVisibleDates,
+  isAgendaViewMode,
+  monthGrid,
+  shiftAgendaDate,
+  weekDays as weekDaysFor,
+  type AgendaViewMode,
+} from "~/lib/agenda-view";
 import {
   confirmDepositManually,
   describeDepositConfirmationError,
@@ -47,11 +65,13 @@ import {
   loadAppointments,
   loadBookingDurationSettings,
   loadCalendarBlocks,
+  loadCalendarConflicts,
   loadDepositProofReviews,
   loadProfessionals,
   loadServices,
   type AppointmentListItem,
   type CalendarBlock,
+  type CalendarConflict,
   type DepositProofReview,
 } from "~/lib/supabase/data";
 
@@ -143,30 +163,21 @@ function statusTone(appointment: AppointmentListItem): string {
   return appointmentStatusTone(appointment.status, appointment.depositStatus);
 }
 
-function matchesStatusFilter(
-  appointment: AppointmentListItem,
-  filter: AppointmentListItem["status"] | "",
-): boolean {
-  if (!filter) return true;
-  if (filter === "scheduled") {
-    return (
-      appointment.status === "scheduled" &&
-      (appointment.depositStatus === "pending" ||
-        appointment.depositStatus === "proof_received")
-    );
-  }
-  if (filter === "confirmed") {
-    return displayStatus(appointment) === "Confirmado";
-  }
-  if (filter === "cancelled") {
-    return displayStatus(appointment) === "Cancelado";
-  }
-  return appointment.status === filter;
-}
-
 function dateRange(value: string): { from: string; to: string } {
   const { from, to } = getBusinessCalendarDayRange(value);
   return { from: from.toISOString(), to: to.toISOString() };
+}
+
+/** Rango a consultar según la vista elegida, ya en instantes. */
+function viewRange(
+  mode: AgendaViewMode,
+  value: string,
+): { from: string; to: string } {
+  const dates = agendaVisibleDates(mode, value);
+  return {
+    from: getBusinessCalendarDayRange(dates.from).from.toISOString(),
+    to: getBusinessCalendarDayRange(dates.to).to.toISOString(),
+  };
 }
 
 function shiftDate(value: string, days: number): string {
@@ -193,6 +204,18 @@ export default component$(() => {
     safeDate(location.url.searchParams.get("date")),
   );
   const query = useSignal("");
+  const viewMode = useSignal<AgendaViewMode>(
+    isAgendaViewMode(location.url.searchParams.get("view"))
+      ? (location.url.searchParams.get("view") as AgendaViewMode)
+      : "day",
+  );
+  const draggingId = useSignal("");
+  const dragOverDate = useSignal("");
+  const rescheduleTargetDate = useSignal("");
+  const coverageFilter = useSignal<PatientCoverage | "">("");
+  const serviceFilter = useSignal("");
+  const professionalFilter = useSignal("");
+  const filtersOpen = useSignal(false);
   const statusFilter = useSignal<AppointmentListItem["status"] | "">(
     safeStatus(location.url.searchParams.get("status")),
   );
@@ -211,6 +234,7 @@ export default component$(() => {
   const confirmingDeposit = useSignal(false);
   const reviewingDeposit = useSignal<DepositReviewDecision | "">("");
   const convertingBlockId = useSignal("");
+  const reviewingConflictId = useSignal("");
   const detailRef = useSignal<HTMLElement>();
   const detailCalendar = useSignal<CalendarProjectionState | "loading">(
     "loading",
@@ -220,11 +244,13 @@ export default component$(() => {
   const printState = useStore<{
     appointments: AppointmentListItem[];
     date: string;
-    preparing: "" | "today" | "tomorrow";
+    generatedAt: string;
+    preparing: "" | "today" | "tomorrow" | "selected";
     request: number;
   }>({
     appointments: [],
     date: businessDateInput(),
+    generatedAt: "",
     preparing: "",
     request: 0,
   });
@@ -234,6 +260,7 @@ export default component$(() => {
     services: ServiceOption[];
     bookingDurations: BookingDurationSettings;
     blocks: CalendarBlock[];
+    conflicts: CalendarConflict[];
     depositReviews: DepositProofReview[];
     isAdmin: boolean;
     loading: boolean;
@@ -244,6 +271,7 @@ export default component$(() => {
     services: [],
     bookingDurations: { iomaMinutes: 0, privateMinutes: 0 },
     blocks: [],
+    conflicts: [],
     depositReviews: [],
     isAdmin: false,
     loading: true,
@@ -252,6 +280,7 @@ export default component$(() => {
 
   useVisibleTask$(async ({ track, cleanup }) => {
     track(() => selectedDate.value);
+    track(() => viewMode.value);
     track(() => futureDepositMode.value);
     track(() => reloadVersion.value);
     let current = true;
@@ -261,7 +290,7 @@ export default component$(() => {
     state.loading = true;
     state.error = false;
     try {
-      const range = dateRange(selectedDate.value);
+      const range = viewRange(viewMode.value, selectedDate.value);
       const client = getSupabaseClient();
       const fromIso = futureDepositMode.value
         ? new Date().toISOString()
@@ -281,6 +310,11 @@ export default component$(() => {
       state.services = services;
       state.bookingDurations = bookingDurations;
       state.blocks = blocks;
+      // Los conflictos son un aviso, no parte de la agenda: si la consulta
+      // falla, la pantalla sigue sirviendo y simplemente no los muestra.
+      state.conflicts = await loadCalendarConflicts(client).catch(
+        (): CalendarConflict[] => [],
+      );
       const depositReviews = await loadDepositProofReviews(
         client,
         appointments.map((appointment) => appointment.id),
@@ -395,12 +429,17 @@ export default component$(() => {
     printState.preparing = "";
   });
 
-  const preparePrint = $(async (target: "today" | "tomorrow") => {
+  const preparePrint = $(async (target: "today" | "tomorrow" | "selected") => {
     if (printState.preparing) return;
 
     printState.preparing = target;
     const today = businessDateInput();
-    const targetDate = target === "today" ? today : shiftDate(today, 1);
+    const targetDate =
+      target === "today"
+        ? today
+        : target === "tomorrow"
+          ? shiftDate(today, 1)
+          : selectedDate.value;
     const range = dateRange(targetDate);
 
     try {
@@ -409,12 +448,15 @@ export default component$(() => {
         range.from,
         range.to,
       );
+      // La hoja del día lista a quién se espera atender: un turno cancelado
+      // o con la pre-reserva vencida ya no ocupa lugar.
       printState.appointments = appointments.filter(
         (appointment) =>
           appointment.status !== "cancelled" &&
           appointment.depositStatus !== "expired",
       );
       printState.date = targetDate;
+      printState.generatedAt = new Date().toISOString();
       printState.request += 1;
     } catch {
       printState.preparing = "";
@@ -562,27 +604,18 @@ export default component$(() => {
     },
   );
 
-  const normalizedQuery = query.value.trim().toLocaleLowerCase("es-AR");
-  const visibleAppointments = state.appointments
-    .filter(
-      (appointment) =>
-        (!normalizedQuery ||
-          appointment.contactName
-            .toLocaleLowerCase("es-AR")
-            .includes(normalizedQuery) ||
-          appointment.contactPhone.includes(normalizedQuery) ||
-          appointment.serviceName
-            .toLocaleLowerCase("es-AR")
-            .includes(normalizedQuery)) &&
-        matchesStatusFilter(appointment, statusFilter.value),
-    )
-    .filter(
-      (appointment) =>
-        !depositFilter.value ||
-        ((appointment.status === "scheduled" ||
-          appointment.status === "confirmed") &&
-          appointment.depositStatus === depositFilter.value),
-    );
+  const agendaFilters: AgendaFilters = {
+    query: query.value,
+    status: statusFilter.value,
+    deposit: depositFilter.value,
+    coverage: coverageFilter.value,
+    serviceId: serviceFilter.value,
+    professionalId: professionalFilter.value,
+  };
+  const activeFilterCount = activeAgendaFilterCount(agendaFilters);
+  const visibleAppointments = state.appointments.filter((appointment) =>
+    matchesAgendaFilters(appointment, agendaFilters),
+  );
   const selectedAppointment = state.appointments.find(
     (appointment) => appointment.id === selectedId.value,
   );
@@ -626,6 +659,9 @@ export default component$(() => {
           : selectedAppointment.depositStatus === "proof_received"
             ? "Comprobante recibido"
             : "Seña pendiente";
+  const reviewingConflict = state.conflicts.find(
+    (conflict) => conflict.id === reviewingConflictId.value,
+  );
   const convertingBlock = state.blocks.find(
     (block) => block.googleEventId === convertingBlockId.value,
   );
@@ -634,13 +670,19 @@ export default component$(() => {
     confirmingDeposit.value ||
     Boolean(reviewingDeposit.value);
   const isToday = selectedDate.value === businessDateInput();
-  const weekStart = shiftDate(
-    selectedDate.value,
-    -((new Date(`${selectedDate.value}T12:00:00Z`).getUTCDay() + 6) % 7),
-  );
-  const weekDays = Array.from({ length: 7 }, (_, index) =>
-    shiftDate(weekStart, index),
-  );
+  const weekDays = weekDaysFor(selectedDate.value);
+
+  // Agrupación por día para las vistas de semana y mes. La clave es la fecha
+  // calendario del consultorio, no la del navegador.
+  const appointmentsByDate = new Map<string, AppointmentListItem[]>();
+  for (const appointment of visibleAppointments) {
+    const key = businessDateInput(new Date(appointment.startsAt));
+    const bucket = appointmentsByDate.get(key);
+    if (bucket) bucket.push(appointment);
+    else appointmentsByDate.set(key, [appointment]);
+  }
+  const monthDays =
+    viewMode.value === "month" ? monthGrid(selectedDate.value) : [];
   const activeDayAppointments = state.appointments.filter(
     (appointment) =>
       appointment.status !== "cancelled" &&
@@ -651,6 +693,18 @@ export default component$(() => {
       appointment.depositStatus === "pending" ||
       appointment.depositStatus === "proof_received",
   );
+  const printCoverageSummary = (() => {
+    const ioma = printState.appointments.filter(
+      (appointment) => appointment.coverage === "ioma",
+    ).length;
+    const particular = printState.appointments.filter(
+      (appointment) => appointment.coverage === "particular",
+    ).length;
+    const parts: string[] = [];
+    if (ioma > 0) parts.push(`${ioma} IOMA`);
+    if (particular > 0) parts.push(`${particular} particular`);
+    return parts.join(" · ");
+  })();
   const noticeIsError = notice.value.startsWith("No pudimos");
 
   return (
@@ -715,6 +769,23 @@ export default component$(() => {
                     ? "Preparando…"
                     : "Imprimir mañana"}
                 </button>
+                <button
+                  class="secondary-button agenda-print-action"
+                  type="button"
+                  disabled={Boolean(printState.preparing)}
+                  onClick$={() => preparePrint("selected")}
+                >
+                  <Icon name="printer" size={17} />
+                  {printState.preparing === "selected"
+                    ? "Preparando…"
+                    : "Imprimir el día que estoy viendo"}
+                </button>
+                {/* No generamos el archivo: abrimos el mismo diálogo, donde
+                    "Guardar como PDF" produce la hoja ya maquetada. */}
+                <p class="agenda-print-note">
+                  Para guardarlo como PDF, elegí “Guardar como PDF” como destino
+                  en el diálogo de impresión.
+                </p>
               </div>
             </details>
             <button
@@ -729,7 +800,7 @@ export default component$(() => {
 
         <GoogleCalendarStatusBlock variant="agenda" />
 
-        {!futureDepositMode.value && (
+        {!futureDepositMode.value && viewMode.value === "day" && (
           <nav class="agenda-week" aria-label="Días de la semana">
             {weekDays.map((date) => (
               <button
@@ -768,10 +839,20 @@ export default component$(() => {
             <button
               class="secondary-button small"
               type="button"
-              aria-label="Día anterior"
+              aria-label={
+                viewMode.value === "month"
+                  ? "Mes anterior"
+                  : viewMode.value === "week"
+                    ? "Semana anterior"
+                    : "Día anterior"
+              }
               onClick$={() => {
                 futureDepositMode.value = false;
-                selectedDate.value = shiftDate(selectedDate.value, -1);
+                selectedDate.value = shiftAgendaDate(
+                  viewMode.value,
+                  selectedDate.value,
+                  -1,
+                );
               }}
             >
               ←
@@ -790,10 +871,20 @@ export default component$(() => {
             <button
               class="secondary-button small"
               type="button"
-              aria-label="Día siguiente"
+              aria-label={
+                viewMode.value === "month"
+                  ? "Mes siguiente"
+                  : viewMode.value === "week"
+                    ? "Semana siguiente"
+                    : "Día siguiente"
+              }
               onClick$={() => {
                 futureDepositMode.value = false;
-                selectedDate.value = shiftDate(selectedDate.value, 1);
+                selectedDate.value = shiftAgendaDate(
+                  viewMode.value,
+                  selectedDate.value,
+                  1,
+                );
               }}
             >
               →
@@ -821,6 +912,33 @@ export default component$(() => {
             >
               Mañana
             </button>
+          </div>
+
+          <div
+            class="agenda-view-switch"
+            role="group"
+            aria-label="Cómo ver la agenda"
+          >
+            {(["day", "week", "month"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                class={{
+                  "filter-pill": true,
+                  active: viewMode.value === mode && !futureDepositMode.value,
+                }}
+                aria-pressed={
+                  viewMode.value === mode && !futureDepositMode.value
+                }
+                onClick$={() => {
+                  futureDepositMode.value = false;
+                  viewMode.value = mode;
+                  selectedId.value = "";
+                }}
+              >
+                {mode === "day" ? "Día" : mode === "week" ? "Semana" : "Mes"}
+              </button>
+            ))}
           </div>
           <label class="search-field compact-search">
             <Icon name="search" size={17} />
@@ -880,7 +998,127 @@ export default component$(() => {
               ×
             </button>
           )}
+
+          <button
+            class={{ "filter-pill": true, active: filtersOpen.value }}
+            type="button"
+            aria-expanded={filtersOpen.value}
+            aria-controls="agenda-filter-panel"
+            onClick$={() => (filtersOpen.value = !filtersOpen.value)}
+          >
+            Más filtros
+            {activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+          </button>
         </div>
+
+        {filtersOpen.value && (
+          <div
+            id="agenda-filter-panel"
+            class="agenda-filter-panel"
+            role="group"
+            aria-label="Filtros combinados"
+          >
+            <label class="agenda-status-filter">
+              <span>Cobertura</span>
+              <div class="select-wrap">
+                <select
+                  value={coverageFilter.value}
+                  onChange$={(_, element) =>
+                    (coverageFilter.value = element.value as
+                      | PatientCoverage
+                      | "")
+                  }
+                >
+                  <option value="">Todas</option>
+                  <option value="ioma">IOMA</option>
+                  <option value="particular">Particular</option>
+                </select>
+                <Icon name="chevron-down" size={17} />
+              </div>
+            </label>
+
+            <label class="agenda-status-filter">
+              <span>Seña</span>
+              <div class="select-wrap">
+                <select
+                  value={depositFilter.value}
+                  onChange$={(_, element) => {
+                    depositFilter.value = element.value as DepositStatus | "";
+                    if (!element.value) futureDepositMode.value = false;
+                  }}
+                >
+                  <option value="">Cualquiera</option>
+                  <option value="pending">Esperando seña</option>
+                  <option value="proof_received">Comprobante recibido</option>
+                  <option value="confirmed">Confirmada</option>
+                  <option value="not_required">No requerida</option>
+                </select>
+                <Icon name="chevron-down" size={17} />
+              </div>
+            </label>
+
+            <label class="agenda-status-filter">
+              <span>Motivo</span>
+              <div class="select-wrap">
+                <select
+                  value={serviceFilter.value}
+                  onChange$={(_, element) =>
+                    (serviceFilter.value = element.value)
+                  }
+                >
+                  <option value="">Todos</option>
+                  {state.services.map((service) => (
+                    <option key={service.id} value={service.id}>
+                      {service.name}
+                    </option>
+                  ))}
+                </select>
+                <Icon name="chevron-down" size={17} />
+              </div>
+            </label>
+
+            {/* Hoy atiende sólo Gisela; el filtro aparece si algún día se
+                suman más profesionales. */}
+            {state.professionals.length > 1 && (
+              <label class="agenda-status-filter">
+                <span>Profesional</span>
+                <div class="select-wrap">
+                  <select
+                    value={professionalFilter.value}
+                    onChange$={(_, element) =>
+                      (professionalFilter.value = element.value)
+                    }
+                  >
+                    <option value="">Todos</option>
+                    {state.professionals.map((professional) => (
+                      <option key={professional.id} value={professional.id}>
+                        {professional.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Icon name="chevron-down" size={17} />
+                </div>
+              </label>
+            )}
+
+            <button
+              class="secondary-button small"
+              type="button"
+              disabled={activeFilterCount === 0}
+              onClick$={() => {
+                query.value = "";
+                statusFilter.value = "";
+                depositFilter.value = "";
+                coverageFilter.value = "";
+                serviceFilter.value = "";
+                professionalFilter.value = "";
+                futureDepositMode.value = false;
+              }}
+            >
+              Limpiar filtros
+            </button>
+          </div>
+        )}
 
         <div
           class="agenda-day-summary"
@@ -971,7 +1209,208 @@ export default component$(() => {
           </details>
         )}
 
-        <div class="agenda-list" aria-busy={state.loading}>
+        {state.conflicts.length > 0 && !state.loading && (
+          <section
+            class="agenda-conflicts"
+            aria-labelledby="agenda-conflicts-title"
+          >
+            <header>
+              <Icon name="alert" size={19} />
+              <div>
+                <strong id="agenda-conflicts-title">
+                  {state.conflicts.length === 1
+                    ? "Hay 1 cambio de Google Calendar para decidir"
+                    : `Hay ${state.conflicts.length} cambios de Google Calendar para decidir`}
+                </strong>
+                <small>
+                  Alguien movió, borró o editó estos turnos en Google. La agenda
+                  no cambió sola.
+                </small>
+              </div>
+            </header>
+            <ul>
+              {state.conflicts.map((conflict) => (
+                <li key={conflict.id}>
+                  <span>
+                    <strong>{conflict.contactName}</strong>
+                    <small>
+                      {conflict.kind === "cancellation_requested"
+                        ? "Se borró el evento en Google"
+                        : conflict.kind === "metadata_changed"
+                          ? "Cambió el texto del evento"
+                          : "Se movió el turno en Google"}
+                    </small>
+                  </span>
+                  <button
+                    class="secondary-button small"
+                    type="button"
+                    onClick$={() => (reviewingConflictId.value = conflict.id)}
+                  >
+                    Comparar y decidir
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {viewMode.value === "month" &&
+          !futureDepositMode.value &&
+          !state.loading &&
+          !state.error && (
+            <div class="agenda-month" role="grid" aria-label="Agenda del mes">
+              <p class="agenda-month-hint">
+                Tocá un turno para abrirlo o arrastralo a otro día para
+                reprogramarlo. El horario se elige entre los disponibles y se
+                confirma antes de mover nada.
+              </p>
+              <div class="agenda-month-head" role="row">
+                {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map(
+                  (label) => (
+                    <span key={label} role="columnheader">
+                      {label}
+                    </span>
+                  ),
+                )}
+              </div>
+              <div class="agenda-month-grid" role="rowgroup">
+                {monthDays.map((day) => {
+                  const dayAppointments =
+                    appointmentsByDate.get(day.date) ?? [];
+                  const isTodayCell = day.date === businessDateInput();
+                  return (
+                    <div
+                      key={day.date}
+                      role="gridcell"
+                      class={{
+                        "agenda-month-day": true,
+                        outside: !day.inMonth,
+                        today: isTodayCell,
+                        selected: day.date === selectedDate.value,
+                        "drop-target": dragOverDate.value === day.date,
+                      }}
+                      aria-current={isTodayCell ? "date" : undefined}
+                      preventdefault:dragover
+                      onDragOver$={() => {
+                        if (draggingId.value) dragOverDate.value = day.date;
+                      }}
+                      onDragLeave$={() => {
+                        if (dragOverDate.value === day.date) {
+                          dragOverDate.value = "";
+                        }
+                      }}
+                      preventdefault:drop
+                      onDrop$={() => {
+                        const appointmentId = draggingId.value;
+                        draggingId.value = "";
+                        dragOverDate.value = "";
+                        if (!appointmentId) return;
+                        const dragged = state.appointments.find(
+                          (item) => item.id === appointmentId,
+                        );
+                        if (!dragged) return;
+                        // Soltar no reprograma: abre la reprogramación con el
+                        // día elegido para que el horario salga de la
+                        // disponibilidad real y quede confirmado a mano.
+                        if (
+                          businessDateInput(new Date(dragged.startsAt)) ===
+                          day.date
+                        ) {
+                          return;
+                        }
+                        selectedId.value = appointmentId;
+                        rescheduleTargetDate.value = day.date;
+                        rescheduling.value = true;
+                      }}
+                    >
+                      <button
+                        class="agenda-month-daynumber"
+                        type="button"
+                        aria-label={`${formatSelectedDate(day.date)}: ${
+                          dayAppointments.length
+                        } ${dayAppointments.length === 1 ? "turno" : "turnos"}`}
+                        onClick$={() => {
+                          selectedDate.value = day.date;
+                          viewMode.value = "day";
+                          selectedId.value = "";
+                        }}
+                      >
+                        {Number(day.date.slice(-2))}
+                      </button>
+                      {dayAppointments.length > 0 && (
+                        <span class="agenda-month-items">
+                          {dayAppointments.slice(0, 3).map((appointment) => {
+                            const movable = !finalStatuses.has(
+                              appointment.status,
+                            );
+                            return (
+                              <button
+                                key={appointment.id}
+                                type="button"
+                                class={{
+                                  "agenda-month-item": true,
+                                  [`status-${statusTone(appointment)}`]: true,
+                                  dragging: draggingId.value === appointment.id,
+                                }}
+                                draggable={movable}
+                                title={`${appointment.contactName} · ${appointment.serviceName}`}
+                                onDragStart$={() => {
+                                  if (movable)
+                                    draggingId.value = appointment.id;
+                                }}
+                                onDragEnd$={() => {
+                                  draggingId.value = "";
+                                  dragOverDate.value = "";
+                                }}
+                                onClick$={() => {
+                                  selectedDate.value = day.date;
+                                  selectedId.value = appointment.id;
+                                }}
+                              >
+                                {formatBusinessDate(
+                                  new Date(appointment.startsAt),
+                                  {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                    hour12: false,
+                                  },
+                                )}{" "}
+                                {appointment.contactName.split(/\s+/)[0]}
+                              </button>
+                            );
+                          })}
+                          {dayAppointments.length > 3 && (
+                            <button
+                              class="agenda-month-more"
+                              type="button"
+                              onClick$={() => {
+                                selectedDate.value = day.date;
+                                viewMode.value = "day";
+                                selectedId.value = "";
+                              }}
+                            >
+                              +{dayAppointments.length - 3} más
+                            </button>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+        <div
+          class="agenda-list"
+          aria-busy={state.loading}
+          hidden={
+            viewMode.value === "month" &&
+            !futureDepositMode.value &&
+            !state.loading &&
+            !state.error
+          }
+        >
           <div class="agenda-label">
             <span>
               {visibleAppointments.length}{" "}
@@ -1003,16 +1442,29 @@ export default component$(() => {
                   query.value = "";
                   statusFilter.value = "";
                   depositFilter.value = "";
+                  coverageFilter.value = "";
+                  serviceFilter.value = "";
+                  professionalFilter.value = "";
                   futureDepositMode.value = false;
                 }}
               >
-                Ver todos los turnos del día
+                {viewMode.value === "week"
+                  ? "Ver todos los turnos de la semana"
+                  : viewMode.value === "month"
+                    ? "Ver todos los turnos del mes"
+                    : "Ver todos los turnos del día"}
               </button>
             </div>
           ) : visibleAppointments.length === 0 ? (
             <div class="section-empty">
               <Icon name="calendar" size={25} />
-              <p>No hay turnos para este día.</p>
+              <p>
+                {viewMode.value === "week"
+                  ? "No hay turnos en esta semana."
+                  : viewMode.value === "month"
+                    ? "No hay turnos en este mes."
+                    : "No hay turnos para este día."}
+              </p>
               <button type="button" onClick$={() => (creating.value = true)}>
                 Crear un turno
               </button>
@@ -1028,7 +1480,7 @@ export default component$(() => {
                   onClick$={() => (selectedId.value = appointment.id)}
                 >
                   <time dateTime={appointment.startsAt}>
-                    {futureDepositMode.value && (
+                    {(futureDepositMode.value || viewMode.value !== "day") && (
                       <small>
                         {formatBusinessDate(new Date(appointment.startsAt), {
                           weekday: "short",
@@ -1093,7 +1545,17 @@ export default component$(() => {
             <span>
               {printState.appointments.length}{" "}
               {printState.appointments.length === 1 ? "turno" : "turnos"}
+              {printCoverageSummary ? ` · ${printCoverageSummary}` : ""}
             </span>
+            {printState.generatedAt && (
+              <span>
+                Impreso el{" "}
+                {formatBusinessDate(new Date(printState.generatedAt), {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                })}
+              </span>
+            )}
           </div>
         </header>
 
@@ -1537,15 +1999,33 @@ export default component$(() => {
         />
       )}
 
+      {reviewingConflict && (
+        <CalendarConflictModal
+          conflict={reviewingConflict}
+          isAdmin={state.isAdmin}
+          onClose$={() => (reviewingConflictId.value = "")}
+          onResolved$={(message) => {
+            reviewingConflictId.value = "";
+            notice.value = message;
+            reloadVersion.value += 1;
+          }}
+        />
+      )}
+
       {rescheduling.value &&
         selectedAppointment &&
         !selectedAppointment.googleCalendarImported && (
           <RescheduleAppointmentDrawer
             appointment={selectedAppointment}
             bookingDurations={state.bookingDurations}
-            onClose$={() => (rescheduling.value = false)}
+            initialDate={rescheduleTargetDate.value || undefined}
+            onClose$={() => {
+              rescheduling.value = false;
+              rescheduleTargetDate.value = "";
+            }}
             onSaved$={(message) => {
               rescheduling.value = false;
+              rescheduleTargetDate.value = "";
               selectedId.value = "";
               notice.value = message;
               reloadVersion.value += 1;

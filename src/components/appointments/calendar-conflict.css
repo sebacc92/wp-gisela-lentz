@@ -1,0 +1,96 @@
+/* Comparación lado a lado de un conflicto de Google Calendar.
+   Las dos columnas tienen el mismo peso visual a propósito: la pantalla no
+   sugiere una respuesta, la decisión es de quien mira. */
+
+.calendar-conflict-dialog {
+  max-width: 720px;
+}
+
+.calendar-conflict-lead {
+  margin: 0 0 14px;
+  color: var(--ink-600);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.calendar-conflict-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.calendar-conflict-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.calendar-conflict-side h3 {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.calendar-conflict-side dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.calendar-conflict-side dt {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.calendar-conflict-side dd {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 15px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* El botón queda pegado al pie de su columna aunque un lado tenga más texto. */
+.calendar-conflict-side .primary-button {
+  margin-top: auto;
+}
+
+.calendar-conflict-confirm {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--ink-700);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.calendar-conflict-confirm input {
+  margin-top: 2px;
+}
+
+.calendar-conflict-note {
+  margin: 12px 0 0;
+  color: var(--ink-500);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.calendar-conflict-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .calendar-conflict-compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

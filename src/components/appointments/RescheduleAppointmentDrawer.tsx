@@ -27,6 +27,12 @@ import { Icon } from "../ui/Icon";
 interface Props {
   appointment: AppointmentListItem;
   bookingDurations: BookingDurationSettings;
+  /**
+   * Día al que se quiere mover el turno. Lo usa el arrastre en la vista de
+   * mes: la fecha llega elegida, pero el horario se sigue eligiendo entre los
+   * disponibles y la reprogramación se confirma igual que siempre.
+   */
+  initialDate?: string;
   onClose$: QRL<() => void>;
   onSaved$: QRL<(message: string) => void>;
 }
@@ -37,7 +43,9 @@ function businessDate(value = new Date()): string {
 
 export const RescheduleAppointmentDrawer = component$<Props>((props) => {
   const drawerRef = useSignal<HTMLElement>();
-  const date = useSignal(businessDate(new Date(props.appointment.startsAt)));
+  const date = useSignal(
+    props.initialDate || businessDate(new Date(props.appointment.startsAt)),
+  );
   const selectedStartsAt = useSignal("");
   const coverage = useSignal<PatientCoverage | "">(
     props.appointment.contactCoverage ?? "",

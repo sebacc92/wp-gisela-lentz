@@ -278,3 +278,295 @@
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Vistas de semana y mes, y filtros combinados.
+   --------------------------------------------------------------------------- */
+
+.agenda-view-switch {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.agenda-filter-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
+.agenda-filter-panel .agenda-status-filter {
+  min-width: 160px;
+}
+
+/* Vista de mes. La grilla siempre tiene seis semanas, así que cambiar de mes
+   no cambia la altura de la página. */
+.agenda-month {
+  margin: 0 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.agenda-month-head,
+.agenda-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.agenda-month-head {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.agenda-month-head span {
+  padding: 9px 6px;
+  color: var(--ink-500);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agenda-month-day {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Alto mínimo para que una celda vacía no colapse contra las llenas. */
+  min-height: 96px;
+  padding: 6px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  text-align: left;
+}
+
+.agenda-month-day:nth-child(7n) {
+  border-right: 0;
+}
+
+.agenda-month-day:nth-last-child(-n + 7) {
+  border-bottom: 0;
+}
+
+/* Día resaltado mientras se arrastra un turno encima. */
+.agenda-month-day.drop-target {
+  background: var(--brand-50);
+  box-shadow: inset 0 0 0 2px var(--brand-600);
+}
+
+.agenda-month-day.outside {
+  background: var(--surface-soft);
+}
+
+.agenda-month-day.outside .agenda-month-daynumber {
+  color: var(--ink-400);
+}
+
+.agenda-month-day.selected {
+  box-shadow: inset 0 0 0 2px var(--brand-600);
+}
+
+.agenda-month-daynumber {
+  align-self: flex-start;
+  min-width: 24px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-800);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+
+.agenda-month-daynumber:hover {
+  background: var(--brand-100);
+}
+
+.agenda-month-daynumber:focus-visible,
+.agenda-month-item:focus-visible,
+.agenda-month-more:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 1px;
+}
+
+.agenda-month-day.today .agenda-month-daynumber {
+  border-radius: 50%;
+  background: var(--brand-900);
+  color: #fff;
+}
+
+.agenda-month-items {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agenda-month-item {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 2px 5px;
+  border: 0;
+  border-left: 3px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-soft);
+  color: var(--ink-700);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  text-align: left;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.agenda-month-item[draggable="true"] {
+  cursor: grab;
+}
+
+.agenda-month-item.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.agenda-month-item.status-confirmed {
+  border-left-color: var(--success);
+}
+.agenda-month-item.status-scheduled {
+  border-left-color: var(--warning);
+}
+.agenda-month-item.status-proof-received {
+  border-left-color: var(--brand-600);
+}
+.agenda-month-item.status-cancelled,
+.agenda-month-item.status-no_show {
+  border-left-color: var(--danger);
+  color: var(--ink-500);
+}
+.agenda-month-item.status-completed {
+  border-left-color: var(--sage);
+}
+
+.agenda-month-more {
+  padding: 0 5px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-500);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agenda-month-more:hover {
+  color: var(--brand-900);
+  text-decoration: underline;
+}
+
+/* En pantallas chicas el mes se vuelve ilegible con el detalle de cada turno:
+   se conserva la grilla y sólo queda el número y la cantidad. */
+@media (max-width: 720px) {
+  .agenda-month-day {
+    min-height: 62px;
+  }
+
+  .agenda-month-item {
+    overflow: hidden;
+    height: 6px;
+    padding: 0;
+    border-left-width: 0;
+    border-radius: 3px;
+    background: var(--brand-600);
+    color: transparent;
+  }
+
+  .agenda-month-item.status-cancelled,
+  .agenda-month-item.status-no_show {
+    background: var(--danger);
+  }
+}
+
+.agenda-month-hint {
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-500);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Aviso de conflictos de Google Calendar dentro de la agenda. */
+.agenda-conflicts {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warning);
+  border-radius: 14px;
+  background: var(--warning-soft);
+}
+
+.agenda-conflicts > header {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--warning);
+}
+
+.agenda-conflicts > header div {
+  display: grid;
+  gap: 2px;
+}
+
+.agenda-conflicts > header strong {
+  color: var(--ink-900);
+  font-size: 15px;
+}
+
+.agenda-conflicts > header small {
+  color: var(--ink-600);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.agenda-conflicts ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agenda-conflicts li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.agenda-conflicts li span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.agenda-conflicts li small {
+  color: var(--ink-500);
+  font-size: 13px;
+}

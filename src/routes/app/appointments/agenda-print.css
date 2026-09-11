@@ -9,6 +9,14 @@
   min-width: 116px;
 }
 
+.agenda-print-note {
+  max-width: 280px;
+  margin: 4px 0 0;
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .agenda-print-sheet {
   display: none;
 }
@@ -186,6 +194,21 @@
 
   .agenda-print-table th:nth-child(6) {
     width: 28%;
+  }
+
+  .agenda-print-note {
+    display: none !important;
+  }
+
+  /* Deja una línea de firma al pie sin empujar la tabla a otra página. */
+  .agenda-print-sheet::after {
+    display: block;
+    margin-top: 8mm;
+    padding-top: 3mm;
+    border-top: 1px solid #cfd6d8;
+    color: #5f6b72;
+    content: "Uso interno del consultorio. Contiene datos personales de pacientes.";
+    font-size: 7.5pt;
   }
 
   .agenda-print-empty {
