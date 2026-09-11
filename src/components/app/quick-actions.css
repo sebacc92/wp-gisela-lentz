@@ -1,0 +1,121 @@
+/* Botón flotante de acciones rápidas.
+   En mobile la navegación inferior ocupa `--gl-mobile-nav-height`, así que el
+   botón se levanta por encima para no taparla ni quedar tapado. */
+
+.quick-actions {
+  position: fixed;
+  right: 18px;
+  bottom: calc(var(--gl-mobile-nav-height, 70px) + 18px);
+  z-index: 40;
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+@media (min-width: 900px) {
+  .quick-actions {
+    bottom: 24px;
+    right: 24px;
+  }
+}
+
+.quick-actions-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--brand-900);
+  color: #fff;
+  box-shadow: 0 10px 24px rgb(75 52 66 / 28%);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+
+.quick-actions-trigger:hover {
+  background: var(--brand-800);
+}
+
+.quick-actions-trigger:focus-visible {
+  outline: 3px solid var(--brand-600);
+  outline-offset: 3px;
+}
+
+.quick-actions-trigger:active {
+  transform: scale(0.96);
+}
+
+.quick-actions-menu {
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgb(52 43 49 / 16%);
+}
+
+.quick-actions-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-800);
+  font-size: 15px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.quick-actions-menu button:hover:not(:disabled) {
+  background: var(--brand-50);
+  color: var(--brand-900);
+}
+
+.quick-actions-menu button:focus-visible {
+  outline: 2px solid var(--brand-600);
+  outline-offset: -2px;
+}
+
+.quick-actions-menu button:disabled {
+  color: var(--ink-400);
+  cursor: progress;
+}
+
+/* Diálogo de cierre de horario. Reutiliza `.drawer` y sólo ajusta el ancho:
+   es un formulario corto y no necesita el panel completo de un turno. */
+.quick-block-drawer {
+  max-width: 420px;
+}
+
+.quick-block-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quick-block-help {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.quick-block-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-actions-trigger {
+    transition: none;
+  }
+}

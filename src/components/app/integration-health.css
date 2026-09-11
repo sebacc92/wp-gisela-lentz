@@ -1,0 +1,117 @@
+/* Aviso de integraciones. Vive arriba del contenido del inicio y no debe
+   competir con el contenido: color sobrio, una línea de acento y nada de
+   animación que distraiga mientras se trabaja. */
+
+.integration-health {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.integration-health-alert {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.integration-health-alert.critical {
+  border-left-color: var(--danger);
+  background: var(--rose-soft);
+}
+
+.integration-health-alert.warning {
+  border-left-color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.integration-health-alert.unknown {
+  border-left-color: var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.integration-health-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink-700);
+}
+
+.integration-health-alert.critical .integration-health-icon {
+  color: var(--danger);
+}
+
+.integration-health-alert.warning .integration-health-icon {
+  color: var(--warning);
+}
+
+.integration-health-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.integration-health-copy strong {
+  color: var(--ink-900);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.integration-health-copy small {
+  color: var(--ink-600);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.integration-health-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.integration-health-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 44px es el objetivo táctil mínimo; el icono es chico a propósito. */
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500);
+  cursor: pointer;
+}
+
+.integration-health-dismiss:hover {
+  background: var(--surface);
+  color: var(--ink-900);
+}
+
+.integration-health-dismiss:focus-visible {
+  outline: 2px solid var(--brand-500, var(--brand-700));
+  outline-offset: 2px;
+}
+
+/* En pantallas chicas el aviso se apila para que el texto no quede en una
+   columna de dos palabras. */
+@media (max-width: 640px) {
+  .integration-health-alert {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .integration-health-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}

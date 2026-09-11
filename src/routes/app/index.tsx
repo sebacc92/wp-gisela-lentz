@@ -1,4 +1,5 @@
 import {
+  $,
   component$,
   useContext,
   useSignal,
@@ -13,6 +14,8 @@ import { APP_USER_CONTEXT } from "~/components/app/AppUserContext";
 import "./dashboard.css";
 import { BotAutomationControl } from "~/components/app/BotAutomationControl";
 import { GoogleCalendarStatusBlock } from "~/components/app/GoogleCalendarStatusBlock";
+import { IntegrationHealthBanner } from "~/components/app/IntegrationHealthBanner";
+import { QuickActionsFab } from "~/components/app/QuickActionsFab";
 import { Icon } from "~/components/ui/Icon";
 import { APP_DESCRIPTION, getPageTitle } from "~/config/business";
 import {
@@ -27,8 +30,16 @@ import {
   effectiveDepositStatus,
   type AppointmentStatus,
 } from "~/lib/booking";
+import {
+  ATTENDANCE_WINDOW_DAYS,
+  formatArs,
+  projectedDepositRevenue,
+  responseDistribution,
+  weeklyAttendance,
+} from "~/lib/dashboard-metrics";
 import type { DepositStatus, PatientCoverage } from "~/lib/inbox-types";
 import { getSupabaseClient } from "~/lib/supabase/client";
+import { watchRealtimeTables } from "~/lib/supabase/realtime";
 
 interface RelatedName {
   name: string;
@@ -43,6 +54,7 @@ interface AppointmentRow {
   deposit_status: DepositStatus;
   hold_expires_at: string | null;
   deposit_proof_message_id: string | null;
+  deposit_expected_amount_ars?: number | null;
   contact_id: string;
   contacts: RelatedName | RelatedName[] | null;
   services?: RelatedName | RelatedName[] | null;
@@ -58,6 +70,7 @@ interface DashboardAppointment {
   durationMinutes: number;
   depositStatus: DepositStatus;
   depositProofMessageId: string | null;
+  depositExpectedAmountArs: number | null;
   contactId: string;
 }
 
@@ -87,6 +100,10 @@ function mapAppointments(rows: AppointmentRow[]): DashboardAppointment[] {
       durationMinutes: row.duration_minutes,
       depositStatus,
       depositProofMessageId: row.deposit_proof_message_id,
+      depositExpectedAmountArs:
+        typeof row.deposit_expected_amount_ars === "number"
+          ? row.deposit_expected_amount_ars
+          : null,
       contactId: row.contact_id,
     };
   });
@@ -98,7 +115,9 @@ async function loadDashboardAppointments(
 ): Promise<DashboardAppointment[]> {
   const withServices = await client
     .from("appointments")
-    .select(`${baseAppointmentSelect},services(name)`)
+    .select(
+      `${baseAppointmentSelect},deposit_expected_amount_ars,services(name)`,
+    )
     .gte("starts_at", fromIso)
     .order("starts_at");
 
@@ -108,8 +127,9 @@ async function loadDashboardAppointments(
     );
   }
 
-  // `services` is added by the Gisela migration. Until it is applied, the
-  // dashboard remains operational with the existing appointment schema.
+  // `services` and the deposit snapshot are added by later migrations. Until
+  // they are applied the dashboard stays operational with the original
+  // appointment schema; the deposit metric simply reports an unknown amount.
   const existingSchema = await client
     .from("appointments")
     .select(baseAppointmentSelect)
@@ -144,15 +164,23 @@ function agendaHref(options: {
 export default component$(() => {
   const appUser = useContext(APP_USER_CONTEXT);
   const reloadVersion = useSignal(0);
+  const realtimeConnected = useSignal(false);
+  const notice = useSignal("");
   const state = useStore<{
     appointments: DashboardAppointment[];
     unreadMessages: number;
+    botReplies: number;
+    humanReplies: number;
+    repliesKnown: boolean;
     loadedAt: string;
     loading: boolean;
     error: boolean;
   }>({
     appointments: [],
     unreadMessages: 0,
+    botReplies: 0,
+    humanReplies: 0,
+    repliesKnown: false,
     loadedAt: "",
     loading: true,
     error: false,
@@ -171,15 +199,35 @@ export default component$(() => {
       const client = getSupabaseClient();
       const reference = new Date();
       const range = getBusinessDayRange(reference);
-      const [appointments, conversations] = await Promise.all([
-        // El consultorio tiene un volumen acotado: cargar todos los turnos
-        // futuros evita ocultar señas pendientes por estar fuera de un rango.
-        loadDashboardAppointments(client, range.from.toISOString()),
+      // La asistencia mira siete días hacia atrás, así que la carga arranca
+      // antes del día de hoy. Hacia adelante no se acota: el consultorio tiene
+      // un volumen chico y recortar escondería señas pendientes lejanas.
+      const metricsFrom = new Date(
+        range.from.getTime() - ATTENDANCE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
+      );
+      const repliesFrom = new Date(
+        reference.getTime() - ATTENDANCE_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
+      ).toISOString();
+
+      const outboundSince = () =>
         client
-          .from("conversations")
-          .select("unread_count")
-          .eq("status", "open"),
-      ]);
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("direction", "outbound")
+          .gte("created_at", repliesFrom);
+
+      const [appointments, conversations, botReplies, humanReplies] =
+        await Promise.all([
+          loadDashboardAppointments(client, metricsFrom.toISOString()),
+          client
+            .from("conversations")
+            .select("unread_count")
+            .eq("status", "open"),
+          // `sent_by` queda en null cuando responde la automatización y guarda
+          // el usuario cuando contesta una persona desde la bandeja.
+          outboundSince().is("sent_by", null),
+          outboundSince().not("sent_by", "is", null),
+        ]);
 
       if (conversations.error) throw conversations.error;
       if (!current) return;
@@ -189,6 +237,11 @@ export default component$(() => {
         (total, row) => total + Number(row.unread_count ?? 0),
         0,
       );
+      // El reparto es informativo: si falla, el resto del inicio sigue sirviendo
+      // y la tarjeta dice que no hay dato en lugar de inventar un cero.
+      state.repliesKnown = !botReplies.error && !humanReplies.error;
+      state.botReplies = botReplies.count ?? 0;
+      state.humanReplies = humanReplies.count ?? 0;
       state.loadedAt = reference.toISOString();
     } catch {
       if (current) state.error = true;
@@ -197,13 +250,39 @@ export default component$(() => {
     }
   });
 
-  // Refresh only while the browser tab is visible, and release the listeners.
+  // Realtime sobre turnos, conversaciones y mensajes: comprobantes y estados
+  // aparecen sin esperar al próximo intervalo.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
+    let watch: { unsubscribe: () => void } | null = null;
+    try {
+      watch = watchRealtimeTables({
+        client: getSupabaseClient(),
+        channelName: "dashboard-overview",
+        tables: ["appointments", "conversations", "messages"],
+        onChange: () => {
+          if (!document.hidden) reloadVersion.value += 1;
+        },
+        onConnectionChange: (connected) => {
+          realtimeConnected.value = connected;
+        },
+      });
+    } catch {
+      // Sin Realtime el inicio sigue vivo con el refresco por intervalo.
+      realtimeConnected.value = false;
+    }
+    cleanup(() => watch?.unsubscribe());
+  });
+
+  // Respaldo por intervalo. Un socket caído es silencioso, así que el refresco
+  // periódico nunca se apaga del todo: sólo se espacia cuando Realtime responde.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const connected = track(() => realtimeConnected.value);
     const refresh = () => {
       if (!document.hidden) reloadVersion.value += 1;
     };
-    const interval = window.setInterval(refresh, 60_000);
+    const interval = window.setInterval(refresh, connected ? 300_000 : 60_000);
     document.addEventListener("visibilitychange", refresh);
     cleanup(() => {
       window.clearInterval(interval);
@@ -231,6 +310,18 @@ export default component$(() => {
     (appointment) => appointment.depositStatus === "pending",
   );
   const nextAppointment = upcomingAppointments[0];
+
+  // Las métricas se calculan sobre lo ya cargado, sin consultas extra.
+  const attendance = weeklyAttendance(state.appointments, now.getTime());
+  const depositRevenue = projectedDepositRevenue(
+    state.appointments,
+    now.getTime(),
+  );
+  const replies = responseDistribution({
+    bot: state.botReplies,
+    human: state.humanReplies,
+  });
+
   const todayDate = businessDateInput(now);
   const todayAgendaHref = agendaHref({ date: todayDate });
   const tomorrow = new Date(`${todayDate}T12:00:00Z`);
@@ -286,6 +377,8 @@ export default component$(() => {
             </nav>
           </div>
         </header>
+
+        <IntegrationHealthBanner />
 
         <GoogleCalendarStatusBlock variant="home" />
 
@@ -412,6 +505,72 @@ export default component$(() => {
               </Link>
             </section>
 
+            <h2 class="dashboard-section-title">Cómo viene la semana</h2>
+            <section
+              class="dashboard-metrics dashboard-metrics-secondary"
+              aria-label={`Resumen de los últimos ${ATTENDANCE_WINDOW_DAYS} días`}
+            >
+              <article class="dashboard-card static">
+                <span class="dashboard-card-icon next">
+                  <Icon name="check-circle" size={19} />
+                </span>
+                <span>
+                  <small>Asistencia ({ATTENDANCE_WINDOW_DAYS} días)</small>
+                  <strong>
+                    {attendance.rate === null ? "—" : `${attendance.rate}%`}
+                  </strong>
+                  <em>
+                    {attendance.rate === null
+                      ? "Todavía sin turnos cerrados"
+                      : `${attendance.completed} atendidos · ${attendance.noShow} ausentes`}
+                  </em>
+                </span>
+              </article>
+
+              <Link
+                class="dashboard-card"
+                href="/app/appointments?deposit=pending"
+                aria-label="Revisar las señas proyectadas"
+              >
+                <span class="dashboard-card-icon next">
+                  <Icon name="file" size={19} />
+                </span>
+                <span>
+                  <small>Señas por cobrar</small>
+                  <strong>{formatArs(depositRevenue.pendingArs)}</strong>
+                  <em>
+                    {depositRevenue.confirmedArs > 0
+                      ? `${formatArs(depositRevenue.confirmedArs)} ya confirmadas`
+                      : "de turnos que todavía no ocurrieron"}
+                    {depositRevenue.unknownAmountCount > 0
+                      ? ` · ${depositRevenue.unknownAmountCount} sin monto`
+                      : ""}
+                  </em>
+                </span>
+              </Link>
+
+              <article class="dashboard-card static">
+                <span class="dashboard-card-icon messages">
+                  <Icon name="bot" size={19} />
+                </span>
+                <span>
+                  <small>Respuestas automáticas</small>
+                  <strong>
+                    {!state.repliesKnown || replies.botShare === null
+                      ? "—"
+                      : `${replies.botShare}%`}
+                  </strong>
+                  <em>
+                    {!state.repliesKnown
+                      ? "No pudimos calcular el reparto"
+                      : replies.botShare === null
+                        ? "Todavía sin respuestas enviadas"
+                        : `${replies.bot} del bot · ${replies.human} escritas`}
+                  </em>
+                </span>
+              </article>
+            </section>
+
             <section
               class="dashboard-upcoming"
               aria-labelledby="upcoming-title"
@@ -502,6 +661,26 @@ export default component$(() => {
           </>
         )}
       </section>
+
+      <QuickActionsFab
+        onChanged$={$((message: string) => {
+          notice.value = message;
+          reloadVersion.value += 1;
+        })}
+      />
+
+      {notice.value && (
+        <div class="toast" role="status">
+          <span>{notice.value}</span>
+          <button
+            type="button"
+            aria-label="Cerrar aviso"
+            onClick$={() => (notice.value = "")}
+          >
+            ×
+          </button>
+        </div>
+      )}
     </main>
   );
 });
