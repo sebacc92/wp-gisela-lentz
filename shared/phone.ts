@@ -39,3 +39,18 @@ export function normalizePhoneE164(value: string): string | null {
   }
   return `+${digits}`;
 }
+
+/**
+ * Teléfono tal como lo escribe Gisela en su agenda: los 10 dígitos de área y
+ * número, sin `+54` ni el 9 de celular. `2262338010`, no `+5492262338010`.
+ *
+ * Es la inversa exacta de `normalizePhoneE164` para celulares argentinos:
+ * esos 10 dígitos vuelven a leerse como el mismo celular. Un número de otro
+ * país se devuelve en E.164, porque sin el prefijo no se podría marcar.
+ */
+export function phoneForAgendaTitle(e164: string): string | null {
+  const trimmed = e164.trim();
+  if (!/^\+[1-9][0-9]{7,14}$/.test(trimmed)) return null;
+  const argentine = /^\+549?(\d{10})$/.exec(trimmed);
+  return argentine ? argentine[1] : trimmed;
+}

@@ -1,3 +1,5 @@
+import { phoneForAgendaTitle } from "../../../shared/phone.ts";
+
 export const GOOGLE_AUTHORIZATION_ENDPOINT =
   "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -357,25 +359,31 @@ export async function googleCalendarEventPayload(
   }
 
   const pending = association.projectionStage === "pre_reservation";
+  // El título sigue la convención con la que Gisela anota a mano en su
+  // agenda —«Perez Ana 1ra vez 2235550126 IOMA», ver
+  // docs/google-calendar-patient-import.md—, así los turnos de la aplicación
+  // se leen igual que los suyos. Lo que falta o es un estado va entre
+  // paréntesis, para que no se confunda con un dato del paciente.
+  //
+  // Estos títulos no se vuelven a leer: los eventos de la agenda se
+  // reconocen por `managed_by`, nunca por el texto.
   const patientRecord =
     appointment.is_existing_patient === true
       ? "TF"
       : appointment.is_existing_patient === false
         ? "1ra vez"
-        : "Ficha sin confirmar";
+        : "(ficha sin confirmar)";
   const phone = appointment.patient_phone?.trim();
   const patientPhone =
-    phone && /^\+[1-9][0-9]{7,14}$/.test(phone)
-      ? phone
-      : "Celular sin confirmar";
+    (phone ? phoneForAgendaTitle(phone) : null) ?? "(celular sin confirmar)";
   const coverage =
     appointment.coverage === "ioma"
       ? "IOMA"
       : appointment.coverage === "particular"
         ? "Particular"
-        : "Cobertura sin confirmar";
+        : "(cobertura sin confirmar)";
   const summary = [patientName, patientRecord, patientPhone, coverage];
-  if (pending) summary.push("Pendiente de seña");
+  if (pending) summary.push("(pendiente de seña)");
 
   const privateProperties = {
     appointment_id: appointment.appointment_id.toLowerCase(),
@@ -385,7 +393,7 @@ export async function googleCalendarEventPayload(
   };
   const payloadWithoutFingerprint = {
     ...(includeId ? { id: eventId } : {}),
-    summary: summary.join(" · "),
+    summary: summary.join(" "),
     description: pending
       ? "Reserva pendiente administrada desde la agenda de Gisela Lentz."
       : "Turno confirmado administrado desde la agenda de Gisela Lentz.",

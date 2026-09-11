@@ -72,7 +72,7 @@ turnos sigue teniendo las comprobaciones adicionales descritas arriba.
 
 ## Cómo aparece una pre-reserva
 
-Google muestra **Nombre Apellido · TF · +549… · IOMA · Pendiente de seña**,
+Google muestra **Nombre Apellido TF 2262338010 IOMA (pendiente de seña)**,
 con la descripción “Reserva pendiente administrada desde la agenda de Gisela
 Lentz.” El inicio y el fin
 representan el horario y la duración de la atención. **No muestran el plazo
@@ -83,14 +83,14 @@ y queda guardado en `hold_expires_at`.
 El evento contiene nombre y apellido, **TF** (tiene ficha) o **1ra vez**, celular,
 la cobertura del turno (**Particular** o **IOMA**), el horario, la zona y
 marcadores privados de asociación. Si falta ficha, celular o cobertura, el dato
-figura como **sin confirmar**. No exporta servicio, notas clínicas, comprobantes
+figura como **(… sin confirmar)**, por ejemplo **(celular sin confirmar)**. No exporta servicio, notas clínicas, comprobantes
 ni datos de transferencia. Se marca con visibilidad privada y sin asistentes ni
 notificaciones de Google. El campo técnico de
 Google `status=confirmed` se usa también en pre-reservas: la diferencia
 operativa está en el título y la etapa registrada por el sistema.
 
-- Al aprobar la seña, se actualiza **el mismo evento** a **Nombre Apellido · TF ·
-  +549… · IOMA**, quitando el aviso pendiente. La reprogramación también conserva
+- Al aprobar la seña, se actualiza **el mismo evento** a **Nombre Apellido TF
+  2262338010 IOMA**, quitando el aviso pendiente. La reprogramación también conserva
   su identidad.
 - Un comprobante recibido a tiempo que sigue procesándose protege la reserva
   mientras su trabajo permanece activo. Si queda en revisión

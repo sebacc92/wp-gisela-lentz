@@ -28,15 +28,22 @@ pendientes de revisión en lugar de sobreescribir silenciosamente un turno.
 ## Qué se sincroniza
 
 - una pre-reserva vigente creada después de la activación aparece como
-  `Nombre Apellido · TF · +549… · IOMA · Pendiente de seña`;
+  `Nombre Apellido TF 2262338010 IOMA (pendiente de seña)`;
 - al confirmar la seña, cambiar el nombre o reprogramar desde la aplicación se
   actualiza el mismo evento; al confirmar queda
-  `Nombre Apellido · TF · +549… · IOMA`;
+  `Nombre Apellido TF 2262338010 IOMA`. Es el mismo orden y la misma forma en
+  que Gisela escribe sus turnos a mano (ver
+  [google-calendar-patient-import.md](google-calendar-patient-import.md));
 - `TF` corresponde a paciente existente (tiene ficha), y `1ra vez` a primera
   atención. Se usa el celular del contacto (o el alternativo si no hay uno
   principal) y la cobertura guardada en el turno: `Particular` o `IOMA`.
-  Los datos faltantes figuran como `Ficha sin confirmar`, `Celular sin confirmar`
-  o `Cobertura sin confirmar`, sin inferirlos;
+  Un celular argentino se escribe con sus 10 dígitos, sin `+54` ni el 9
+  (`2262338010`); uno extranjero conserva su prefijo internacional.
+  Los datos faltantes figuran como `(ficha sin confirmar)`,
+  `(celular sin confirmar)` o `(cobertura sin confirmar)`, sin inferirlos;
+- cambiar el formato del título no requiere migrar nada: el reconciliador
+  vuelve a encolar cada turno futuro ya proyectado hace más de una hora, y el
+  worker actualiza ese mismo evento con el título nuevo;
 - cancelación desde la aplicación: elimina el evento administrado; el turno se
   conserva como historial y no se borra físicamente;
 - cada turno conserva un ID determinista, así los reintentos no duplican
@@ -325,10 +332,10 @@ ejemplo `[PRUEBA CALENDAR]`. No usar datos reales para validar el despliegue.
    configuración consistente.
 7. Crear una pre-reserva ficticia autorizada **después** de ese corte. Debe
    aparecer una sola vez como
-   `Nombre Apellido · TF · +549… · IOMA · Pendiente de seña`, aun si se repite la
+   `Nombre Apellido TF 2262338010 IOMA (pendiente de seña)`, aun si se repite la
    sincronización.
 8. Confirmar la seña, cambiar el nombre y reprogramar. Debe actualizarse el
-   mismo ID como `Nombre Apellido · TF · +549… · IOMA`.
+   mismo ID como `Nombre Apellido TF 2262338010 IOMA`.
 9. Mover el evento administrado desde Google. Debe aparecer un conflicto para
    aplicar o rechazar; el turno interno no cambia antes de esa decisión.
 10. Rechazar ese conflicto para restaurar la proyección y luego cancelar el turno

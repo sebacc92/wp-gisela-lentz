@@ -542,7 +542,7 @@ Deno.test(
           contact: { ...PATIENT_DETAILS.contact, coverage: "particular" },
         },
         stage: "confirmed",
-        expected: "Paciente Sintético · TF · +5492291550001 · IOMA",
+        expected: "Paciente Sintético TF 2291550001 IOMA",
       },
       {
         details: {
@@ -555,7 +555,7 @@ Deno.test(
         },
         stage: "pre_reservation",
         expected:
-          "Ana Pérez · 1ra vez · +5492291550001 · Particular · Pendiente de seña",
+          "Ana Pérez 1ra vez 2291550001 Particular (pendiente de seña)",
       },
       {
         details: {
@@ -563,7 +563,7 @@ Deno.test(
           contact: { ...PATIENT_DETAILS.contact, phone_e164: null },
         },
         stage: "confirmed",
-        expected: "Paciente Sintético · TF · +5492291550002 · IOMA",
+        expected: "Paciente Sintético TF 2291550002 IOMA",
       },
       {
         details: {
@@ -577,7 +577,7 @@ Deno.test(
         },
         stage: "confirmed",
         expected:
-          "Paciente Sintético · Ficha sin confirmar · Celular sin confirmar · Cobertura sin confirmar",
+          "Paciente Sintético (ficha sin confirmar) (celular sin confirmar) (cobertura sin confirmar)",
       },
     ]) {
       const { client, tableReads } = fakeSupabase(
@@ -728,7 +728,7 @@ Deno.test(
     const patch = calls.find((call) => call.method === "PATCH");
     assert.equal(
       patch?.body?.summary,
-      "Paciente Sintético · TF · +5492291550001 · IOMA",
+      "Paciente Sintético TF 2291550001 IOMA",
     );
     assert.equal(patch?.headers["if-match"], '"previous"');
     assert.equal(

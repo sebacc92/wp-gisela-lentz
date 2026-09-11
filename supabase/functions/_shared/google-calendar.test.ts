@@ -154,7 +154,7 @@ test("el título incluye ficha, celular y cobertura sin notas ni servicio", asyn
     true,
   );
   const serialized = JSON.stringify(payload);
-  assert.equal(payload.summary, "Ana Pérez · TF · +5492291550001 · IOMA");
+  assert.equal(payload.summary, "Ana Pérez TF 2291550001 IOMA");
   assert.equal(payload.visibility, "private");
   assert.equal(payload.status, "confirmed");
   assert.deepEqual(payload.reminders, { useDefault: false });
@@ -187,7 +187,7 @@ test("el título incluye ficha, celular y cobertura sin notas ni servicio", asyn
   });
   assert.equal(
     pendingPayload.summary,
-    "Ana Pérez · TF · +5492291550001 · IOMA · Pendiente de seña",
+    "Ana Pérez TF 2291550001 IOMA (pendiente de seña)",
   );
   assert.equal(
     pendingPayload.extendedProperties.private.projection_stage,
@@ -202,7 +202,7 @@ test("primera vez y Particular usan la condición y cobertura informadas", async
   );
   assert.equal(
     payload.summary,
-    "Ana Pérez · 1ra vez · +5492291550001 · Particular",
+    "Ana Pérez 1ra vez 2291550001 Particular",
   );
 });
 
@@ -219,7 +219,7 @@ test("los datos ausentes no se convierten en TF, primera vez ni Particular", asy
     );
     assert.equal(
       payload.summary,
-      "Ana Pérez · Ficha sin confirmar · Celular sin confirmar · Cobertura sin confirmar",
+      "Ana Pérez (ficha sin confirmar) (celular sin confirmar) (cobertura sin confirmar)",
     );
   }
 });
