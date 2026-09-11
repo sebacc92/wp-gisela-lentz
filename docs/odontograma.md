@@ -48,6 +48,13 @@ La cara interna se llama palatina en el maxilar superior y lingual en el
 inferior. Es la misma cara, así que se guarda con un único valor
 `palatina_lingual` y se nombra según la arcada al mostrarla.
 
+La cara central sigue el mismo criterio: se guarda siempre como `oclusal`,
+pero se muestra como **oclusal** en premolares y molares y como **incisal** en
+incisivos y caninos, que anatómicamente tienen borde incisal y no cara
+oclusal. Las piezas anteriores son las posiciones 1 a 3 de cada cuadrante FDI
+(`isAnteriorTooth`). El valor guardado no cambia: sólo cambia el rótulo, igual
+que con palatina/lingual.
+
 ## Colores y símbolos de la ficha de Gisela
 
 La representación sigue la referencia proporcionada por Gisela para su
@@ -68,6 +75,24 @@ dibuja sobre la pieza completa: un marco cuadrado azul para caries o un círculo
 rojo grande para obturación. Ese contorno indica un hallazgo general, sin
 atribuirlo a ninguna cara. Una caries oclusal y una obturación distal pueden
 verse simultáneamente, al igual que una caries general y una obturación distal.
+
+## Plan de tratamiento
+
+`treatment_plan_items` es **presupuesto, no historia clínica**. Registra qué se
+piensa hacer, cuánto sale y en qué estado está (pendiente, en curso, hecho,
+cancelado). Por eso, a diferencia del odontograma, sí admite modificación y
+borrado.
+
+Marcar un ítem como hecho **no** escribe nada en el odontograma: el hallazgo
+clínico lo registra la profesional aparte. El verde de "en curso" pertenece a
+este vocabulario de avance y no altera la convención de colores de la ficha.
+
+La selección múltiple de piezas agrega **un asiento por pieza**, igual que si
+se cargaran de a una: no es una edición masiva, porque la ficha sigue siendo
+append-only. Los atajos de teclado sólo fijan la condición; aplicarla exige el
+botón y su confirmación.
+
+## Orientación
 
 La orientación mantiene la vista de frente al paciente: mesial apunta hacia
 la línea media; vestibular queda hacia fuera de la arcada; palatina arriba y

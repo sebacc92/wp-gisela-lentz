@@ -26,6 +26,23 @@ Las migraciones versionadas están en `supabase/migrations/`.
 - `audit_logs`, `webhook_events`: auditoría e idempotencia.
 - `odontogram_entries`: historia clínica odontológica por pieza. Append-only y
   sólo accesible por ADMIN. Detalle en [odontograma](odontograma.md).
+- `patient_attachments`: índice de radiografías, estudios y documentos. Los
+  bytes viven en el bucket privado `patient-attachments`; la tabla sólo guarda
+  la ruta, el tipo y quién lo subió. Es información de salud, así que sigue la
+  regla del odontograma: **sólo ADMIN**, tanto en la tabla como en el bucket.
+  Nada se sirve por URL pública: cada apertura pide una URL firmada de dos
+  minutos. Formatos aceptados: JPEG, PNG y PDF, hasta 20 MB.
+- `treatment_plan_items`: plan de tratamiento y presupuesto por paciente. Es
+  presupuesto, **no** historia clínica: cambia de precio, se reordena y se
+  cancela, así que admite UPDATE y DELETE. Sólo ADMIN. Un trigger mantiene
+  `completed_at` en línea con el estado. Detalle en [odontograma](odontograma.md).
+- `conversation_notes`: notas internas del equipo sobre una conversación. No
+  son historia clínica ni viajan por WhatsApp: viven en una tabla propia para
+  que ningún flujo de envío pueda confundirlas con un mensaje. Las lee y
+  escribe cualquier usuario activo; corregir o borrar queda para quien la
+  escribió o para ADMIN. `anon` no tiene permisos, y
+  `conversation-notes-isolation-contract.test.ts` falla si alguna Edge Function
+  llega a nombrar la tabla.
 
 ## Integridad de agenda
 
@@ -55,6 +72,14 @@ Los RPC nuevos son:
   antes del vencimiento pero terminó de procesarse después, sólo recupera el
   horario cuando todavía está libre.
 - `confirm_appointment_deposit`: confirma seña y turno en una acción auditada.
+- `merge_patient_records`: une dos fichas administrativas bajo una principal.
+  Mueve turnos, mensajes y conversaciones en una sola transacción auditada y
+  **no borra** la ficha duplicada: la marca con `merged_into_contact_id`, así
+  cualquier referencia histórica sigue resolviendo. Se **niega** si la ficha a
+  fusionar tiene asientos en `odontogram_entries`: reasignar historia clínica a
+  otro paciente no es una operación administrativa. Como sólo puede haber una
+  conversación abierta por contacto, cierra la del duplicado antes de
+  reasignarla en lugar de violar el índice. Exige ADMIN.
 - `reschedule_service_appointment`: vuelve a tomar la cobertura actual del
   paciente, recalcula la duración y revalida antes de mover el turno. Los
   registros históricos conservan su snapshot de cobertura; una pre-reserva
