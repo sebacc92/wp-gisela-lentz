@@ -1,0 +1,124 @@
+/* Notas internas. Fondo distinto del chat a propósito: nada de lo que está acá
+   sale hacia el paciente, y eso tiene que verse de un vistazo. */
+
+.conversation-notes {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.conversation-notes h3 {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 14px;
+}
+
+.conversation-notes header p {
+  margin: 2px 0 0;
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.conversation-notes-composer {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.conversation-notes-composer textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-900);
+  font: inherit;
+  font-size: 14px;
+  resize: vertical;
+}
+
+.conversation-notes-composer textarea:focus-visible {
+  outline: 2px solid var(--brand-600);
+  outline-offset: -1px;
+}
+
+.conversation-notes-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-notes-list li {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.conversation-notes-list p {
+  margin: 0;
+  color: var(--ink-800);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation-notes-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+.conversation-notes-meta small {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.conversation-notes-meta button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500);
+  cursor: pointer;
+}
+
+.conversation-notes-meta button:hover {
+  background: var(--rose-soft);
+  color: var(--danger);
+}
+
+.conversation-notes-meta button:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 1px;
+}
+
+.conversation-notes-empty,
+.conversation-notes-error {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  font-size: 13px;
+}
+
+.conversation-notes-empty {
+  color: var(--ink-500);
+}
+
+.conversation-notes-error {
+  color: var(--danger);
+}

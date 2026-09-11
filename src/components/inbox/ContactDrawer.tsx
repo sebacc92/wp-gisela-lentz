@@ -16,6 +16,8 @@ import {
 import { Icon } from "../ui/Icon";
 import "./inbox.css";
 
+import { ConversationNotes } from "./ConversationNotes";
+
 interface ContactDrawerProps {
   conversation: Conversation;
   onClose$: QRL<() => void>;
@@ -412,6 +414,8 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
               </span>
             </button>
           </section>
+
+          <ConversationNotes conversationId={props.conversation.id} />
         </div>
       </aside>
     </div>

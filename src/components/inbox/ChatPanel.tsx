@@ -8,6 +8,11 @@ import {
 import type { AppointmentSummary, Conversation } from "~/lib/inbox-types";
 import type { QuickReply } from "~/lib/inbox-types";
 import {
+  interpolateQuickReply,
+  describePlaceholder,
+} from "~/lib/quick-reply-placeholders";
+import type { DepositSettings } from "~/lib/supabase/data";
+import {
   canSendCustomerServiceText,
   formatComplianceDate,
   getCustomerServiceWindow,
@@ -31,6 +36,8 @@ interface ChatPanelProps {
   conversation: Conversation;
   depositAppointment?: AppointmentSummary;
   quickReplies: QuickReply[];
+  /** Datos de seña configurados, para completar respuestas rápidas. */
+  depositSettings?: DepositSettings;
   onBack$: QRL<() => void>;
   onOpenContact$: QRL<() => void>;
   onToggleAutomation$: QRL<() => void>;
@@ -49,6 +56,7 @@ interface ChatPanelProps {
 export const ChatPanel = component$<ChatPanelProps>((props) => {
   const draft = useSignal("");
   const quickRepliesOpen = useSignal(false);
+  const unresolvedPlaceholders = useSignal<string[]>([]);
   const emojiPickerOpen = useSignal(false);
   const quickRepliesTrigger = useSignal<HTMLButtonElement>();
   const emojiPickerTrigger = useSignal<HTMLButtonElement>();
@@ -415,7 +423,20 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
                   key={reply.shortcut}
                   type="button"
                   onClick$={() => {
-                    draft.value = reply.body;
+                    const filled = interpolateQuickReply(reply.body, {
+                      patientName: props.conversation.name,
+                      appointmentStartsAt:
+                        props.conversation.upcomingAppointment?.startsAt ??
+                        null,
+                      depositAmountArs:
+                        props.depositSettings?.amountArs ?? null,
+                      depositAlias: props.depositSettings?.alias ?? null,
+                      depositHolder: props.depositSettings?.holder ?? null,
+                    });
+                    draft.value = filled.text;
+                    // Lo que no se pudo completar queda escrito entre llaves:
+                    // se avisa para que nadie lo mande sin mirarlo.
+                    unresolvedPlaceholders.value = filled.unresolved;
                     idempotencyKey.value = "";
                     quickRepliesOpen.value = false;
                     window.requestAnimationFrame(() =>
@@ -431,6 +452,12 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             ) : (
               <p class="quick-replies-empty">
                 Todavía no hay respuestas rápidas configuradas.
+              </p>
+            )}
+            {props.quickReplies.length > 0 && (
+              <p class="quick-replies-hint">
+                Se completan solas con el nombre del paciente, la fecha y hora
+                del próximo turno y los datos de la seña.
               </p>
             )}
           </div>
@@ -572,6 +599,9 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             onInput$={(_, element) => {
               if (element.value !== draft.value) idempotencyKey.value = "";
               draft.value = element.value;
+              if (unresolvedPlaceholders.value.length > 0) {
+                unresolvedPlaceholders.value = [];
+              }
             }}
             onKeyDown$={async (event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -617,6 +647,16 @@ export const ChatPanel = component$<ChatPanelProps>((props) => {
             )}
           </button>
         </div>
+        {unresolvedPlaceholders.value.length > 0 && (
+          <span class="composer-placeholder-warning" role="alert">
+            <Icon name="alert" size={15} />
+            Faltan datos para completar:{" "}
+            {unresolvedPlaceholders.value
+              .map((key) => describePlaceholder(key))
+              .join(", ")}
+            . Completalos a mano antes de enviar.
+          </span>
+        )}
         <span id="composer-hint" class="composer-hint">
           {canSendText
             ? "Enter para enviar · Shift + Enter para una nueva línea"

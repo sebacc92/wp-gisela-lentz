@@ -1,0 +1,132 @@
+/* Visor de adjuntos. Ocupa la pantalla porque un comprobante se mira de cerca,
+   pero se cierra con Escape, con la X o tocando fuera. */
+
+.media-viewer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(30 22 27 / 62%);
+}
+
+.media-viewer {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgb(30 22 27 / 32%);
+}
+
+.media-viewer-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.media-viewer-header strong {
+  overflow: hidden;
+  color: var(--ink-900);
+  font-size: 15px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.media-viewer-header-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.media-viewer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-600);
+  cursor: pointer;
+}
+
+.media-viewer-close:hover {
+  background: var(--surface-soft);
+  color: var(--ink-900);
+}
+
+.media-viewer-close:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 2px;
+}
+
+.media-viewer-body {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  padding: 14px;
+  overflow: auto;
+  background: var(--surface-soft);
+}
+
+.media-viewer-image {
+  max-width: 100%;
+  /* Deja lugar al encabezado para que la imagen entre entera. */
+  max-height: calc(88vh - 120px);
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.media-viewer-pdf {
+  width: 100%;
+  height: calc(88vh - 120px);
+  min-height: 420px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.media-viewer-audio {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 12px;
+}
+
+.media-viewer-audio audio {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.media-viewer-state {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 24px 12px;
+  color: var(--ink-600);
+  font-size: 15px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .media-viewer {
+    max-height: 94vh;
+  }
+
+  .media-viewer-pdf {
+    height: 70vh;
+  }
+}

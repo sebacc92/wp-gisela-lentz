@@ -32,11 +32,18 @@ import {
 } from "~/lib/calendar-projection";
 import {
   loadBookingDurationSettings,
+  loadDepositSettings,
   loadInboxData,
   loadProfessionals,
   loadServices,
+  type DepositSettings,
 } from "~/lib/supabase/data";
-import { loadOlderInboxMessages } from "~/lib/supabase/inbox-messages";
+import {
+  loadOlderInboxMessages,
+  searchInboxMessages,
+  type MessageSearchResult,
+} from "~/lib/supabase/inbox-messages";
+import { MESSAGE_SEARCH_MIN_LENGTH } from "~/lib/message-search";
 import { getWhatsAppConsentStatus } from "~/lib/whatsapp-compliance";
 import { confirmDepositAndNotify } from "~/lib/deposit-confirmation";
 import {
@@ -54,6 +61,7 @@ interface InboxState {
   professionals: ProfessionalOption[];
   services: ServiceOption[];
   bookingDurations: BookingDurationSettings;
+  depositSettings: DepositSettings;
   operatorName: string;
   loading: boolean;
   error: string;
@@ -72,6 +80,7 @@ export default component$(() => {
     professionals: [],
     services: [],
     bookingDurations: { iomaMinutes: 0, privateMinutes: 0 },
+    depositSettings: { amountArs: null, alias: null, holder: null },
     operatorName: "Gisela",
     loading: true,
     error: "",
@@ -88,6 +97,8 @@ export default component$(() => {
   const confirmingDeposit = useSignal(false);
   const loadingOlderConversationId = useSignal("");
   const reloadVersion = useSignal(0);
+  const messageMatches = useSignal<MessageSearchResult[]>([]);
+  const searchingMessages = useSignal(false);
 
   useVisibleTask$(async ({ track }) => {
     track(() => reloadVersion.value);
@@ -100,12 +111,22 @@ export default component$(() => {
         services,
         userResult,
         bookingDurations,
+        depositSettings,
       ] = await Promise.all([
         loadInboxData(client),
         loadProfessionals(client),
         loadServices(client),
         client.auth.getUser(),
         loadBookingDurationSettings(client),
+        // Es configuración, no dato de paciente: si falla, las respuestas
+        // rápidas dejan el hueco a la vista en lugar de inventar un importe.
+        loadDepositSettings(client).catch(
+          (): DepositSettings => ({
+            amountArs: null,
+            alias: null,
+            holder: null,
+          }),
+        ),
       ]);
 
       state.conversations = conversations;
@@ -113,6 +134,7 @@ export default component$(() => {
       state.professionals = professionals;
       state.services = services;
       state.bookingDurations = bookingDurations;
+      state.depositSettings = depositSettings;
 
       const user = userResult.data.user;
       if (user) {
@@ -226,6 +248,37 @@ export default component$(() => {
     );
 
   const normalizedQuery = query.value.trim().toLocaleLowerCase("es-AR");
+  // Búsqueda dentro del texto de los mensajes. Va con rebote para no consultar
+  // en cada tecla, y un fallo deja la lista vacía sin romper la bandeja.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const value = track(() => query.value);
+    const trimmed = value.trim();
+    if (trimmed.length < MESSAGE_SEARCH_MIN_LENGTH) {
+      messageMatches.value = [];
+      searchingMessages.value = false;
+      return;
+    }
+
+    let cancelled = false;
+    searchingMessages.value = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const results = await searchInboxMessages(getSupabaseClient(), trimmed);
+        if (!cancelled) messageMatches.value = results;
+      } catch {
+        if (!cancelled) messageMatches.value = [];
+      } finally {
+        if (!cancelled) searchingMessages.value = false;
+      }
+    }, 300);
+
+    cleanup(() => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    });
+  });
+
   const filteredConversations = state.conversations.filter((conversation) => {
     const matchesSearch =
       !normalizedQuery ||
@@ -252,6 +305,8 @@ export default component$(() => {
         query={query.value}
         filter={filter.value}
         operatorName={state.operatorName.split(" ")[0]}
+        messageMatches={messageMatches.value}
+        searchingMessages={searchingMessages.value}
         onQueryChange$={(value) => (query.value = value)}
         onFilterChange$={(value) => (filter.value = value)}
         onSelect$={async (id) => {
@@ -291,6 +346,7 @@ export default component$(() => {
           conversation={selectedConversation}
           depositAppointment={selectedDepositAppointment}
           quickReplies={state.quickReplies}
+          depositSettings={state.depositSettings}
           onBack$={() => (mobileChatOpen.value = false)}
           onOpenContact$={() => (contactDrawerOpen.value = true)}
           onNewAppointment$={() => (appointmentDrawerOpen.value = true)}

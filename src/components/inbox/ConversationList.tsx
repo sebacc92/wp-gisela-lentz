@@ -1,6 +1,9 @@
 import { component$, type QRL } from "@qwik.dev/core";
 import { ManualHelpLink } from "~/components/app/ManualHelpLink";
+import { formatBusinessDate } from "~/lib/date-time";
 import type { Conversation } from "~/lib/inbox-types";
+import { messageSnippet } from "~/lib/message-search";
+import type { MessageSearchResult } from "~/lib/supabase/inbox-messages";
 import { Icon } from "../ui/Icon";
 import "./inbox.css";
 
@@ -15,6 +18,9 @@ interface ConversationListProps {
   onQueryChange$: QRL<(query: string) => void>;
   onFilterChange$: QRL<(filter: InboxFilter) => void>;
   onSelect$: QRL<(id: string) => void>;
+  /** Coincidencias dentro del texto de los mensajes. */
+  messageMatches?: MessageSearchResult[];
+  searchingMessages?: boolean;
 }
 
 const filters: Array<{ key: InboxFilter; label: string }> = [
@@ -171,6 +177,49 @@ export const ConversationList = component$<ConversationListProps>((props) => {
               </span>
             </button>
           ))
+        )}
+
+        {hasQuery && (
+          <section
+            class="message-matches"
+            aria-labelledby="message-matches-title"
+          >
+            <h2 id="message-matches-title">
+              {props.searchingMessages
+                ? "Buscando en los mensajes…"
+                : `En los mensajes (${props.messageMatches?.length ?? 0})`}
+            </h2>
+            {!props.searchingMessages &&
+              (props.messageMatches?.length ? (
+                <ul>
+                  {props.messageMatches.map((match) => (
+                    <li key={match.messageId}>
+                      <button
+                        type="button"
+                        onClick$={() => props.onSelect$(match.conversationId)}
+                      >
+                        <span class="message-match-head">
+                          <strong>{match.contactName}</strong>
+                          <time dateTime={match.createdAt}>
+                            {formatBusinessDate(new Date(match.createdAt), {
+                              dateStyle: "short",
+                            })}
+                          </time>
+                        </span>
+                        <small>
+                          {match.direction === "outbound" ? "Enviado: " : ""}
+                          {messageSnippet(match.body, props.query)}
+                        </small>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p class="message-matches-empty">
+                  Ningún mensaje contiene ese texto.
+                </p>
+              ))}
+          </section>
         )}
       </div>
     </section>

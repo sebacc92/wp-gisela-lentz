@@ -341,6 +341,35 @@ export async function loadBookingDurationSettings(
   };
 }
 
+export interface DepositSettings {
+  amountArs: number | null;
+  alias: string | null;
+  holder: string | null;
+}
+
+/**
+ * Datos de la seña para completar respuestas rápidas. Es configuración, no
+ * dato del paciente: si falta alguno, la respuesta deja el hueco a la vista.
+ */
+export async function loadDepositSettings(
+  client: SupabaseClient,
+): Promise<DepositSettings> {
+  const { data, error } = await client
+    .from("app_settings")
+    .select("deposit_enabled,deposit_amount_ars,deposit_alias,deposit_holder")
+    .eq("id", true)
+    .single();
+  if (error) throw error;
+
+  const enabled = data.deposit_enabled === true;
+  const amount = Number(data.deposit_amount_ars);
+  return {
+    amountArs: enabled && Number.isFinite(amount) && amount > 0 ? amount : null,
+    alias: enabled ? ((data.deposit_alias as string | null) ?? null) : null,
+    holder: enabled ? ((data.deposit_holder as string | null) ?? null) : null,
+  };
+}
+
 export async function loadAppointments(
   client: SupabaseClient,
   fromIso: string,

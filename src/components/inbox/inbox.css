@@ -1236,3 +1236,102 @@
     outline-offset: -2px;
   }
 }
+
+/* Aviso de datos que la respuesta rápida no pudo completar. Aparece pegado al
+   compositor porque es una decisión previa a enviar, no un estado del chat. */
+.composer-placeholder-warning {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 2px 0;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.quick-replies-hint {
+  margin: 6px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-500);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Resultados de búsqueda dentro del texto de los mensajes. Van debajo de las
+   conversaciones porque responden otra pregunta: "dónde hablamos de esto". */
+.message-matches {
+  padding: 12px 14px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.message-matches h2 {
+  margin: 0 0 8px;
+  color: var(--ink-500);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message-matches ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.message-matches button {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-matches button:hover {
+  border-color: var(--brand-600);
+  background: var(--brand-50);
+}
+
+.message-matches button:focus-visible {
+  outline: 2px solid var(--brand-700);
+  outline-offset: 1px;
+}
+
+.message-match-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.message-match-head strong {
+  color: var(--ink-900);
+  font-size: 14px;
+}
+
+.message-match-head time {
+  color: var(--ink-500);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.message-matches small {
+  color: var(--ink-600);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.message-matches-empty {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 13px;
+}

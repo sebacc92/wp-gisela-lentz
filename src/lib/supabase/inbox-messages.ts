@@ -1,3 +1,4 @@
+import { messageSearchPattern } from "../message-search.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Message } from "../inbox-types";
 
@@ -181,4 +182,62 @@ export async function loadOlderInboxMessages(
   if (error) throw error;
 
   return inboxMessagePageFromRows((data ?? []) as unknown as InboxMessageRow[]);
+}
+
+/** Coincidencia de búsqueda dentro del historial de mensajes. */
+export interface MessageSearchResult {
+  messageId: string;
+  conversationId: string;
+  contactName: string;
+  body: string;
+  createdAt: string;
+  direction: "inbound" | "outbound" | "system";
+}
+
+/**
+ * Busca dentro del texto de los mensajes, no sólo en los nombres.
+ *
+ * Devuelve las coincidencias más recientes primero y acotadas: la bandeja
+ * sirve para encontrar una conversación, no para exportar el historial. RLS
+ * sigue decidiendo qué filas se ven.
+ */
+export async function searchInboxMessages(
+  client: SupabaseClient,
+  query: string,
+  limit = 25,
+): Promise<MessageSearchResult[]> {
+  const pattern = messageSearchPattern(query);
+  if (!pattern) return [];
+
+  const { data, error } = await client
+    .from("messages")
+    .select(
+      "id,conversation_id,body,direction,created_at,contacts!messages_contact_id_fkey(name)",
+    )
+    .ilike("body", pattern)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+
+  return (data ?? []).map((raw) => {
+    const row = raw as unknown as {
+      id: string;
+      conversation_id: string;
+      body: string;
+      direction: MessageSearchResult["direction"];
+      created_at: string;
+      contacts: { name: string } | Array<{ name: string }> | null;
+    };
+    const contact = Array.isArray(row.contacts)
+      ? row.contacts[0]
+      : row.contacts;
+    return {
+      messageId: row.id,
+      conversationId: row.conversation_id,
+      contactName: contact?.name ?? "Contacto",
+      body: row.body,
+      createdAt: row.created_at,
+      direction: row.direction,
+    };
+  });
 }
