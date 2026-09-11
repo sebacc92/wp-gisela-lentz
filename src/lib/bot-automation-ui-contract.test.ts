@@ -41,7 +41,7 @@ test("sidebar e Inicio comparten el estado confirmado del bot", () => {
 });
 
 test("Configuración y Manual muestran el mismo estado operativo", () => {
-  const settings = source("src/routes/app/settings/index.tsx");
+  const settings = source("src/components/settings/WhatsAppSettings.tsx");
   const manual = source("src/routes/app/manual/index.tsx");
 
   assert.match(settings, /useContext\(BOT_AUTOMATION_CONTEXT\)/);

@@ -48,7 +48,7 @@ test("Sincronizar ahora exige ADMIN y evita doble envío local", () => {
 
 test("los conflictos llevan a la decisión pendiente en vez de ofrecer otra sincronización", () => {
   const block = source("src/components/app/GoogleCalendarStatusBlock.tsx");
-  const settings = source("src/routes/app/settings/index.tsx");
+  const settings = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(block, /const hasConflicts =/);
   assert.match(

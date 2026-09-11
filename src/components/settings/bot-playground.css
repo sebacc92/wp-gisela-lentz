@@ -1,0 +1,112 @@
+/* Probador de automatización. Se distingue del resto de Configuración con un
+   fondo propio: es una herramienta de prueba, no un ajuste que se guarda. */
+
+.bot-playground {
+  border: 1px dashed var(--line-strong);
+  background: var(--surface-soft);
+}
+
+.bot-playground-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.bot-playground-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+}
+
+.bot-playground-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.bot-playground-result strong {
+  display: block;
+  color: var(--ink-900);
+  font-size: 15px;
+}
+
+.bot-playground-result small {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-600);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Verde sólo cuando el bot contesta solo; el resto deriva a una persona y no
+   debe leerse como un error. */
+.bot-playground-result.route-automatic,
+.bot-playground-result.route-opt_in {
+  border-left-color: var(--success);
+}
+
+.bot-playground-result.route-priority_human {
+  border-left-color: var(--danger);
+}
+
+.bot-playground-result.route-human_review,
+.bot-playground-result.route-paused {
+  border-left-color: var(--warning);
+}
+
+.bot-playground-result.route-opt_out {
+  border-left-color: var(--ink-500);
+}
+
+.bot-playground-result-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--ink-700);
+}
+
+.bot-playground-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bot-playground-reasons li {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-50);
+  color: var(--brand-900);
+  font-size: 12px;
+}
+
+.bot-playground-normalized {
+  margin-top: 8px;
+}
+
+.bot-playground-normalized code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.bot-playground-note {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 13px;
+  line-height: 1.5;
+}

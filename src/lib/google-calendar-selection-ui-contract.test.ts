@@ -7,8 +7,18 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
+/**
+ * Colapsa los saltos de línea y la sangría del JSX. Estos contratos fijan el
+ * texto que lee Gisela, no cómo lo reparte el formateador: sin esto, mover una
+ * sección de archivo o reformatear una frase rompería la prueba sin que haya
+ * cambiado una sola palabra.
+ */
+function prose(value: string): string {
+  return value.replace(/\s+/g, " ");
+}
+
 test("Settings reconoce la selección pendiente sin cortar la conexión activa", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(page, /googleResult === "selection_required"/);
   assert.match(
@@ -24,7 +34,7 @@ test("Settings reconoce la selección pendiente sin cortar la conexión activa",
 });
 
 test("Settings lista y confirma calendarios con el contrato ADMIN", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const loaderStart = page.indexOf("const loadSelectableGoogleCalendars");
   const loaderEnd = page.indexOf("useVisibleTask$", loaderStart);
   const loader = page.slice(loaderStart, loaderEnd);
@@ -60,7 +70,7 @@ test("Settings lista y confirma calendarios con el contrato ADMIN", () => {
 });
 
 test("Settings traduce fallas de selección sin mostrar detalles arbitrarios", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(page, /function googleCalendarFunctionErrorCode/);
   assert.match(page, /context instanceof Response/);
@@ -74,7 +84,7 @@ test("Settings traduce fallas de selección sin mostrar detalles arbitrarios", (
 });
 
 test("Settings refleja el alcance sincronizado y una revocación no confirmada", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(page, /pre-reservas vigentes/i);
   assert.match(page, /turnos confirmados y sus cambios/i);
@@ -85,7 +95,7 @@ test("Settings refleja el alcance sincronizado y una revocación no confirmada",
 });
 
 test("la primera importación exige un preview completo y compatible", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const parser = source("src/lib/google-calendar-import-preview.ts");
 
   assert.match(page, /parseCalendarImportPreview/);
@@ -104,19 +114,19 @@ test("la primera importación exige un preview completo y compatible", () => {
 });
 
 test("el preview separa alcance, series, ocurrencias y bloqueos", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(page, /googleCalendar\.preview\.managedEvents/);
-  assert.match(page, /administrados por esta versión de la\s+agenda/);
+  assert.match(prose(page), /administrados por esta versión de la agenda/);
   assert.match(page, /googleCalendar\.preview\.externalEvents/);
   assert.match(
-    page,
-    /eventos u ocurrencias externos dentro del\s+horizonte revisado/,
+    prose(page),
+    /eventos u ocurrencias externos dentro del horizonte revisado/,
   );
   assert.match(page, /googleCalendar\.preview\s*\.legacyManagedEvents/);
-  assert.match(page, /integración anterior sin un\s+turno asociado/);
+  assert.match(prose(page), /integración anterior sin un turno asociado/);
   assert.match(page, /googleCalendar\.preview\.wouldBecomeBlocks/);
-  assert.match(page, /ocupaciones pasarían a ser bloqueos de\s+agenda/);
+  assert.match(prose(page), /ocupaciones pasarían a ser bloqueos de agenda/);
   assert.match(page, /googleCalendar\.preview\.recurringSeries/);
   assert.match(page, /googleCalendar\.preview\s*\.recurringOccurrences/);
   assert.match(
@@ -128,13 +138,13 @@ test("el preview separa alcance, series, ocurrencias y bloqueos", () => {
   assert.match(page, /googleCalendar\.preview\.coverageStartDate/);
   assert.match(page, /googleCalendar\.preview\s*\.coverageEndDateExclusive/);
   assert.match(
-    page,
-    /Las series se cuentan una vez y sus\s+ocurrencias por separado/,
+    prose(page),
+    /Las series se cuentan una vez y sus ocurrencias por separado/,
   );
 });
 
 test("habilitar revalida el alcance y ejecuta la importación inicial en orden", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const start = page.indexOf("const reviewedPreview");
   const end = page.indexOf("</button>", start);
   const action = page.slice(start, end);
@@ -167,7 +177,7 @@ test("habilitar revalida el alcance y ejecuta la importación inicial en orden",
 });
 
 test("una aprobación persistida conserva un reintento explícito de initial_import", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const start = page.indexOf("const reviewedPreview");
   const end = page.indexOf("</button>", start);
   const action = page.slice(start, end);
@@ -183,7 +193,7 @@ test("una aprobación persistida conserva un reintento explícito de initial_imp
 });
 
 test("el panel no confunde una conexión nueva con una sincronización completa", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(page, /googleCalendarSyncStatus\(\{/);
   assert.match(page, /googleCalendar\.syncStatus === "first_import"/);
@@ -193,7 +203,7 @@ test("el panel no confunde una conexión nueva con una sincronización completa"
 });
 
 test("Sincronizar ahora queda bloqueado hasta completar la primera importación", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const syncStart = page.indexOf('googleCalendar.action = "sync"');
   const buttonStart = page.lastIndexOf("<button", syncStart);
   const buttonEnd = page.indexOf("</button>", syncStart);
@@ -210,7 +220,7 @@ test("Sincronizar ahora queda bloqueado hasta completar la primera importación"
 });
 
 test("reconnect_required conserva la acción de desconexión para cambiar de cuenta", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   assert.match(
     page,
@@ -220,7 +230,7 @@ test("reconnect_required conserva la acción de desconexión para cambiar de cue
 });
 
 test("metadata_changed administrado permite restaurar; importado exige revisión separada", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const conflictsStart = page.indexOf('class="calendar-conflicts"');
   const conflictsEnd = page.indexOf("{state.isAdmin && (", conflictsStart);
   const conflicts = page.slice(conflictsStart, conflictsEnd);
@@ -238,7 +248,7 @@ test("metadata_changed administrado permite restaurar; importado exige revisión
 });
 
 test("una falla al cargar conflictos queda visible y ofrece reintento", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const loaderStart = page.indexOf("const loadGoogleCalendarStatus");
   const loaderEnd = page.indexOf(
     "const loadSelectableGoogleCalendars",
@@ -269,7 +279,7 @@ test("una falla al cargar conflictos queda visible y ofrece reintento", () => {
 });
 
 test("resolver un conflicto es exclusivo, refresca resultados dudosos y libera el estado", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
 
   for (const contract of [
     {
@@ -310,7 +320,7 @@ test("resolver un conflicto es exclusivo, refresca resultados dudosos y libera e
 });
 
 test("sincronizar y desconectar se bloquean mientras se resuelve un conflicto", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const actionsStart = page.indexOf(
     '<div class="google-calendar-actions">',
     page.indexOf('class="calendar-conflicts"'),
@@ -336,7 +346,7 @@ test("sincronizar y desconectar se bloquean mientras se resuelve un conflicto", 
 });
 
 test("los eventos no soportados explican el cierre preventivo real", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const noticeStart = page.indexOf("{googleCalendar.unsupportedCount > 0 && (");
   const noticeEnd = page.indexOf(
     '<div class="google-calendar-note">',
@@ -345,15 +355,15 @@ test("los eventos no soportados explican el cierre preventivo real", () => {
   const notice = page.slice(noticeStart, noticeEnd);
 
   assert.ok(noticeStart >= 0 && noticeEnd > noticeStart);
-  assert.match(notice, /la agenda\s+no ofrece horarios/i);
-  assert.match(notice, /ni envía cambios a Google/i);
-  assert.match(notice, /No hace falta modificar el\s+calendario/i);
+  assert.match(prose(notice), /la agenda no ofrece horarios/i);
+  assert.match(prose(notice), /ni envía cambios a Google/i);
+  assert.match(prose(notice), /No hace falta modificar el calendario/i);
   assert.doesNotMatch(notice, /convert/i);
   assert.doesNotMatch(notice, /para no ocupar la agenda por error/i);
 });
 
 test("la elección muestra sólo nombre, principal y zona horaria", () => {
-  const page = source("src/routes/app/settings/index.tsx");
+  const page = source("src/components/settings/GoogleCalendarSettings.tsx");
   const styles = source("src/global.css");
   const cardStart = page.indexOf(
     'class="google-calendar-card google-calendar-selection"',

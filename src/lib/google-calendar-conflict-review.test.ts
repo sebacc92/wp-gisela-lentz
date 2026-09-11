@@ -113,7 +113,7 @@ test("una revisión bloqueada muestra el motivo pero nunca conserva un token hab
 });
 
 const page = readFileSync(
-  resolve(process.cwd(), "src/routes/app/settings/index.tsx"),
+  resolve(process.cwd(), "src/components/settings/GoogleCalendarSettings.tsx"),
   "utf8",
 );
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (
