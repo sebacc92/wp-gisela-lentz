@@ -1,0 +1,108 @@
+/* Línea de tiempo del odontograma. */
+
+.odontogram-timeline {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.odontogram-timeline h2 {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 17px;
+}
+
+.odontogram-timeline-lead {
+  margin: 0;
+  max-width: 60ch;
+  color: var(--ink-500);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.odontogram-timeline-slider {
+  display: grid;
+  gap: 6px;
+}
+
+.odontogram-timeline-slider > span:first-child {
+  color: var(--ink-700);
+  font-size: 14px;
+}
+
+.odontogram-timeline-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--brand-700);
+}
+
+.odontogram-timeline-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ink-400);
+  font-size: 11px;
+}
+
+.odontogram-timeline-changes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.odontogram-timeline-changes li {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.odontogram-timeline-tooth {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-900);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.odontogram-timeline-transition {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  color: var(--ink-400);
+}
+
+.odontogram-timeline-transition small {
+  color: var(--ink-500);
+  font-size: 13px;
+}
+
+.odontogram-timeline-transition strong {
+  color: var(--ink-900);
+  font-size: 14px;
+}
+
+/* La flecha del icono apunta a la izquierda; acá el sentido es hacia adelante. */
+.odontogram-timeline-transition svg {
+  transform: rotate(180deg);
+  flex-shrink: 0;
+}
+
+.odontogram-timeline-empty {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 13px;
+}

@@ -9,6 +9,7 @@ import {
   UPPER_PRIMARY,
   conditionAllowsSurfaces,
   currentByTooth,
+  isAnteriorTooth,
   isPrimaryTooth,
   isUpperTooth,
   isValidTooth,
@@ -159,4 +160,32 @@ test("el resumen conserva hallazgos diferentes en cada cara", () => {
     ),
     "Caries · Oclusal, Distal: Obturada",
   );
+});
+
+test("las piezas anteriores tienen borde incisal, no cara oclusal", () => {
+  // Incisivos y caninos: posiciones 1 a 3 de cada cuadrante.
+  for (const tooth of [11, 12, 13, 23, 31, 43, 51, 63, 83]) {
+    assert.equal(
+      surfaceLabel(tooth, "oclusal"),
+      "Incisal",
+      `la pieza ${tooth} es anterior`,
+    );
+    assert.equal(isAnteriorTooth(tooth), true);
+  }
+});
+
+test("premolares y molares conservan la cara oclusal", () => {
+  for (const tooth of [14, 16, 18, 26, 37, 48, 54, 65, 75]) {
+    assert.equal(
+      surfaceLabel(tooth, "oclusal"),
+      "Oclusal",
+      `la pieza ${tooth} es posterior`,
+    );
+    assert.equal(isAnteriorTooth(tooth), false);
+  }
+});
+
+test("el nombre de la cara interna sigue dependiendo de la arcada", () => {
+  assert.equal(surfaceLabel(11, "palatina_lingual"), "Palatina");
+  assert.equal(surfaceLabel(41, "palatina_lingual"), "Lingual");
 });

@@ -5,12 +5,18 @@ import {
   useStore,
   useVisibleTask$,
 } from "@qwik.dev/core";
-import { usePreventNavigate$, type DocumentHead } from "@qwik.dev/router";
+import {
+  useLocation,
+  usePreventNavigate$,
+  type DocumentHead,
+} from "@qwik.dev/router";
 import { AppNavigation } from "~/components/app/AppNavigation";
+import { OdontogramTimeline } from "~/components/odontogram/OdontogramTimeline";
 import {
   ConditionSymbol,
   ToothDiagram,
 } from "~/components/odontogram/ToothDiagram";
+import { TreatmentPlan } from "~/components/odontogram/TreatmentPlan";
 import { Icon } from "~/components/ui/Icon";
 import { getPageTitle } from "~/config/business";
 import { isAdminProfile } from "~/lib/admin-access";
@@ -26,6 +32,7 @@ import {
   UPPER_PRIMARY,
   conditionAllowsSurfaces,
   currentByTooth,
+  isAnteriorTooth,
   isPrimaryTooth,
   isUpperTooth,
   surfaceLabel,
@@ -76,6 +83,34 @@ function unlocalizedCaption(condition: ToothCondition | undefined): string {
     : "Obturación sin caras especificadas";
 }
 
+/**
+ * Atajos de la selección múltiple. **Fijan** la condición, no la aplican: en
+ * una historia clínica append-only una tecla suelta no puede escribir un
+ * asiento, así que aplicar sigue exigiendo el botón y su confirmación.
+ */
+/**
+ * Condiciones que se pueden registrar en lote. Son las que describen la pieza
+ * entera o admiten un hallazgo general: las caras se cargan de a una pieza,
+ * donde se ven, y no tendría sentido aplicar la misma cara a diez dientes.
+ */
+const BULK_CONDITIONS: ToothCondition[] = [
+  "caries",
+  "obturado",
+  "fracturado",
+  "sano",
+  "extraccion_indicada",
+  "ausente",
+];
+
+const BULK_SHORTCUTS: Record<string, ToothCondition> = {
+  c: "caries",
+  o: "obturado",
+  s: "sano",
+  e: "extraccion_indicada",
+  a: "ausente",
+  f: "fracturado",
+};
+
 const TOOTH_SHORT_LABELS: Record<ToothCondition, string> = {
   sano: "Sana",
   caries: "Caries",
@@ -104,6 +139,7 @@ function mapEntry(row: EntryRow): OdontogramEntry {
 }
 
 export default component$(() => {
+  const location = useLocation();
   const state = useStore<OdontogramState>({
     loading: true,
     isAdmin: false,
@@ -113,7 +149,9 @@ export default component$(() => {
     error: "",
   });
   const query = useSignal("");
-  const patientId = useSignal("");
+  // La ficha 360° del paciente enlaza acá con `?patient=`; sin el parámetro
+  // la pantalla sigue arrancando con el buscador vacío.
+  const patientId = useSignal(location.url.searchParams.get("patient") ?? "");
   const selectedTooth = useSignal<number | null>(null);
   const draftCondition = useSignal<ToothCondition>("caries");
   const draftSurfaces = useStore<
@@ -127,6 +165,10 @@ export default component$(() => {
   const entryLoadSequence = useSignal(0);
   const notice = useSignal("");
   const noticeKind = useSignal<"success" | "error">("success");
+  // Selección múltiple: se activa con Ctrl/⌘ o Shift al tocar una pieza.
+  const multiTeeth = useSignal<number[]>([]);
+  const bulkCondition = useSignal<ToothCondition>("caries");
+  const bulkSaving = useSignal(false);
 
   const loadEntries = $(async (contactId: string) => {
     const sequence = ++entryLoadSequence.value;
@@ -260,6 +302,19 @@ export default component$(() => {
       state.error =
         "No pudimos cargar los pacientes. Recargá la página para reintentar.";
     state.loading = false;
+
+    // Si se llegó desde la ficha del paciente con `?patient=`, se abre su
+    // historia. Se valida contra la lista para no consultar un id inventado
+    // en la URL.
+    const requested = patientId.value;
+    if (
+      requested &&
+      state.patients.some((patient) => patient.id === requested)
+    ) {
+      await loadEntries(requested);
+    } else if (requested) {
+      patientId.value = "";
+    }
   });
 
   const record = $(async () => {
@@ -318,6 +373,76 @@ export default component$(() => {
     }
   });
 
+  /**
+   * Registra la misma condición en varias piezas.
+   *
+   * La ficha es append-only, así que esto no es una edición masiva: agrega un
+   * asiento por pieza, igual que si se cargaran de a una. Sólo se ofrecen
+   * condiciones de pieza entera; las caras se cargan pieza por pieza, donde se
+   * ven.
+   */
+  const recordMany = $(async () => {
+    const contactId = patientId.value;
+    const teeth = [...multiTeeth.value].sort((a, b) => a - b);
+    if (
+      teeth.length === 0 ||
+      !contactId ||
+      bulkSaving.value ||
+      saving.value ||
+      entriesLoading.value ||
+      state.error ||
+      !state.isAdmin
+    ) {
+      return;
+    }
+
+    const condition = bulkCondition.value;
+    if (
+      !window.confirm(
+        `¿Registrar "${CONDITION_LABELS[condition]}" en ${teeth.length} pieza${teeth.length === 1 ? "" : "s"} (${teeth.join(", ")})?\n\n` +
+          "Se agrega un asiento por pieza. La ficha es append-only: no se puede deshacer, sólo corregir con un asiento nuevo.",
+      )
+    ) {
+      return;
+    }
+
+    bulkSaving.value = true;
+    notice.value = "";
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from("odontogram_entries")
+        .insert(
+          teeth.map((tooth) => ({
+            contact_id: contactId,
+            tooth,
+            condition,
+            surfaces: {},
+            note: null,
+            recorded_by: state.userId,
+          })),
+        )
+        .select(
+          "id,contact_id,tooth,condition,surfaces,note,recorded_at,entry_sequence",
+        );
+      if (error || !data) throw error;
+      if (patientId.value === contactId) {
+        state.entries = [
+          ...(data as EntryRow[]).map(mapEntry).reverse(),
+          ...state.entries,
+        ];
+      }
+      multiTeeth.value = [];
+      notice.value = `Se registraron ${teeth.length} piezas: ${CONDITION_LABELS[condition]}.`;
+      noticeKind.value = "success";
+    } catch {
+      notice.value =
+        "No pudimos confirmar el guardado en lote. Revisá la ficha antes de repetirlo.";
+      noticeKind.value = "error";
+    } finally {
+      bulkSaving.value = false;
+    }
+  });
+
   const current = currentByTooth(state.entries);
   const normalizedQuery = query.value.trim().toLocaleLowerCase("es-AR");
   const patients = normalizedQuery
@@ -351,6 +476,37 @@ export default component$(() => {
     }
   }
 
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const active = track(() => multiTeeth.value.length) > 0;
+    if (!active) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      // No robar teclas mientras se escribe una nota o se busca un paciente.
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        multiTeeth.value = [];
+        return;
+      }
+      const shortcut = BULK_SHORTCUTS[event.key.toLowerCase()];
+      if (shortcut && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        bulkCondition.value = shortcut;
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    cleanup(() => window.removeEventListener("keydown", onKeyDown));
+  });
+
   const renderRow = (teeth: number[], label: string) => (
     <div class="odontogram-arch">
       <span class="odontogram-arch-label">
@@ -360,6 +516,7 @@ export default component$(() => {
         {teeth.map((tooth) => {
           const entry = current.get(tooth);
           const isSelected = selectedTooth.value === tooth;
+          const inBulk = multiTeeth.value.includes(tooth);
           return (
             <button
               key={tooth}
@@ -367,13 +524,25 @@ export default component$(() => {
               class={{
                 "odontogram-tooth": true,
                 selected: isSelected,
+                "bulk-selected": inBulk,
               }}
-              aria-label={`Pieza ${tooth}: ${toothSummary(entry)}${hasUnlocalizedFinding(entry) ? `. ${unlocalizedCaption(entry?.condition)}` : ""}${isSelected ? ". Seleccionada" : ""}`}
-              aria-pressed={isSelected}
+              aria-label={`Pieza ${tooth}: ${toothSummary(entry)}${hasUnlocalizedFinding(entry) ? `. ${unlocalizedCaption(entry?.condition)}` : ""}${isSelected ? ". Seleccionada" : ""}${inBulk ? ". En la selección múltiple" : ""}`}
+              aria-pressed={isSelected || inBulk}
               title={`Pieza ${tooth} · ${toothSummary(entry)}${hasUnlocalizedFinding(entry) ? `. ${unlocalizedCaption(entry?.condition)}` : ""}`}
               id={`odontogram-tooth-${tooth}`}
-              disabled={saving.value}
-              onClick$={() => chooseTooth(tooth)}
+              disabled={saving.value || bulkSaving.value}
+              onClick$={(event) => {
+                // Ctrl/⌘ o Shift arma una selección múltiple; el clic simple
+                // sigue abriendo la pieza como siempre.
+                if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                  multiTeeth.value = inBulk
+                    ? multiTeeth.value.filter((value) => value !== tooth)
+                    : [...multiTeeth.value, tooth];
+                  return;
+                }
+                if (multiTeeth.value.length > 0) multiTeeth.value = [];
+                void chooseTooth(tooth);
+              }}
             >
               <span class="odontogram-tooth-number">{tooth}</span>
               <ToothDiagram
@@ -746,6 +915,62 @@ export default component$(() => {
                   <span aria-hidden="true">↔</span> Deslizá horizontalmente para
                   ver todas las piezas
                 </p>
+
+                {multiTeeth.value.length > 0 ? (
+                  <div
+                    class="odontogram-bulk"
+                    role="group"
+                    aria-label="Selección múltiple"
+                  >
+                    <div class="odontogram-bulk-copy">
+                      <strong>
+                        {multiTeeth.value.length} pieza
+                        {multiTeeth.value.length === 1 ? "" : "s"}:{" "}
+                        {[...multiTeeth.value].sort((a, b) => a - b).join(", ")}
+                      </strong>
+                      <small>
+                        Teclas: C caries · O obturada · S sana · E extracción ·
+                        A ausente · F fracturada · Esc para salir
+                      </small>
+                    </div>
+                    <label class="odontogram-bulk-condition">
+                      <span class="sr-only">Condición a registrar</span>
+                      <select
+                        value={bulkCondition.value}
+                        onChange$={(_, element) =>
+                          (bulkCondition.value =
+                            element.value as ToothCondition)
+                        }
+                      >
+                        {BULK_CONDITIONS.map((condition) => (
+                          <option key={condition} value={condition}>
+                            {CONDITION_LABELS[condition]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      class="secondary-button small"
+                      type="button"
+                      onClick$={() => (multiTeeth.value = [])}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      class="primary-button small"
+                      type="button"
+                      disabled={bulkSaving.value || !state.isAdmin}
+                      onClick$={recordMany}
+                    >
+                      {bulkSaving.value ? "Registrando…" : "Registrar en todas"}
+                    </button>
+                  </div>
+                ) : (
+                  <p class="odontogram-bulk-hint">
+                    Con Ctrl (o ⌘) o Shift podés tocar varias piezas y
+                    registrarles la misma condición de una vez.
+                  </p>
+                )}
               </section>
 
               <aside
@@ -977,7 +1202,10 @@ export default component$(() => {
                             </div>
                           </div>
                           <p class="odontogram-surface-key">
-                            O: oclusal · M: mesial · D: distal · V: vestibular ·{" "}
+                            {isAnteriorTooth(selectedTooth.value)
+                              ? "I: incisal"
+                              : "O: oclusal"}{" "}
+                            · M: mesial · D: distal · V: vestibular ·{" "}
                             {isUpperTooth(selectedTooth.value)
                               ? "P: palatina"
                               : "L: lingual"}
@@ -1102,6 +1330,16 @@ export default component$(() => {
                 )}
               </aside>
             </div>
+          </div>
+        )}
+
+        {selectedPatient && !state.loading && (
+          <div class="odontogram-extras">
+            <OdontogramTimeline entries={state.entries} />
+            <TreatmentPlan
+              contactId={selectedPatient.id}
+              currentEntries={[...current.values()]}
+            />
           </div>
         )}
 

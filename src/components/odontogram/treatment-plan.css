@@ -1,0 +1,220 @@
+/* Plan de tratamiento.
+   Los tonos de estado son de avance administrativo y viven en su propio
+   vocabulario: la ficha clínica conserva la convención de colores de Gisela
+   (caries azul, obturación roja) y nada de acá la altera. */
+
+.treatment-plan {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.treatment-plan > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.treatment-plan h2 {
+  margin: 0;
+  color: var(--ink-900);
+  font-size: 17px;
+}
+
+.treatment-plan header p {
+  margin: 3px 0 0;
+  max-width: 52ch;
+  color: var(--ink-500);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.treatment-progress {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  min-width: 120px;
+}
+
+.treatment-progress strong {
+  color: var(--ink-900);
+  font-size: 20px;
+}
+
+.treatment-progress-bar {
+  display: block;
+  width: 120px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.treatment-progress-bar::before {
+  display: block;
+  width: var(--progress, 0%);
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+  content: "";
+}
+
+.treatment-suggestions {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.treatment-suggestions > span {
+  color: var(--ink-500);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.treatment-suggestions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.treatment-composer {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) 130px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.treatment-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.treatment-list li {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.treatment-list li.tone-progress {
+  border-left-color: var(--success);
+}
+.treatment-list li.tone-done {
+  border-left-color: var(--sage);
+  background: var(--sage-soft);
+}
+.treatment-list li.tone-cancelled {
+  border-left-color: var(--line-strong);
+  opacity: 0.62;
+}
+
+.treatment-item-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.treatment-item-copy strong {
+  color: var(--ink-900);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.treatment-item-copy small {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.treatment-item-status select {
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-800);
+  font: inherit;
+  font-size: 13px;
+}
+
+.treatment-item-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-500);
+  cursor: pointer;
+}
+
+.treatment-item-delete:hover {
+  background: var(--rose-soft);
+  color: var(--danger);
+}
+
+.treatment-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.treatment-totals dt {
+  color: var(--ink-500);
+  font-size: 12px;
+}
+
+.treatment-totals dd {
+  margin: 2px 0 0;
+  color: var(--ink-900);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.treatment-empty,
+.treatment-note {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  color: var(--ink-500);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.treatment-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+@media (max-width: 700px) {
+  .treatment-composer {
+    grid-template-columns: 90px minmax(0, 1fr);
+  }
+
+  .treatment-composer .primary-button {
+    grid-column: 1 / -1;
+  }
+}

@@ -92,10 +92,26 @@ export function isPrimaryTooth(tooth: number): boolean {
 
 /** La misma cara se llama palatina arriba y lingual abajo. Se guarda con un
  * único valor y se nombra según la arcada al mostrarla. */
+/**
+ * Piezas anteriores: incisivos y caninos, posiciones 1 a 3 de cada cuadrante
+ * en la numeración FDI. No tienen cara oclusal sino borde incisal.
+ */
+export function isAnteriorTooth(tooth: number): boolean {
+  const position = tooth % 10;
+  return position >= 1 && position <= 3;
+}
+
+/**
+ * La cara central se guarda siempre como `oclusal`, pero se nombra según la
+ * pieza: en un molar o un premolar es la cara oclusal; en un incisivo o un
+ * canino es el borde incisal. Es el mismo criterio que ya se usa con
+ * `palatina_lingual`, que cambia de nombre según la arcada sin duplicar el
+ * vocabulario guardado.
+ */
 export function surfaceLabel(tooth: number, surface: ToothSurface): string {
   switch (surface) {
     case "oclusal":
-      return "Oclusal";
+      return isAnteriorTooth(tooth) ? "Incisal" : "Oclusal";
     case "mesial":
       return "Mesial";
     case "distal":
