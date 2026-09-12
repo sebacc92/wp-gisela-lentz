@@ -118,6 +118,7 @@ const MAX_INBOUND_PAGES = 12;
 const PREVIEW_APPOINTMENT_BATCH_SIZE = 100;
 const FULL_RESYNC_MANAGED_PAGE_SIZE = 100;
 const MAX_FULL_RESYNC_MANAGED_PAGES = 100;
+const PENDING_TITLE_CONFLICT_LIMIT = 25;
 const GOOGLE_CALENDAR_PROJECTION_CONTRACT_VERSION = 2;
 const APPOINTMENT_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1462,6 +1463,24 @@ async function pullGoogleCalendar(input: {
     return data === true;
   };
 
+  /** La huella no valida cuando alguien reescribió el título en Google. Si el
+   * texto es lo único que cambió se adopta, y entonces el evento remoto ya es
+   * la proyección deseada: no hay diferencia que revisar ni nada que empujar. */
+  const managedPayloadIsOurs = async (
+    classified: {
+      eventId: string;
+      appointmentId: string;
+      automationEpoch: string;
+      projectionStage: "pre_reservation" | "confirmed" | null;
+      cancelled: boolean;
+      startsAt: string | null;
+      endsAt: string | null;
+    },
+    event: GoogleCalendarEvent,
+  ): Promise<boolean> =>
+    (await managedGoogleCalendarEventFingerprintIsValid(event)) ||
+    (!classified.cancelled && (await adoptManagedTitle(classified, event)));
+
   const observeManaged = async (managed: {
     eventId: string;
     appointmentId: string;
@@ -1658,18 +1677,9 @@ async function pullGoogleCalendar(input: {
       seenEventIds.add(classified.eventId);
 
       if (classified.kind === "managed") {
-        const payloadFingerprintValid =
-          await managedGoogleCalendarEventFingerprintIsValid(item);
-        // La huella no valida porque alguien reescribió el título en Google.
-        // Adoptado ese texto como propio, el evento remoto ya es la proyección
-        // que queremos: no hay diferencia que revisar ni nada que empujar.
-        const adoptedTitle =
-          payloadFingerprintValid || classified.cancelled
-            ? false
-            : await adoptManagedTitle(classified, item);
         const outcome = await observeManaged({
           ...classified,
-          payloadFingerprintValid: payloadFingerprintValid || adoptedTitle,
+          payloadFingerprintValid: await managedPayloadIsOurs(classified, item),
         });
         if (outcome === "ignored_unknown_appointment") {
           await applyExternal(
@@ -1722,6 +1732,56 @@ async function pullGoogleCalendar(input: {
     pageToken = page.nextPageToken;
     if (page.nextSyncToken) nextSyncToken = page.nextSyncToken;
   } while (pageToken && pages < MAX_INBOUND_PAGES);
+
+  // El pull incremental sólo trae lo que cambió, así que una diferencia de
+  // texto abierta antes de que existiera la adopción no volvería a aparecer
+  // nunca y ese turno quedaría congelado. Se la vuelve a pedir por GET.
+  if (input.automationEpoch) {
+    const { data, error } = await client.rpc(
+      "list_google_calendar_pending_title_conflicts",
+      {
+        p_expected_generation: generation,
+        p_lease_token: leaseToken,
+        p_limit: PENDING_TITLE_CONFLICT_LIMIT,
+      },
+    );
+    if (error !== null || !Array.isArray(data)) {
+      throw calendarWorkerFailure("CALENDAR_INBOUND_TITLE_RECHECK_FAILED");
+    }
+    for (const row of data.slice(0, PENDING_TITLE_CONFLICT_LIMIT)) {
+      const value = row as { google_event_id?: unknown };
+      const eventId =
+        typeof value.google_event_id === "string"
+          ? value.google_event_id.trim()
+          : "";
+      // Un evento que este mismo pull ya observó no se vuelve a pedir.
+      if (!eventId || eventId.length > 1024 || seenEventIds.has(eventId)) {
+        continue;
+      }
+      const lookup = await getGoogleCalendarEvent({
+        accessToken: input.accessToken,
+        calendarId: input.calendarId,
+        eventId,
+        fetcher: input.fetcher,
+      });
+      if (lookup.kind !== "found") continue;
+      const classified = classifyGoogleCalendarEvent(
+        lookup.event,
+        input.calendarTimeZone,
+      );
+      if (classified.kind !== "managed" || classified.eventId !== eventId) {
+        continue;
+      }
+      seenEventIds.add(eventId);
+      await observeManaged({
+        ...classified,
+        payloadFingerprintValid: await managedPayloadIsOurs(
+          classified,
+          lookup.event,
+        ),
+      });
+    }
+  }
 
   // Sólo una corrida completa sabe qué eventos ya no existen. El token nuevo se
   // guarda únicamente cuando se recorrieron todas las páginas.
@@ -1854,8 +1914,10 @@ async function pullGoogleCalendar(input: {
           }
           const outcome = await observeManaged({
             ...classified,
-            payloadFingerprintValid:
-              await managedGoogleCalendarEventFingerprintIsValid(lookup.event),
+            payloadFingerprintValid: await managedPayloadIsOurs(
+              classified,
+              lookup.event,
+            ),
           });
           if (outcome === "ignored_unknown_appointment") {
             // El GET confirma que el evento todavía existe aunque el turno haya

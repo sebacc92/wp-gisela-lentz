@@ -402,6 +402,10 @@ function baseHandlers(
       data: [],
       error: null,
     }),
+    list_google_calendar_pending_title_conflicts: () => ({
+      data: [],
+      error: null,
+    }),
     apply_google_calendar_external_event: () => ({
       data: "already_removed",
       error: null,
@@ -921,6 +925,97 @@ Deno.test(
         assert.equal(observe?.args.p_payload_fingerprint_valid, false);
       }
     }
+  },
+);
+
+Deno.test(
+  "A: una diferencia de texto vieja se vuelve a mirar aunque el pull no la traiga",
+  async () => {
+    const managedPayload = await googleCalendarEventPayload(
+      {
+        appointment_id: APPOINTMENT_ID,
+        starts_at: APP_START,
+        ends_at: APP_END,
+        patient_name: "Paciente ficticio",
+        patient_phone: "+5492291550001",
+        is_existing_patient: true,
+        coverage: "ioma",
+        timezone: "America/Argentina/Buenos_Aires",
+      },
+      {
+        eventId: MANAGED_EVENT_ID,
+        automationEpoch: AUTOMATION_EPOCH,
+        projectionStage: "confirmed",
+        projectedStage: "confirmed",
+      },
+      true,
+    );
+    const { client, rpcCalls } = fakeSupabase(
+      baseHandlers({
+        list_google_calendar_pending_title_conflicts: () => ({
+          data: [
+            {
+              appointment_id: APPOINTMENT_ID,
+              google_event_id: MANAGED_EVENT_ID,
+            },
+          ],
+          error: null,
+        }),
+        adopt_google_calendar_managed_title: () => ({
+          data: true,
+          error: null,
+        }),
+        observe_google_calendar_managed_event: () => ({
+          data: "in_sync",
+          error: null,
+        }),
+        claim_google_calendar_sync_jobs: () => ({ data: [], error: null }),
+      }),
+    );
+    const { fetcher, calls } = fakeGoogle((call) => {
+      // El pull incremental no devuelve un evento que no cambió desde el token.
+      if (call.method === "GET" && call.url.includes("/events?")) {
+        return eventsListResponse([]);
+      }
+      if (
+        call.method === "GET" &&
+        new URL(call.url).pathname.endsWith(`/events/${MANAGED_EVENT_ID}`)
+      ) {
+        return jsonResponseOf({
+          ...managedPayload,
+          summary: "Paciente ficticio TF IOMA dio seña 10",
+          etag: '"etag-remoto"',
+          updated: "2026-09-03T10:00:00.000Z",
+        });
+      }
+      return null;
+    });
+
+    await handleCalendarSyncRequest(syncRequest(), {
+      createClient: () => client,
+      authorize: adminAuthorization(),
+      environment: (name) => ENVIRONMENT[name],
+      fetcher,
+    });
+
+    const adopt = rpcCalls.find(
+      (call) => call.name === "adopt_google_calendar_managed_title",
+    );
+    assert.equal(adopt?.args.p_summary, "Paciente ficticio TF IOMA dio seña 10");
+    assert.equal(adopt?.args.p_appointment_id, APPOINTMENT_ID);
+    assert.equal(
+      rpcCalls.find(
+        (call) => call.name === "observe_google_calendar_managed_event",
+      )?.args.p_payload_fingerprint_valid,
+      true,
+    );
+    assert.equal(
+      calls.findIndex(
+        (call) => call.method !== "GET" && call.url.includes("/events"),
+      ),
+      -1,
+      "revisar una diferencia vieja no puede escribir en Google",
+    );
   },
 );
 
