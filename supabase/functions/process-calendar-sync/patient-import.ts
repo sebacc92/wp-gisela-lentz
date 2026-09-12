@@ -142,6 +142,8 @@ export async function importCalendarPatientAppointments(input: {
     const service = (services.data as ImportService[]).find(
       (item) => item.id === serviceId,
     );
+    // El título sin teléfono igual se importa: la ficha se identifica por el
+    // nombre completo y el RPC rechaza crear una si ya existe otra igual.
     if (
       hints.uncertainties.length ||
       !hints.name ||
@@ -151,8 +153,7 @@ export async function importCalendarPatientAppointments(input: {
       !service ||
       (service.requires_orthodontic_intake && !hints.orthodonticVisitType) ||
       matching.reason === "ambiguous" ||
-      matching.reason === "phone_name_conflict" ||
-      (!matching.contactId && !hints.phoneE164)
+      matching.reason === "phone_name_conflict"
     ) {
       summary.patientImportsNeedReview += 1;
       continue;

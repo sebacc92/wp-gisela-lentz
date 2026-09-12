@@ -172,7 +172,6 @@ test("new patient is only requested atomically when title has complete identity"
 test("family-shared phone, incomplete title, and homonyms stay for review", async () => {
   for (const fixture of [
     { titles: ["Rivas julian 1ra vez 2235550123 particular"] },
-    { titles: ["Ana Perez TF IOMA"], contacts: [] },
     { titles: ["Matias Rivas TF"], contacts: [MATIAS] },
     { titles: ["Matias Rivas particular"], contacts: [MATIAS] },
     {
@@ -184,6 +183,18 @@ test("family-shared phone, incomplete title, and homonyms stay for review", asyn
     assert.equal((await run(db.client)).patientImportsNeedReview, 1);
     assert.equal(db.calls.length, 0);
   }
+});
+
+test("a title without a phone still imports the agenda patient", async () => {
+  // Gisela escribe casi todos sus turnos sin el celular; la ficha se
+  // identifica por el nombre completo y el RPC rechaza los homónimos.
+  const db = fake({ titles: ["Ana Perez TF IOMA"], contacts: [] });
+
+  assert.equal((await run(db.client)).appointmentsImported, 1);
+  assert.equal(db.calls[0].args.p_contact_id, null);
+  assert.equal(db.calls[0].args.p_patient_phone, null);
+  assert.equal(db.calls[0].args.p_patient_name, "Ana Perez");
+  assert.equal(db.calls[0].args.p_coverage, "ioma");
 });
 
 test("does not choose arbitrary professional or service", async () => {

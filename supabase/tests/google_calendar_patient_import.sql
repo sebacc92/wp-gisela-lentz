@@ -117,11 +117,28 @@ select * from pg_temp.import_auto('incomplete-patient', '92900000-0000-4000-8000
 select ok((select coverage = 'particular' and is_existing_patient = true from public.contacts
   where id = '92900000-0000-4000-8000-000000000011'), 'only absent patient coverage and history are filled');
 
+-- La agenda de Gisela casi nunca escribe el celular en el título: el nombre
+-- completo alcanza para crear la ficha, y el mismo nombre repetido no.
+select pg_temp.import_event('agenda-sin-telefono', 6);
+insert into imported_bookings select 'sin-telefono', appointment_id
+from pg_temp.import_auto('agenda-sin-telefono', null, 'Silvina Llona', null, 'ioma', true);
+select ok((select count(*) = 1 from public.contacts
+  where name = 'Silvina Llona' and phone_e164 is null
+    and coverage = 'ioma' and is_existing_patient),
+  'a title without a phone still creates the agenda patient');
+select ok((select appointment.google_calendar_imported
+    and contact.name = 'Silvina Llona'
+  from public.appointments appointment
+  join public.contacts contact on contact.id = appointment.contact_id
+  where appointment.id = (select id from imported_bookings where key = 'sin-telefono')),
+  'the imported turno belongs to that patient');
+
 select pg_temp.import_event('validation', 5);
 select throws_ok($$select pg_temp.import_auto('validation', null, null)$$,
   'P0001', 'PATIENT_NAME_REQUIRED', 'new patient requires a name');
-select throws_ok($$select pg_temp.import_auto('validation', null, 'Otra Persona', null)$$,
-  'P0001', 'PATIENT_PHONE_REQUIRED', 'new patient requires a contact number');
+select throws_ok($$select pg_temp.import_auto('validation', null, 'Silvina Llona', null)$$,
+  '23514', 'CONTACT_IDENTITY_CONFLICT',
+  'a second patient with the same name still requires human review');
 select throws_ok($$select pg_temp.import_auto('validation', null, 'Otra Persona', '223123')$$,
   'P0001', 'PATIENT_PHONE_INVALID', 'new phone must already be normalized E164');
 select throws_ok($$select pg_temp.import_auto('validation', null, 'Hijo Familia', '+5492234000012')$$,

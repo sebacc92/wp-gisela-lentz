@@ -46,8 +46,9 @@ select has_column('public', 'contacts', 'responsible_contact_id',
 select has_column('public', 'appointments', 'patient_contact_id',
   'an appointment keeps who is attended apart from who manages it');
 
-select throws_ok($$insert into public.contacts (name) values ('Sin Identidad Prueba')$$,
-  '23514', null, 'a record without WhatsApp identity still needs someone who manages it');
+-- Una ficha de la agenda de papel existe sin WhatsApp ni quien la gestione.
+select lives_ok($$insert into public.contacts (name) values ('Ficha De Agenda Prueba')$$,
+  'an administrative record can exist without a WhatsApp identity');
 select lives_ok($$insert into public.contacts (id, name, coverage, responsible_contact_id)
   values ('93100000-0000-4000-8000-000000000012', 'Hija Manual Prueba', 'ioma',
     '93100000-0000-4000-8000-000000000010')$$,
