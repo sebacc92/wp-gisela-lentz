@@ -44,9 +44,13 @@ alter table public.app_settings
 
 update public.app_settings
 set
+  -- "Od." es la variante que quedó cargada a mano desde Configuración y es la
+  -- que Gisela pidió escribir completa.
   automation_welcome_message = case
-    when automation_welcome_message =
-      '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.'
+    when automation_welcome_message in (
+      '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.',
+      '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Od. Gisela Lentz. Estoy para ayudarte con turnos y consultas.'
+    )
       then '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Odontóloga Gisela Lentz. Estoy para ayudarte con turnos y consultas.'
     else automation_welcome_message
   end,
