@@ -211,6 +211,25 @@ test("la consulta lateral retoma la pregunta exacta sin menú genérico", () => 
   }
 });
 
+test("la reanudación distingue el alta propia de la de otra persona", () => {
+  assert.equal(
+    informationFlowResumePrompt("choosing_appointment_patient"),
+    "Seguimos con tu turno 😊 ¿El turno es para vos o para otra persona?",
+  );
+  assert.match(
+    informationFlowResumePrompt("collecting_dependent_profile", {
+      expectedProfileField: "name",
+    }) ?? "",
+    /persona que se va a atender/,
+  );
+  assert.match(
+    informationFlowResumePrompt("collecting_patient_profile", {
+      expectedProfileField: "name",
+    }) ?? "",
+    /¿Cuál es tu nombre y apellido\?/,
+  );
+});
+
 test("repetir ubicación en un flujo produce la misma reanudación", () => {
   const context = {
     expectedProfileField: "coverage",

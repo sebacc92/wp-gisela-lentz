@@ -96,6 +96,51 @@ test("tratamiento no pide seña ni anticipa una reserva antes de confirmar", () 
   }
 });
 
+test("el monto de la seña se anuncia antes de tomar el horario", () => {
+  const base = {
+    serviceName: "Consulta",
+    date: "lunes 15 de septiembre",
+    time: "10:00",
+    depositEnabled: true,
+    visitType: null,
+  };
+
+  const withAmount = bookingConfirmationCopy({
+    ...base,
+    depositAmountArs: 10000,
+  }).message;
+  assert.match(withAmount, /seña de \$10\.000/);
+  assert.match(withAmount, /No se reembolsa/);
+  // El aviso va antes de la advertencia de que el horario no está tomado.
+  assert.ok(
+    withAmount.indexOf("seña de $10.000") <
+      withAmount.indexOf("todavía no está reservado"),
+  );
+
+  // Sin monto configurado la copia no inventa cifras.
+  assert.doesNotMatch(bookingConfirmationCopy(base).message, /\$/);
+  assert.doesNotMatch(
+    bookingConfirmationCopy({ ...base, depositAmountArs: 0 }).message,
+    /\$/,
+  );
+});
+
+test("la confirmación nombra a la persona que se va a atender", () => {
+  const base = {
+    serviceName: "Consulta",
+    date: "lunes 15 de septiembre",
+    time: "10:00",
+    depositEnabled: true,
+    visitType: null,
+  };
+
+  assert.match(
+    bookingConfirmationCopy({ ...base, patientName: "Juan Dozo" }).message,
+    /👤 Paciente: Juan Dozo/,
+  );
+  assert.doesNotMatch(bookingConfirmationCopy(base).message, /Paciente:/);
+});
+
 test("primera consulta y otros servicios conservan política global de seña", () => {
   for (const visitType of ["first_visit", null] as const) {
     const required = bookingConfirmationCopy({

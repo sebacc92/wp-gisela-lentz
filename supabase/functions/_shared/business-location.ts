@@ -28,6 +28,8 @@ export const INFORMATION_FOLLOW_UP_BUTTONS = [
 ] as const;
 
 const INFORMATION_FLOW_RESUME_PROMPTS: Record<string, string> = {
+  choosing_appointment_patient:
+    "Seguimos con tu turno 😊 ¿El turno es para vos o para otra persona?",
   selecting_service: "Seguimos con tu turno 😊 ¿Qué tipo de turno necesitás?",
   selecting_orthodontic_visit_type:
     "Seguimos con tu turno 😊 ¿Es tu primera consulta de ortodoncia con Gisela o ya estás en tratamiento con ella?",
@@ -55,6 +57,16 @@ const PROFILE_RESUME_PROMPTS: Record<string, string> = {
     "Seguimos con tu turno 😊 ¿Ya te atendiste en el consultorio antes?",
   contact_phone: "Seguimos con tu turno 😊 ¿Cuál es tu teléfono de contacto?",
   coverage: "Seguimos con tu turno 😊 ¿Vas a atenderte por IOMA o Particular?",
+};
+
+const DEPENDENT_PROFILE_RESUME_PROMPTS: Record<string, string> = {
+  name: "Seguimos con el turno 😊 ¿Cuál es el nombre y apellido de la persona que se va a atender?",
+  is_existing_patient:
+    "Seguimos con el turno 😊 ¿Esa persona ya se atendió en el consultorio antes?",
+  contact_phone:
+    "Seguimos con el turno 😊 ¿A qué teléfono podemos contactar a esa persona?",
+  coverage:
+    "Seguimos con el turno 😊 ¿Esa persona se va a atender por IOMA o Particular?",
 };
 
 function cleanText(value: unknown, maximum: number): string | null {
@@ -168,11 +180,18 @@ export function informationFlowResumePrompt(
   ) {
     return "Seguimos con tu turno 😊 ¿Querés reservar el horario que elegiste? Este turno no requiere seña.";
   }
-  if (state === "collecting_patient_profile") {
+  if (
+    state === "collecting_patient_profile" ||
+    state === "collecting_dependent_profile"
+  ) {
     const expectedProfileField = (context as { expectedProfileField?: unknown })
       .expectedProfileField;
+    const prompts =
+      state === "collecting_dependent_profile"
+        ? DEPENDENT_PROFILE_RESUME_PROMPTS
+        : PROFILE_RESUME_PROMPTS;
     return typeof expectedProfileField === "string"
-      ? (PROFILE_RESUME_PROMPTS[expectedProfileField] ?? null)
+      ? (prompts[expectedProfileField] ?? null)
       : null;
   }
   return INFORMATION_FLOW_RESUME_PROMPTS[state] ?? null;

@@ -21,8 +21,11 @@ atención particular antes de registrarlo con esa opción.
 3. Al elegir **Ortodoncia**, se pregunta **Primera vez** o **En tratamiento con
    Gisela**. La respuesta corresponde a ese turno: haberse atendido antes por
    otro motivo no elimina la seña.
-4. **En tratamiento con Gisela** se guarda directamente como **Confirmado · Sin
-   seña**. No se pide transferencia ni comprobante y no tiene vencimiento de
+4. Antes de tomar el horario, el mensaje de confirmación dice cuánto es la seña
+   y que no se reembolsa si el turno se cancela o reprograma con menos de 24
+   horas: así nadie pre-reserva sin saberlo y el horario no queda bloqueado por
+   alguien que no pensaba pagar. **En tratamiento con Gisela** se guarda
+   directamente como **Confirmado · Sin seña**. No se pide transferencia ni comprobante y no tiene vencimiento de
    pre-reserva. **Primera vez** y los demás servicios conservan la política de
    seña configurada: cuando está activa, Postgres crea una pre-reserva temporal
    en **Esperando seña** y guarda el monto, alias y titular vigentes.
@@ -42,6 +45,15 @@ atención particular antes de registrarlo con esa opción.
 9. Si cumple, Postgres confirma el turno automáticamente y se envía la
    confirmación por WhatsApp. Si no cumple, no se puede leer, falla el
    procesamiento o llegó tarde, la conversación pasa a revisión manual.
+
+El pedido de seña puede nombrar el día y la hora que se están reservando con
+`{date}` y `{time}`, además de `{deposit_amount}`, `{deposit_alias}` y
+`{deposit_holder}`. La confirmación admite `{date}`, `{time}` y `{address}`, que
+toma la dirección configurada del consultorio. A los turnos que empiezan entre
+las 13 y las 17 la confirmación les agrega sola el aviso de que en esa franja no
+hay atención administrativa y hay que avisar por WhatsApp al llegar a la puerta;
+el recordatorio de 24 horas no puede llevarlo porque es una plantilla aprobada
+por Meta.
 
 El importe, alias, titular, minutos de reserva, duraciones y textos se editan en
 **Configuración → WhatsApp y reservas**. Un OPERADOR puede verlos, pero sólo un

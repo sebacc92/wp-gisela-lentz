@@ -3,6 +3,7 @@ import test from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   confirmDepositAndNotify,
+  depositConfirmationBody,
   renderDepositConfirmationMessage,
 } from "./deposit-confirmation.ts";
 
@@ -107,4 +108,35 @@ test("una plantilla inválida usa una confirmación segura sin placeholders", ()
     ),
     "¡Listo! Tu turno quedó confirmado para el viernes 14 de agosto a las 10:30.",
   );
+});
+
+test("la confirmación suma la dirección y, en la franja cerrada, cómo avisar", () => {
+  const template =
+    "Tu turno quedó confirmado para el {date} a las {time}. Te esperamos en {address}.";
+  // 16:00 UTC son las 13:00 en Buenos Aires: el centro está sin atención.
+  const afternoon = depositConfirmationBody({
+    template,
+    startsAt: "2026-09-15T16:00:00.000Z",
+    address: "Calle 11 1375",
+  });
+  assert.match(afternoon, /Calle 11 1375/);
+  assert.match(afternoon, /2291-414102/);
+
+  const morning = depositConfirmationBody({
+    template,
+    startsAt: "2026-09-15T13:00:00.000Z",
+    address: "Calle 11 1375",
+  });
+  assert.match(morning, /Calle 11 1375/);
+  assert.doesNotMatch(morning, /2291-414102/);
+});
+
+test("el aviso de la puerta también acompaña al texto por defecto", () => {
+  const fallback = depositConfirmationBody({
+    template: "{placeholder_inventado}",
+    startsAt: "2026-09-15T16:00:00.000Z",
+  });
+
+  assert.match(fallback, /quedó confirmado/);
+  assert.match(fallback, /2291-414102/);
 });

@@ -24,6 +24,7 @@ export interface AgendaFilterable {
   professionalId: string;
   contactName: string;
   contactPhone: string;
+  managedByName?: string | null;
   serviceName: string;
 }
 
@@ -82,6 +83,8 @@ function matchesQuery(appointment: AgendaFilterable, query: string): boolean {
   return (
     foldForSearch(appointment.contactName).includes(normalized) ||
     appointment.contactPhone.includes(normalized) ||
+    // Un turno para otra persona también se encuentra por quien lo gestiona.
+    foldForSearch(appointment.managedByName ?? "").includes(normalized) ||
     foldForSearch(appointment.serviceName).includes(normalized)
   );
 }

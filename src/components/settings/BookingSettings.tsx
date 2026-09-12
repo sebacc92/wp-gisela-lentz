@@ -157,8 +157,8 @@ export const BookingSettings = component$(() => {
             }
           />
           <small>
-            Podés usar {"{deposit_amount}"}, {"{deposit_alias}"} y
-            {" {deposit_holder}"}.
+            Podés usar {"{deposit_amount}"}, {"{deposit_alias}"},
+            {" {deposit_holder}"}, {"{date}"} y {"{time}"}.
           </small>
         </label>
 
@@ -194,7 +194,9 @@ export const BookingSettings = component$(() => {
               />
               <small>
                 Podés usar {"{date}"} y {"{time}"} para la fecha y hora del
-                turno.
+                turno, y {"{address}"} para la dirección del consultorio. A los
+                turnos de 13 a 17 se les agrega solo el aviso para avisar que
+                llegaste a la puerta.
               </small>
             </label>
             <label class="form-field automation-message-field">

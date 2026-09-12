@@ -8,7 +8,7 @@ const automation = readFileSync(
   "utf8",
 );
 
-test("precio y turnos para terceros interrumpen antes de cualquier reserva", () => {
+test("precio y varios turnos a la vez interrumpen antes de cualquier reserva", () => {
   const multipleGuard = automation.indexOf(
     "requestsMultipleAppointments(inboundBody)",
   );
@@ -28,6 +28,47 @@ test("precio y turnos para terceros interrumpen antes de cualquier reserva", () 
     automation.slice(multipleGuard, stateMachine),
     /MULTIPLE_APPOINTMENTS_REQUESTED[\s\S]*PRICE_QUESTION/,
   );
+});
+
+test("un turno para otra persona se reserva en su ficha, nunca en la de quien escribe", () => {
+  const choosing = automation.indexOf(
+    'if (session.state === "choosing_appointment_patient") {',
+  );
+  const dependentProfile = automation.indexOf(
+    'if (session.state === "collecting_dependent_profile") {',
+  );
+  const structuredOwnIntake = automation.indexOf(
+    "await persistProfileInput(null, true)",
+  );
+  const dependentCreation = automation.indexOf(
+    '"create_whatsapp_automation_patient_appointment"',
+  );
+
+  assert.ok(automation.includes("requestsThirdPartyAppointment(inboundBody)"));
+  // Los datos del tercero se procesan antes de que el alta estructurada propia
+  // pueda escribirlos en la ficha del contacto.
+  assert.ok(choosing > 0 && choosing < structuredOwnIntake);
+  assert.ok(
+    dependentProfile > choosing && dependentProfile < structuredOwnIntake,
+  );
+  assert.ok(dependentCreation > dependentProfile);
+  assert.doesNotMatch(
+    automation.slice(dependentProfile, structuredOwnIntake),
+    /persistProfileInput\(|apply_whatsapp_automation_profile/,
+  );
+  assert.match(automation, /p_patient: dependentPatientPayload\(bookingFor\)/);
+});
+
+test("la persona a cargo sólo acompaña los pasos de la reserva", () => {
+  const statesStart = automation.indexOf("const DEPENDENT_BOOKING_STATES");
+  const states = automation.slice(
+    statesStart,
+    automation.indexOf("]);", statesStart),
+  );
+
+  assert.match(automation, /DEPENDENT_BOOKING_STATES\.has\(state\)/);
+  assert.match(states, /selecting_service[\s\S]*confirming_appointment/);
+  assert.doesNotMatch(states, /idle|waiting_deposit|human_handoff/);
 });
 
 test("un saludo nuevo muestra opciones y no inicia el alta por defecto", () => {

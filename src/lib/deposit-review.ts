@@ -3,21 +3,13 @@ import {
   verifyAppointmentCalendar,
   type CalendarProjectionState,
 } from "./calendar-projection.ts";
-import { BUSINESS_CONFIG } from "../config/business.ts";
-import { renderDepositConfirmationMessage } from "./deposit-confirmation.ts";
+import { depositConfirmationBody } from "./deposit-confirmation.ts";
 
 export const DEPOSIT_PROOF_REJECTED_MESSAGE =
   "Revisamos el comprobante y no pudimos validarlo. Escribinos por este chat y lo resolvemos.";
 
 export const DEPOSIT_PROOF_RETRY_MESSAGE =
   "No pudimos verificar el comprobante. ¿Podés enviarnos una imagen más clara?";
-
-function formatPart(startsAt: string, options: Intl.DateTimeFormatOptions) {
-  return new Intl.DateTimeFormat("es-AR", {
-    ...options,
-    timeZone: BUSINESS_CONFIG.timezone,
-  }).format(new Date(startsAt));
-}
 
 async function openConversationId(
   client: SupabaseClient,
@@ -173,22 +165,16 @@ export async function confirmDepositManually(
     if (conversationId) {
       const { data: settings } = await client
         .from("app_settings")
-        .select("deposit_confirmed_message_template")
+        .select("deposit_confirmed_message_template,business_address")
         .eq("id", true)
         .single();
-      const body = renderDepositConfirmationMessage(
-        String(settings?.deposit_confirmed_message_template ?? "").trim(),
-        formatPart(input.startsAt, {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-        }),
-        formatPart(input.startsAt, {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }),
-      );
+      const body = depositConfirmationBody({
+        template: String(
+          settings?.deposit_confirmed_message_template ?? "",
+        ).trim(),
+        startsAt: input.startsAt,
+        address: String(settings?.business_address ?? "").trim(),
+      });
       const { data: sent, error: sendError } = await client.functions.invoke(
         "whatsapp-send",
         {

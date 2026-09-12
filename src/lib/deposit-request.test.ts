@@ -8,6 +8,7 @@ import {
 
 function requestClient(
   inspect: (body: Record<string, unknown>) => void,
+  template = "Seña {deposit_amount}. Alias {deposit_alias}. Titular {deposit_holder}.",
 ): SupabaseClient {
   const settingsQuery = {
     select() {
@@ -23,11 +24,22 @@ function requestClient(
           deposit_amount_ars: 10000,
           deposit_alias: "gisela.turnos",
           deposit_holder: "Gisela Lentz",
-          deposit_request_message_template:
-            "Seña {deposit_amount}. Alias {deposit_alias}. Titular {deposit_holder}.",
+          deposit_request_message_template: template,
         },
         error: null,
       };
+    },
+  };
+  // El pedido lee del turno el día y la hora que se están reservando.
+  const appointmentQuery = {
+    select() {
+      return this;
+    },
+    eq() {
+      return this;
+    },
+    async maybeSingle() {
+      return { data: { starts_at: "2026-09-15T13:00:00.000Z" }, error: null };
     },
   };
   return {
@@ -37,8 +49,8 @@ function requestClient(
         error: null,
       };
     },
-    from() {
-      return settingsQuery;
+    from(table: string) {
+      return table === "appointments" ? appointmentQuery : settingsQuery;
     },
     functions: {
       async invoke(_name: string, options: { body?: unknown }) {
@@ -82,6 +94,45 @@ test("el pedido manual usa datos configurados e idempotencia estable", async () 
     body.body,
     "Seña $10.000. Alias gisela.turnos. Titular Gisela Lentz.",
   );
+});
+
+test("el pedido nombra el día y la hora que se están reservando", async () => {
+  let body: Record<string, unknown> = {};
+  const result = await requestDepositAndNotify(
+    requestClient(
+      (value) => (body = value),
+      "Seña {deposit_amount} para el turno del {date} a las {time}.",
+    ),
+    {
+      appointmentId: "turno-1",
+      contactId: "paciente-1",
+      conversationId: "conversacion-1",
+      depositRequired: true,
+    },
+  );
+
+  assert.deepEqual(result, { required: true, notified: true });
+  assert.match(String(body.body), /15 de septiembre/);
+  assert.match(String(body.body), /10:00/);
+});
+
+test("una llave sin resolver no se envía al paciente", async () => {
+  let invoked = false;
+  const result = await requestDepositAndNotify(
+    requestClient(
+      () => (invoked = true),
+      "Seña {deposit_amount}. Turno {fecha_inventada}.",
+    ),
+    {
+      appointmentId: "turno-1",
+      contactId: "paciente-1",
+      conversationId: "conversacion-1",
+      depositRequired: true,
+    },
+  );
+
+  assert.deepEqual(result, { required: true, notified: false });
+  assert.equal(invoked, false);
 });
 
 test("si no requiere seña no intenta enviar", async () => {

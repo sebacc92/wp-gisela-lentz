@@ -9,7 +9,10 @@ confirmar la seña.
 
 ```text
 idle
- ├─ Sacar turno ─► collecting_patient_profile (sólo datos faltantes)
+ ├─ Sacar turno ─► choosing_appointment_patient (si el mensaje no lo aclara)
+ │                  ├─ para mí ─► collecting_patient_profile (sólo datos faltantes)
+ │                  ├─ persona a cargo ya cargada ─► selecting_service
+ │                  └─ otra persona ─► collecting_dependent_profile (su propia ficha)
  │                  └─ perfil completo ─► selecting_service
  │                  └─ servicio ─► ortodoncia: primera vez / en tratamiento con Gisela
  │                                   └─ selecting_slot
@@ -47,43 +50,56 @@ Estados adicionales:
 
 ## Perfil y reserva
 
-1. La primera respuesta es sólo el saludo configurado. Después el bot recopila
-   de forma determinista y de a un dato por mensaje: nombre y apellido, si ya se
-   atendió con ella antes, teléfono de contacto y cobertura. Si el teléfono del
-   remitente está disponible, puede confirmarlo con **Este WhatsApp**; si no,
-   escribe otro número con código de área.
-2. Se muestran únicamente servicios activos. Los marcados con
+1. La primera respuesta es sólo el saludo configurado. Antes de pedir datos, el
+   bot resuelve para quién es el turno: si el mensaje ya lo aclara («un turno
+   para mí», «un turno para mi hijo») sigue sin preguntar, y si no, ofrece
+   **Para mí** / **Para otra persona** junto a las personas que ese WhatsApp ya
+   tiene a cargo. Varios turnos en un mismo pedido siguen derivando a una
+   persona: el flujo reserva de a un paciente por vez.
+2. Después el bot recopila de forma determinista y de a un dato por mensaje:
+   nombre y apellido, si ya se atendió con ella antes, teléfono de contacto y
+   cobertura. Si el teléfono del remitente está disponible, puede confirmarlo
+   con **Este WhatsApp**; si no, escribe otro número con código de área.
+3. Un turno para otra persona pide esos mismos cuatro datos, pero sobre ella y
+   guardados en su propia ficha: nada se escribe en la ficha de quien escribe.
+   Esa ficha queda a cargo del contacto (`contacts.responsible_contact_id`),
+   puede no tener WhatsApp propio y el turno la referencia en
+   `appointments.patient_contact_id`. El turno sigue perteneciendo a este
+   WhatsApp: seña, recordatorios y avisos no cambian de destinatario, y la
+   duración sale de la cobertura de quien se atiende. Pedir otro turno para la
+   misma persona reutiliza su ficha en lugar de duplicarla.
+4. Se muestran únicamente servicios activos. Los marcados con
    `requires_orthodontic_intake=true` preguntan **Primera vez** o **En tratamiento
    con Gisela** antes de ofrecer horarios. La elección se guarda en el turno
    (`orthodontic_visit_type=first_visit|in_treatment`) y no se infiere de
    `is_existing_patient` ni de una consulta anterior por otro motivo.
-3. IOMA usa inicialmente 30 minutos y Particular 60. Ambos valores se leen de
+5. IOMA usa inicialmente 30 minutos y Particular 60. Ambos valores se leen de
    configuración y `get_available_slots_for_coverage` los aplica realmente.
-4. Al confirmar el horario, `create_service_appointment` toma un lock y vuelve a
+6. Al confirmar el horario, `create_service_appointment` toma un lock y vuelve a
    validar la disponibilidad local y de Google Calendar. **En tratamiento con
    Gisela** crea `confirmed/not_required`, sin vencimiento ni datos de seña. El
    resto conserva la política configurada: con seña activa crea una pre-reserva
    temporal. Ambas ramas verifican la proyección exacta en Google antes de
    enviar una confirmación o un pedido de seña; una proyección pendiente deriva
    a revisión humana y conserva el turno guardado.
-5. Una pre-reserva con seña guarda una copia del monto, alias y titular vigentes, y esos
+7. Una pre-reserva con seña guarda una copia del monto, alias y titular vigentes, y esos
    mismos datos se envían en el mensaje configurable. Un cambio posterior en
    Configuración no altera lo que se le pidió transferir a ese paciente. El
    turno continúa en “Esperando seña”.
    Un turno de ortodoncia en tratamiento confirma **Sin seña** y vuelve a `idle`,
    sin ingresar en `waiting_deposit` ni solicitar comprobantes.
-6. Una imagen JPEG/PNG o un PDF sólo se interpreta como comprobante cuando la
+8. Una imagen JPEG/PNG o un PDF sólo se interpreta como comprobante cuando la
    sesión está en `waiting_deposit` y tiene una pre-reserva asociada. La IA
    transcribe legibilidad, monto, moneda, fecha, alias o destino, titular e
    identificador de operación; no decide si el pago es válido.
-7. La regla fija aprueba cuando el comprobante es legible, el monto coincide
+9. La regla fija aprueba cuando el comprobante es legible, el monto coincide
    exactamente y coincide el alias o el titular guardado en esa pre-reserva.
    Moneda, fecha e identificador de operación se conservan sólo como datos
    auxiliares: no bloquean la confirmación. Postgres vuelve a comprobar los tres
    datos esenciales y confirma el turno automáticamente dentro de una
    transacción.
-8. Si otro pedido ocupó el horario, se informa de forma simple y se ofrecen
-   alternativas.
+10. Si otro pedido ocupó el horario, se informa de forma simple y se ofrecen
+    alternativas.
 
 Un comprobante no legible, inválido, no asociado, tardío o cuyo procesamiento
 falla deriva a revisión manual. Gisela también conserva los controles para
@@ -92,7 +108,9 @@ revive ni confirma una reserva vencida.
 
 ## Reprogramación y cancelación
 
-- Sólo se consultan reservas/turnos futuros activos del mismo contacto.
+- Sólo se consultan reservas/turnos futuros activos del mismo contacto, incluidos
+  los de las personas que tiene a cargo. Esos se listan con el nombre de quien se
+  atiende y ofrecen horarios según la cobertura de esa persona.
 - Si hay varios, el paciente debe seleccionar uno.
 - El turno original se conserva hasta confirmar el nuevo horario.
 - Si era una pre-reserva pendiente, conserva monto, alias, titular y vencimiento

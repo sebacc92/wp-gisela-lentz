@@ -53,6 +53,8 @@ export interface AppointmentSummary {
   dateLabel: string;
   time: string;
   professional: string;
+  /** Nombre de quien se atiende cuando el turno lo gestiona este contacto. */
+  patientName?: string;
   status:
     | "Esperando seña"
     | "Comprobante recibido"

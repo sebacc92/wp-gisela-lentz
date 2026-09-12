@@ -18,10 +18,15 @@ export type PatientProfileField =
   | "coverage";
 
 export const APPOINTMENT_WELCOME_MESSAGE =
-  "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.";
+  "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Odontóloga Gisela Lentz. Estoy para ayudarte con turnos y consultas.";
 
 export const ACCEPTED_COVERAGE_MESSAGE =
-  "La Dra. Gisela Lentz atiende únicamente por IOMA o de forma particular. No atiende otras obras sociales ni prepagas.";
+  "La Odontóloga Gisela Lentz atiende únicamente por IOMA o de forma particular. No atiende otras obras sociales ni prepagas.";
+
+// Al elegir alcanza con nombrar las dos opciones. La aclaración de que no hay
+// otras coberturas es para cuando preguntan por una obra social puntual.
+const COVERAGE_CHOICE_MESSAGE =
+  "La Odontóloga Gisela Lentz atiende por IOMA o en forma particular.";
 
 export const PATIENT_COVERAGE_OPTIONS = [
   { id: "profile:coverage:ioma", title: "IOMA" },
@@ -33,7 +38,16 @@ export const PATIENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
   is_existing_patient: "¿Ya te atendiste en el consultorio antes?",
   contact_phone:
     "¿Cuál es tu teléfono de contacto? Podés escribir otro número o elegir este WhatsApp.",
-  coverage: `${ACCEPTED_COVERAGE_MESSAGE} ¿Cómo vas a atenderte?`,
+  coverage: `${COVERAGE_CHOICE_MESSAGE} ¿Cómo vas a atenderte?`,
+};
+
+/** Las mismas preguntas del alta propia, hechas sobre la persona que se atiende. */
+export const DEPENDENT_PROFILE_PROMPTS: Record<PatientProfileField, string> = {
+  name: "¿Cuál es el nombre y apellido de la persona que se va a atender?",
+  is_existing_patient: "¿Esa persona ya se atendió en el consultorio antes?",
+  contact_phone:
+    "¿A qué teléfono podemos contactar a esa persona? Podés escribir otro número o elegir este WhatsApp.",
+  coverage: `${COVERAGE_CHOICE_MESSAGE} ¿Cómo se va a atender esa persona?`,
 };
 
 export interface PatientProfileDraft {
@@ -131,39 +145,127 @@ export function asksAboutPrice(value: string): boolean {
   );
 }
 
-const THIRD_PARTY_APPOINTMENT_WORDS =
-  "(?:(?:un|una) )?(?:acompanante|otra persona|mi (?:bebe|hija|hijo|madre|mama|padre|papa|pareja|esposa|esposo|marido|mujer|hermana|hermano|abuela|abuelo))";
+const THIRD_PARTY_RELATIVES =
+  "(?:bebe|hija|hijo|nena|nene|madre|mama|padre|papa|pareja|esposa|esposo|marido|mujer|novia|novio|hermana|hermano|abuela|abuelo|nieta|nieto|sobrina|sobrino|prima|primo|tia|tio|suegra|suegro|amiga|amigo)";
+const THIRD_PARTY_APPOINTMENT_WORDS = `(?:(?:un|una) )?(?:acompanante|otra persona|familiar|mi ${THIRD_PARTY_RELATIVES})`;
+const APPOINTMENT_WORDS = "(?:turnos?|citas?)";
+// Después de «para mí» sólo vale un conector: «para mi ahijado» no es propio.
+const OWN_APPOINTMENT_TAIL =
+  "(?: mism[oa]| sol[oa]| nomas)?(?:$| (?:por|con|de|del|el|la|en|a|que|porque|pero|ya|hoy|manana|si|gracias|es|seria|lo|antes|despues|y)\\b)";
+
+export type AppointmentPatientKind = "self" | "third_party";
 
 /**
- * Señala pedidos que el flujo de un solo paciente no puede atribuir con
- * seguridad: varios turnos, otro turno adicional o un turno para un tercero.
+ * Varios turnos en un mismo pedido siguen yendo a una persona: el flujo
+ * reserva de a un paciente por vez y no reparte datos entre varios.
  */
 export function requestsMultipleAppointments(value: string): boolean {
   const input = normalizeUserInput(value);
   if (!input) return false;
-  const appointment = "(?:turnos?|citas?)";
   const several = "(?:2|dos|3|tres|varios|varias)";
   return (
-    new RegExp(`\\b${several} ${appointment}\\b`).test(input) ||
+    new RegExp(`\\b${several} ${APPOINTMENT_WORDS}\\b`).test(input) ||
     new RegExp(
-      `\\b${appointment} (?:para|de) ${several}(?: personas?)?\\b`,
+      `\\b${APPOINTMENT_WORDS} (?:para|de) ${several}(?: personas?)?\\b`,
     ).test(input) ||
     new RegExp(
-      `\\b(?:otro|otra|segundo|segunda) ${appointment} (?:para|de)\\b`,
+      `\\b(?:otro|otra|segundo|segunda) ${APPOINTMENT_WORDS} (?:para|de)\\b`,
     ).test(input) ||
     new RegExp(
-      `\\b${appointment}\\b.{0,80}\\bpara mi\\b.{0,80}\\b(?:y|ademas|tambien)\\b.{0,80}\\b(?:otro|otra|${THIRD_PARTY_APPOINTMENT_WORDS})\\b`,
+      `\\b${APPOINTMENT_WORDS}\\b.{0,80}\\bpara mi\\b.{0,80}\\b(?:y|ademas|tambien)\\b.{0,80}\\b(?:otro|otra|${THIRD_PARTY_APPOINTMENT_WORDS})\\b`,
     ).test(input) ||
     new RegExp(
       `\\b(?:tambien|ademas)\\b.{0,40}\\bpara ${THIRD_PARTY_APPOINTMENT_WORDS}\\b`,
     ).test(input) ||
     new RegExp(
-      `\\b${appointment}\\b.{0,60}\\bpara ${THIRD_PARTY_APPOINTMENT_WORDS}\\b`,
+      `\\b${APPOINTMENT_WORDS}\\b.{0,60}\\bpara mis (?:hijos|hijas|nenes|nietos|nietas|padres|hermanos|hermanas|sobrinos)\\b`,
     ).test(input) ||
     new RegExp(
-      `\\b${THIRD_PARTY_APPOINTMENT_WORDS}\\b.{0,60}\\b(?:necesita|necesitan|quiere|quieren|busca|buscan) (?:un |otro )?${appointment}\\b`,
+      `\\b${THIRD_PARTY_APPOINTMENT_WORDS}\\b.{0,60}\\b(?:necesita|necesitan|quiere|quieren|busca|buscan) otro ${APPOINTMENT_WORDS}\\b`,
     ).test(input)
   );
+}
+
+/**
+ * Un único turno para otra persona. Se reserva en una ficha propia de esa
+ * persona, sin tocar la del contacto que escribe.
+ */
+export function requestsThirdPartyAppointment(value: string): boolean {
+  const input = normalizeUserInput(value);
+  if (!input || requestsMultipleAppointments(value)) return false;
+  return (
+    new RegExp(
+      `\\b${APPOINTMENT_WORDS}\\b.{0,60}\\bpara ${THIRD_PARTY_APPOINTMENT_WORDS}\\b`,
+    ).test(input) ||
+    new RegExp(
+      `\\b${THIRD_PARTY_APPOINTMENT_WORDS}\\b.{0,60}\\b(?:necesita|necesitan|quiere|quieren|busca|buscan) (?:un )?${APPOINTMENT_WORDS}\\b`,
+    ).test(input) ||
+    new RegExp(`\\b(?:es|seria) para ${THIRD_PARTY_APPOINTMENT_WORDS}\\b`).test(
+      input,
+    )
+  );
+}
+
+/** Pedido explícito para quien escribe: «un turno para mí». */
+export function requestsOwnAppointment(value: string): boolean {
+  const input = normalizeUserInput(value);
+  if (
+    !input ||
+    requestsMultipleAppointments(value) ||
+    requestsThirdPartyAppointment(value)
+  ) {
+    return false;
+  }
+  return (
+    new RegExp(
+      `\\b${APPOINTMENT_WORDS}\\b.{0,40}\\bpara mi${OWN_APPOINTMENT_TAIL}`,
+    ).test(input) ||
+    new RegExp(`\\b(?:es|seria) para mi${OWN_APPOINTMENT_TAIL}`).test(input)
+  );
+}
+
+/** Lo que el mensaje ya aclara sobre quién se atiende; `null` obliga a preguntar. */
+export function appointmentPatientFromText(
+  value: string,
+): AppointmentPatientKind | null {
+  if (requestsThirdPartyAppointment(value)) return "third_party";
+  if (requestsOwnAppointment(value)) return "self";
+  return null;
+}
+
+export const APPOINTMENT_PATIENT_PROMPT =
+  "¿El turno es para vos o para otra persona?";
+
+export const APPOINTMENT_PATIENT_OPTIONS = [
+  { id: "patient:self", title: "Para mí" },
+  { id: "patient:other", title: "Para otra persona" },
+];
+
+export function parseAppointmentPatientChoice(
+  value: string,
+): AppointmentPatientKind | null {
+  if (value === "patient:self") return "self";
+  if (value === "patient:other") return "third_party";
+  if (value.startsWith("patient:")) return null;
+  const input = normalizeUserInput(value);
+  if (
+    /^(?:si |es )?(?:para mi(?: mism[oa])?|a mi|yo|soy yo|mio|mia|el mio|la mia)$/.test(
+      input,
+    )
+  ) {
+    return "self";
+  }
+  if (
+    /^(?:no |es )?(?:para )?(?:otra persona|otro|otra|alguien mas|un tercero|una tercera persona)$/.test(
+      input,
+    ) ||
+    new RegExp(
+      `^(?:es |seria )?(?:para )?${THIRD_PARTY_APPOINTMENT_WORDS}$`,
+    ).test(input)
+  ) {
+    return "third_party";
+  }
+  return appointmentPatientFromText(value);
 }
 
 function uniqueValue<T>(values: T[]): T | null {
@@ -334,6 +436,9 @@ export function parseExistingPatientReply(value: string): boolean | null {
     ) ||
     /^(?:si )?(?:ya )?me atendi(?: (?:antes|una vez|en el consultorio|con (?:la )?(?:doctora|odontologa|dra|gisela)))?$/.test(
       input,
+    ) ||
+    /^(?:si )?(?:ya )?(?:se atendio|es paciente)(?: (?:antes|una vez|en el consultorio|con (?:la )?(?:doctora|odontologa|dra|gisela)))?$/.test(
+      input,
     )
   ) {
     return true;
@@ -344,7 +449,11 @@ export function parseExistingPatientReply(value: string): boolean | null {
     ) ||
     /^(?:no|nunca) me atendi(?: (?:antes|en el consultorio|con (?:la )?(?:doctora|odontologa|dra|gisela)))?$/.test(
       input,
-    )
+    ) ||
+    /^(?:no|nunca) se atendio(?: (?:antes|en el consultorio|con (?:la )?(?:doctora|odontologa|dra|gisela)))?$/.test(
+      input,
+    ) ||
+    /^(?:no es paciente|(?:es|seria) (?:la|su) primera vez)$/.test(input)
   ) {
     return false;
   }

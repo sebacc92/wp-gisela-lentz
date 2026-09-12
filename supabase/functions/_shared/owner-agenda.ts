@@ -37,7 +37,7 @@ export async function loadOwnerAgenda(args: {
   let appointmentQuery = args.client
     .from("appointments")
     .select(
-      "starts_at,status,hold_expires_at,coverage,deposit_status,contacts!appointments_contact_id_fkey(name)",
+      "starts_at,status,hold_expires_at,coverage,deposit_status,contacts!appointments_contact_id_fkey(name),patient:contacts!appointments_patient_contact_id_fkey(name)",
     )
     .gte("starts_at", range.from)
     .in("status", ["scheduled", "confirmed"])
@@ -88,12 +88,19 @@ export async function loadOwnerAgenda(args: {
       .slice(0, args.day === "upcoming" ? 100 : undefined)
       .filter((row) => activeOwnerAppointment(row, now))
       .map((row) => {
-        const patient = Array.isArray(row.contacts)
+        const contact = Array.isArray(row.contacts)
           ? row.contacts[0]
           : row.contacts;
+        const patient = Array.isArray(row.patient)
+          ? row.patient[0]
+          : row.patient;
+        const contactName = (contact?.name as string) || "Sin nombre";
         return {
           startsAt: row.starts_at as string,
-          patientName: (patient?.name as string) || "Sin nombre",
+          // Un turno para otra persona nombra a quien se atiende y a quien lo pidió.
+          patientName: patient?.name
+            ? `${patient.name as string} (a cargo de ${contactName})`
+            : contactName,
           patientPhone: null,
           coverage: row.coverage as string | null,
           service: null,

@@ -6,6 +6,7 @@ import {
   orthodonticVisitType,
   parseOrthodonticVisitReply,
 } from "../_shared/orthodontic-booking.ts";
+import { appendArrivalNotice } from "../_shared/arrival-notice.ts";
 import { loadOwnerAgenda } from "../_shared/owner-agenda.ts";
 import {
   resolveOwnerPatientLookup,
@@ -13,9 +14,17 @@ import {
 } from "../_shared/owner-patient-lookup.ts";
 import {
   ACCEPTED_COVERAGE_MESSAGE,
+  APPOINTMENT_PATIENT_OPTIONS,
+  APPOINTMENT_PATIENT_PROMPT,
+  DEPENDENT_PROFILE_PROMPTS,
   PATIENT_COVERAGE_OPTIONS,
   PATIENT_PROFILE_PROMPTS,
   MAIN_MENU_OPTIONS,
+  appointmentPatientFromText,
+  parseAppointmentPatientChoice,
+  parseCoverageReply,
+  requestsThirdPartyAppointment,
+  type PatientProfileDraft,
   MAX_SLOTS_OFFERED_PER_DAY,
   asksAboutPrice,
   asksAboutCoverage,
@@ -492,12 +501,33 @@ interface AutomationContext {
   continueAfterProfile?: "services" | "reschedule";
   depositHelpShown?: boolean;
   depositAcknowledged?: boolean;
+  bookingFor?: DependentPatient;
+  dependentDraft?: PatientProfileDraft;
+  requestedCoverage?: PatientCoverage;
+  slotCoverage?: PatientCoverage;
+  thirdPartyOnly?: boolean;
 }
 
 interface Session {
   state: string;
   context: AutomationContext;
   expires_at: string | null;
+}
+
+/** Persona que se atiende cuando no es quien escribe. */
+interface DependentPatient {
+  contactId?: string;
+  name: string;
+  coverage: PatientCoverage;
+  isExistingPatient?: boolean;
+  alternatePhoneE164?: string;
+}
+
+interface ManagedPatient {
+  id: string;
+  name: string;
+  coverage: PatientCoverage | null;
+  isExistingPatient: boolean | null;
 }
 
 interface AppointmentSummary {
@@ -515,6 +545,113 @@ interface AppointmentSummary {
     | "confirmed"
     | "expired";
   holdExpiresAt: string | null;
+  patientName?: string;
+  patientCoverage?: PatientCoverage;
+}
+
+// Estados de una reserva en curso que siguen hablando de la misma persona.
+const DEPENDENT_BOOKING_STATES = new Set([
+  "selecting_service",
+  "selecting_orthodontic_visit_type",
+  "selecting_slot",
+  "confirming_appointment",
+]);
+
+// Una reserva propia en curso que todavía puede pasar a ser de otra persona.
+const OWN_BOOKING_IN_PROGRESS_STATES = new Set([
+  "collecting_patient_profile",
+  ...DEPENDENT_BOOKING_STATES,
+]);
+
+// Una lista de WhatsApp admite diez filas: «Para mí», ocho personas y «Otra».
+const MAX_MANAGED_PATIENTS_OFFERED = 8;
+
+function dependentPatient(value: unknown): DependentPatient | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
+  const coverage = candidate.coverage;
+  if (!name || (coverage !== "ioma" && coverage !== "particular")) return null;
+  const contactId =
+    typeof candidate.contactId === "string" &&
+    UUID_PATTERN.test(candidate.contactId)
+      ? candidate.contactId
+      : undefined;
+  const isExistingPatient =
+    typeof candidate.isExistingPatient === "boolean"
+      ? candidate.isExistingPatient
+      : undefined;
+  // Una persona nueva necesita el alta completa; una ficha existente, su id.
+  if (!contactId && isExistingPatient === undefined) return null;
+  const alternatePhoneE164 =
+    typeof candidate.alternatePhoneE164 === "string" &&
+    /^\+[1-9][0-9]{7,14}$/.test(candidate.alternatePhoneE164)
+      ? candidate.alternatePhoneE164
+      : undefined;
+  return {
+    ...(contactId ? { contactId } : {}),
+    name,
+    coverage,
+    ...(isExistingPatient === undefined ? {} : { isExistingPatient }),
+    ...(alternatePhoneE164 ? { alternatePhoneE164 } : {}),
+  };
+}
+
+function dependentPatientPayload(
+  patient: DependentPatient,
+): Record<string, unknown> {
+  if (patient.contactId) return { contact_id: patient.contactId };
+  return {
+    name: patient.name,
+    is_existing_patient: patient.isExistingPatient === true,
+    coverage: patient.coverage,
+    ...(patient.alternatePhoneE164
+      ? { alternate_phone_e164: patient.alternatePhoneE164 }
+      : {}),
+  };
+}
+
+function appointmentPatientFields(
+  value: unknown,
+): Pick<AppointmentSummary, "patientName" | "patientCoverage"> {
+  const patient = (Array.isArray(value) ? value[0] : value) as
+    | { name?: unknown; coverage?: unknown }
+    | null
+    | undefined;
+  const name = typeof patient?.name === "string" ? patient.name.trim() : "";
+  if (!name) return {};
+  const coverage = patient?.coverage;
+  return {
+    patientName: name,
+    ...(coverage === "ioma" || coverage === "particular"
+      ? { patientCoverage: coverage }
+      : {}),
+  };
+}
+
+function bookingOutcomeState(
+  outcome: "shown" | "intake" | "handoff" | "missing",
+): string {
+  if (outcome === "shown") return "selecting_slot";
+  if (outcome === "intake") return "selecting_orthodontic_visit_type";
+  if (outcome === "handoff") return "human_handoff";
+  return "selecting_service";
+}
+
+function managedPatientByName(
+  value: string,
+  patients: ManagedPatient[],
+): ManagedPatient | undefined {
+  const input = normalizeUserInput(value).replace(/^(?:es )?para /, "");
+  if (!input) return undefined;
+  const exact = patients.filter(
+    (patient) => normalizeUserInput(patient.name) === input,
+  );
+  if (exact.length === 1) return exact[0];
+  const byFirstName = patients.filter(
+    (patient) => normalizeUserInput(patient.name).split(" ")[0] === input,
+  );
+  return byFirstName.length === 1 ? byFirstName[0] : undefined;
 }
 
 function dateInTimezone(date: Date, timeZone: string): string {
@@ -774,6 +911,7 @@ Deno.serve(async (request) => {
     };
     let coverageChoiceRequired =
       session.context.coverageChoiceRequired === true;
+    let bookingFor = dependentPatient(session.context.bookingFor);
     const metadata = (inbound.metadata ?? {}) as Record<string, unknown>;
     const replyId =
       typeof metadata.interactive_reply_id === "string"
@@ -796,6 +934,10 @@ Deno.serve(async (request) => {
       typeof appSettings?.timezone === "string" && appSettings.timezone.trim()
         ? appSettings.timezone.trim()
         : DEFAULT_BUSINESS_TIMEZONE;
+    const businessAddress =
+      typeof appSettings?.business_address === "string"
+        ? appSettings.business_address.trim()
+        : "";
     const formatDate = (value: string) =>
       formatAppointmentDate(value, businessTimezone);
     const formatTime = (value: string) =>
@@ -820,7 +962,16 @@ Deno.serve(async (request) => {
         p_lease_token: lease.leaseToken,
         p_sequence: sequence,
         p_state: state,
-        p_context: { ...context, coverageChoiceRequired },
+        p_context: {
+          ...context,
+          coverageChoiceRequired,
+          // La persona a cargo acompaña la reserva hasta crear el turno.
+          ...(bookingFor &&
+          DEPENDENT_BOOKING_STATES.has(state) &&
+          !context.bookingFor
+            ? { bookingFor }
+            : {}),
+        },
         p_expires_at: expiresAt,
       });
       if (result.error) throw result.error;
@@ -1226,6 +1377,7 @@ Deno.serve(async (request) => {
           ? renderConfiguredMessage(template, {
               date: formatDate(proof.startsAt),
               time: formatTime(proof.startsAt),
+              address: businessAddress,
             })
           : "";
         const validRenderedConfirmation =
@@ -1239,9 +1391,16 @@ Deno.serve(async (request) => {
           : `Tu turno para el ${formatDate(proof.startsAt)} a las ${formatTime(
               proof.startsAt,
             )} ya estaba confirmado.`;
-        await send(
-          textPayload(message),
+        // Un turno de la tarde suma cómo avisar que llegó: a esa hora el centro
+        // está sin atención administrativa.
+        const confirmationMessage = appendArrivalNotice(
           message,
+          proof.startsAt,
+          businessTimezone,
+        );
+        await send(
+          textPayload(confirmationMessage),
+          confirmationMessage,
           {
             appointment_id: proof.appointmentId,
             proof_message_id: inbound.id,
@@ -1310,6 +1469,7 @@ Deno.serve(async (request) => {
     const persistProfileInput = async (
       expectedField: PatientProfileField | null = null,
       requireStructuredReply = false,
+      extraUpdates: { coverage?: PatientCoverage } = {},
     ): Promise<boolean> => {
       // El relleno de un adjunto ilegible nunca completa un dato del perfil.
       if (!replyId && unreadableMedia) return false;
@@ -1334,6 +1494,7 @@ Deno.serve(async (request) => {
         updates.is_existing_patient = parsed.values.isExistingPatient;
       }
       if (parsed.values.coverage) updates.coverage = parsed.values.coverage;
+      else if (extraUpdates.coverage) updates.coverage = extraUpdates.coverage;
       if (parsed.values.alternatePhoneE164) {
         updates.alternate_phone_e164 = parsed.values.alternatePhoneE164;
       }
@@ -1355,7 +1516,7 @@ Deno.serve(async (request) => {
         throw error ?? new Error("PATIENT_PROFILE_UPDATE_FAILED");
       }
       Object.assign(contact, updatedContact);
-      if (parsed.values.coverage) coverageChoiceRequired = false;
+      if (updates.coverage) coverageChoiceRequired = false;
       return true;
     };
 
@@ -1413,6 +1574,133 @@ Deno.serve(async (request) => {
           contactPhoneConfirmed,
           coverageChoiceRequired,
           continueAfterProfile,
+          invalidAttempts,
+        },
+        60,
+      );
+      return true;
+    };
+
+    const loadManagedPatients = async (): Promise<ManagedPatient[]> => {
+      const { data, error } = await client
+        .from("contacts")
+        .select("id,name,coverage,is_existing_patient")
+        .eq("responsible_contact_id", contact.id)
+        .is("merged_into_contact_id", null)
+        .order("created_at")
+        .limit(MAX_MANAGED_PATIENTS_OFFERED);
+      if (error) throw error;
+      return await durableDecision(
+        "managed_patients",
+        (data ?? []).map(
+          (row): ManagedPatient => ({
+            id: row.id as string,
+            name: row.name as string,
+            coverage:
+              row.coverage === "ioma" || row.coverage === "particular"
+                ? (row.coverage as PatientCoverage)
+                : null,
+            isExistingPatient:
+              typeof row.is_existing_patient === "boolean"
+                ? row.is_existing_patient
+                : null,
+          }),
+        ),
+      );
+    };
+
+    const askAppointmentPatient = async (
+      continuation: Pick<
+        AutomationContext,
+        "serviceId" | "serviceName" | "requestedCoverage"
+      >,
+      managed: ManagedPatient[],
+      thirdPartyOnly = false,
+      invalidAttempts = 0,
+    ) => {
+      bookingFor = null;
+      const message = thirdPartyOnly
+        ? "¿Para quién es el turno?"
+        : APPOINTMENT_PATIENT_PROMPT;
+      if (!managed.length) {
+        await send(
+          buttonsPayload(
+            APPOINTMENT_PATIENT_PROMPT,
+            APPOINTMENT_PATIENT_OPTIONS,
+          ),
+          APPOINTMENT_PATIENT_PROMPT,
+        );
+      } else {
+        await send(
+          listPayload(message, "Elegir persona", [
+            ...(thirdPartyOnly
+              ? []
+              : [{ id: "patient:self", title: "Para mí" }]),
+            ...managed.map((patient) => ({
+              id: `patient:dep:${patient.id}`,
+              title: patient.name.slice(0, 24),
+              description: "Persona a tu cargo",
+            })),
+            {
+              id: "patient:other",
+              title: "Otra persona",
+              description: "Cargar sus datos",
+            },
+          ]),
+          message,
+        );
+      }
+      await saveSession("choosing_appointment_patient", {
+        ...continuation,
+        ...(thirdPartyOnly ? { thirdPartyOnly } : {}),
+        invalidAttempts,
+      });
+    };
+
+    // Mismo alta que la propia, de a un dato por mensaje, pero guardado aparte:
+    // nada de esto se escribe en la ficha de quien escribe.
+    const askForMissingDependentProfile = async (
+      draft: PatientProfileDraft,
+      continuation: Pick<AutomationContext, "serviceId" | "serviceName">,
+      invalidAttempts = 0,
+    ): Promise<boolean> => {
+      const field = missingPatientProfileFields(draft)[0];
+      if (!field) return false;
+      const message = DEPENDENT_PROFILE_PROMPTS[field];
+      if (field === "is_existing_patient") {
+        await send(
+          buttonsPayload(message, [
+            { id: "profile:existing:yes", title: "Sí" },
+            { id: "profile:existing:no", title: "No" },
+          ]),
+          message,
+        );
+      } else if (field === "contact_phone") {
+        const hasWhatsAppPhone =
+          typeof contact.phone_e164 === "string" && Boolean(contact.phone_e164);
+        const phoneMessage = hasWhatsAppPhone
+          ? message
+          : "¿A qué teléfono podemos contactar a esa persona? Escribilo con código de área.";
+        await send(
+          hasWhatsAppPhone
+            ? buttonsPayload(phoneMessage, [
+                { id: "profile:phone:whatsapp", title: "Este WhatsApp" },
+              ])
+            : textPayload(phoneMessage),
+          phoneMessage,
+        );
+      } else if (field === "coverage") {
+        await send(buttonsPayload(message, PATIENT_COVERAGE_OPTIONS), message);
+      } else {
+        await send(textPayload(message), message);
+      }
+      await saveSession(
+        "collecting_dependent_profile",
+        {
+          serviceId: continuation.serviceId,
+          serviceName: continuation.serviceName,
+          dependentDraft: draft,
+          expectedProfileField: field,
           invalidAttempts,
         },
         60,
@@ -1989,7 +2277,11 @@ Deno.serve(async (request) => {
       context: AutomationContext = {},
       invalidAttempts = 0,
     ): Promise<boolean> => {
-      const slotCoverage = currentProfile().coverage;
+      const slotCoverage =
+        context.slotCoverage ??
+        (state === "selecting_slot" && bookingFor
+          ? bookingFor.coverage
+          : currentProfile().coverage);
       if (!slotCoverage) {
         await handoff(
           "Necesitamos revisar la cobertura de este turno antes de reprogramarlo.",
@@ -2129,12 +2421,27 @@ Deno.serve(async (request) => {
       return shown ? "shown" : "handoff";
     };
 
-    const startNewAppointmentFlow = async (
+    const continueBooking = async (serviceId?: string): Promise<string> => {
+      if (serviceId) {
+        const outcome = await selectServiceAndShowSlots(serviceId);
+        if (outcome !== "missing") return bookingOutcomeState(outcome);
+      }
+      await showServices();
+      return "selecting_service";
+    };
+
+    const startOwnAppointmentFlow = async (
       requestedService: { id: string; name: string } | null = null,
-    ) => {
+      requestedCoverage: PatientCoverage | null = null,
+    ): Promise<string> => {
+      bookingFor = null;
       // An explicit selection in a new request replaces a stale saved coverage.
       if (needsCoverageChoice(inputValue)) coverageChoiceRequired = true;
-      await persistProfileInput("coverage");
+      await persistProfileInput(
+        "coverage",
+        false,
+        requestedCoverage ? { coverage: requestedCoverage } : {},
+      );
       const continuationContext = requestedService
         ? {
             serviceId: requestedService.id,
@@ -2142,23 +2449,54 @@ Deno.serve(async (request) => {
           }
         : {};
       if (await askForMissingProfile(0, "services", continuationContext)) {
+        return "collecting_patient_profile";
+      }
+      return await continueBooking(requestedService?.id);
+    };
+
+    // Primero se lee el pedido; sólo si no aclara para quién es, se pregunta.
+    const startNewAppointmentFlow = async (
+      requestedService: { id: string; name: string } | null = null,
+    ) => {
+      const requestedCoverage = replyId
+        ? null
+        : parseCoverageReply(inboundBody);
+      const patientKind = replyId
+        ? null
+        : appointmentPatientFromText(inboundBody);
+      if (patientKind === "self") {
+        await startOwnAppointmentFlow(requestedService, requestedCoverage);
         return;
       }
-      if (requestedService) {
-        const result = await selectServiceAndShowSlots(requestedService.id);
-        if (result === "missing") {
-          await showServices();
-        }
+      const continuation = {
+        ...(requestedService
+          ? {
+              serviceId: requestedService.id,
+              serviceName: requestedService.name,
+            }
+          : {}),
+        ...(requestedCoverage ? { requestedCoverage } : {}),
+      };
+      const managed = await loadManagedPatients();
+      if (patientKind === "third_party" && !managed.length) {
+        await askForMissingDependentProfile(
+          requestedCoverage ? { coverage: requestedCoverage } : {},
+          continuation,
+        );
         return;
       }
-      await showServices();
+      await askAppointmentPatient(
+        continuation,
+        managed,
+        patientKind === "third_party",
+      );
     };
 
     const upcomingAppointments = async (limit = 10) => {
       const { data, error } = await client
         .from("appointments")
         .select(
-          "id,professional_id,service_id,starts_at,status,deposit_status,hold_expires_at,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+          "id,professional_id,service_id,starts_at,status,deposit_status,hold_expires_at,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name),patient:contacts!appointments_patient_contact_id_fkey(name,coverage)",
         )
         .eq("contact_id", contact.id)
         .in("status", ["scheduled", "confirmed"])
@@ -2198,6 +2536,7 @@ Deno.serve(async (request) => {
               appointment.deposit_status as AppointmentSummary["depositStatus"],
             holdExpiresAt:
               (appointment.hold_expires_at as string | null) ?? null,
+            ...appointmentPatientFields(appointment.patient),
           }),
         );
       return await durableDecision(
@@ -2212,7 +2551,7 @@ Deno.serve(async (request) => {
       const { data, error } = await client
         .from("appointments")
         .select(
-          "id,professional_id,service_id,starts_at,status,deposit_status,hold_expires_at,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+          "id,professional_id,service_id,starts_at,status,deposit_status,hold_expires_at,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name),patient:contacts!appointments_patient_contact_id_fkey(name,coverage)",
         )
         .eq("id", appointmentId)
         .eq("contact_id", contact.id)
@@ -2256,6 +2595,7 @@ Deno.serve(async (request) => {
         depositStatus:
           data.deposit_status as AppointmentSummary["depositStatus"],
         holdExpiresAt: (data.hold_expires_at as string | null) ?? null,
+        ...appointmentPatientFields(data.patient),
       };
       return await durableDecision(
         `active_appointment_${appointmentId}`,
@@ -2275,7 +2615,11 @@ Deno.serve(async (request) => {
       invalidAttempts = 0,
     ) => {
       const message =
-        `Tu turno es:\n\n📅 ${formatDate(appointment.startsAt)}\n` +
+        `${
+          appointment.patientName
+            ? `El turno de ${appointment.patientName} es:`
+            : "Tu turno es:"
+        }\n\n📅 ${formatDate(appointment.startsAt)}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n` +
         `${appointment.serviceName}\n\n¿Querés elegir otro horario?`;
       await send(
@@ -2287,6 +2631,7 @@ Deno.serve(async (request) => {
       );
       await saveSession("confirming_reschedule_request", {
         appointmentId: appointment.id,
+        slotCoverage: appointment.patientCoverage,
         professionalId: appointment.professionalId,
         professionalName: appointment.professionalName,
         serviceId: appointment.serviceId,
@@ -2300,9 +2645,9 @@ Deno.serve(async (request) => {
       invalidAttempts = 0,
     ) => {
       const message =
-        `Vas a cancelar este turno:\n\n📅 ${formatDate(
-          appointment.startsAt,
-        )}\n` +
+        `Vas a cancelar este turno:\n\n${
+          appointment.patientName ? `👤 ${appointment.patientName}\n` : ""
+        }📅 ${formatDate(appointment.startsAt)}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n` +
         `${appointment.serviceName}\n\n¿Confirmás la cancelación?`;
       await send(
@@ -2321,8 +2666,9 @@ Deno.serve(async (request) => {
     const selectAppointmentFor = async (
       action: "reschedule" | "cancel",
       invalidAttempts = 0,
+      known?: AppointmentSummary[],
     ) => {
-      const appointments = await upcomingAppointments();
+      const appointments = known ?? (await upcomingAppointments());
       if (!appointments.length) {
         await showNoAppointments();
         return;
@@ -2340,7 +2686,10 @@ Deno.serve(async (request) => {
         title: `${compactDate(appointment.startsAt)} · ${formatTime(
           appointment.startsAt,
         )}`.slice(0, 24),
-        description: appointment.serviceName.slice(0, 72),
+        description: (appointment.patientName
+          ? `${appointment.patientName} · ${appointment.serviceName}`
+          : appointment.serviceName
+        ).slice(0, 72),
       }));
       if (rows.length < 10) {
         rows.push({
@@ -2383,7 +2732,9 @@ Deno.serve(async (request) => {
           (appointment, index) =>
             `\n${index + 1}. ${formatDate(appointment.startsAt)} a las ${formatTime(
               appointment.startsAt,
-            )}\n${appointment.serviceName}`,
+            )}\n${appointment.serviceName}${
+              appointment.patientName ? `\n👤 ${appointment.patientName}` : ""
+            }`,
         ),
         "\n¿Qué querés hacer?",
       ].join("\n");
@@ -2803,6 +3154,8 @@ Deno.serve(async (request) => {
           time: formatTime(slot.startsAt),
           depositEnabled: appSettings.deposit_enabled !== false,
           visitType,
+          patientName: bookingFor?.name,
+          depositAmountArs: appSettings.deposit_amount_ars,
         });
       await send(
         buttonsPayload(message, [
@@ -2831,6 +3184,7 @@ Deno.serve(async (request) => {
     ) => {
       const message =
         `Revisá el cambio antes de reprogramar:\n\n` +
+        (appointment.patientName ? `👤 ${appointment.patientName}\n\n` : "") +
         `Turno actual:\n${appointment.serviceName}\n` +
         `📅 ${formatDate(appointment.startsAt)}\n` +
         `🕐 ${formatTime(appointment.startsAt)}\n\n` +
@@ -2849,6 +3203,7 @@ Deno.serve(async (request) => {
       );
       await saveSession("confirming_new_slot", {
         appointmentId: appointment.id,
+        slotCoverage: appointment.patientCoverage,
         professionalId: session.context.professionalId,
         professionalName: session.context.professionalName,
         serviceId: slot.serviceId,
@@ -2864,8 +3219,17 @@ Deno.serve(async (request) => {
     ) => {
       if (intent === "new") await startNewAppointmentFlow(requestedService);
       else if (intent === "reschedule") {
-        if (await askForMissingProfile(0, "reschedule")) return;
-        await selectAppointmentFor("reschedule");
+        const appointments = await upcomingAppointments();
+        // Un turno de una persona a cargo usa su propia cobertura: el perfil de
+        // quien escribe sólo hace falta si alguno de los turnos es suyo.
+        if (
+          (!appointments.length ||
+            appointments.some((appointment) => !appointment.patientName)) &&
+          (await askForMissingProfile(0, "reschedule"))
+        ) {
+          return;
+        }
+        await selectAppointmentFor("reschedule", 0, appointments);
       } else if (intent === "appointments") await showUpcomingAppointments();
       else if (intent === "cancel") await selectAppointmentFor("cancel");
       else if (intent === "info") await showClinicInfo();
@@ -2930,7 +3294,10 @@ Deno.serve(async (request) => {
           appointment.serviceId,
           appointment.serviceName,
           "selecting_new_slot",
-          { appointmentId: appointment.id },
+          {
+            appointmentId: appointment.id,
+            slotCoverage: appointment.patientCoverage,
+          },
         );
         return await finish({
           processed: true,
@@ -2964,7 +3331,7 @@ Deno.serve(async (request) => {
     }
     if (!replyId && requestsMultipleAppointments(inboundBody)) {
       await handoff(
-        "Para coordinar turnos para más de una persona sin mezclar sus datos, necesitamos ayudarte personalmente.",
+        "Para coordinar varios turnos a la vez, necesitamos ayudarte personalmente.",
         session.context,
       );
       return await finish({
@@ -2973,6 +3340,10 @@ Deno.serve(async (request) => {
         reason: "MULTIPLE_APPOINTMENTS_REQUESTED",
       });
     }
+    // Un turno para otra persona no se deriva: se reserva en su propia ficha.
+    const thirdPartyRequest =
+      !replyId && requestsThirdPartyAppointment(inboundBody);
+    if (thirdPartyRequest && requestedIntent === null) requestedIntent = "new";
     if (asksAboutCoverage(inputValue)) {
       if (
         session.state === "collecting_patient_profile" &&
@@ -2982,6 +3353,17 @@ Deno.serve(async (request) => {
           serviceId: session.context.serviceId,
           serviceName: session.context.serviceName,
         });
+      } else if (
+        session.state === "collecting_dependent_profile" &&
+        session.context.expectedProfileField === "coverage"
+      ) {
+        await askForMissingDependentProfile(
+          session.context.dependentDraft ?? {},
+          {
+            serviceId: session.context.serviceId,
+            serviceName: session.context.serviceName,
+          },
+        );
       } else {
         const resumePrompt = informationFlowResumePrompt(
           session.state,
@@ -3002,7 +3384,8 @@ Deno.serve(async (request) => {
       !replyId &&
       hasUnsupportedCoverageStatement(inboundBody) &&
       !(
-        session.state === "collecting_patient_profile" &&
+        (session.state === "collecting_patient_profile" ||
+          session.state === "collecting_dependent_profile") &&
         session.context.expectedProfileField === "coverage"
       )
     ) {
@@ -3083,6 +3466,28 @@ Deno.serve(async (request) => {
       coverageChoiceRequired = true;
     }
 
+    // Un pedido para otra persona en medio de una reserva propia la reinicia
+    // para esa persona: nunca se completa con los datos de quien escribe.
+    if (
+      thirdPartyRequest &&
+      !bookingFor &&
+      OWN_BOOKING_IN_PROGRESS_STATES.has(session.state)
+    ) {
+      await startNewAppointmentFlow(
+        session.context.serviceId
+          ? {
+              id: session.context.serviceId,
+              name: session.context.serviceName ?? "Consulta",
+            }
+          : null,
+      );
+      return await finish({
+        processed: true,
+        state: "new",
+        reason: "THIRD_PARTY_APPOINTMENT",
+      });
+    }
+
     if (session.state === "collecting_patient_profile") {
       if (
         session.context.expectedProfileField === "coverage" &&
@@ -3151,6 +3556,132 @@ Deno.serve(async (request) => {
                   ? "human_handoff"
                   : "selecting_service",
       });
+    }
+
+    if (session.state === "choosing_appointment_patient") {
+      const continuation = {
+        serviceId: session.context.serviceId,
+        serviceName: session.context.serviceName,
+      };
+      const requestedCoverage = session.context.requestedCoverage ?? null;
+      const managed = await loadManagedPatients();
+      const picked =
+        managed.find((patient) => inputValue === `patient:dep:${patient.id}`) ??
+        (replyId ? undefined : managedPatientByName(inputValue, managed));
+      const choice = picked ? null : parseAppointmentPatientChoice(inputValue);
+      let nextState = "choosing_appointment_patient";
+      if (picked?.coverage) {
+        bookingFor = {
+          contactId: picked.id,
+          name: picked.name,
+          coverage: picked.coverage,
+        };
+        nextState = await continueBooking(continuation.serviceId);
+      } else if (picked) {
+        // Una ficha sin cobertura se completa antes de ofrecer horarios.
+        await askForMissingDependentProfile(
+          {
+            name: picked.name,
+            contactPhoneConfirmed: true,
+            ...(typeof picked.isExistingPatient === "boolean"
+              ? { isExistingPatient: picked.isExistingPatient }
+              : {}),
+            ...(requestedCoverage ? { coverage: requestedCoverage } : {}),
+          },
+          continuation,
+        );
+        nextState = "collecting_dependent_profile";
+      } else if (choice === "self") {
+        nextState = await startOwnAppointmentFlow(
+          continuation.serviceId
+            ? {
+                id: continuation.serviceId,
+                name: continuation.serviceName ?? "Consulta",
+              }
+            : null,
+          requestedCoverage,
+        );
+      } else if (choice === "third_party") {
+        await askForMissingDependentProfile(
+          requestedCoverage ? { coverage: requestedCoverage } : {},
+          continuation,
+        );
+        nextState = "collecting_dependent_profile";
+      } else {
+        await invalid(async (attempts) => {
+          await askAppointmentPatient(
+            {
+              ...continuation,
+              ...(requestedCoverage ? { requestedCoverage } : {}),
+            },
+            managed,
+            session.context.thirdPartyOnly === true,
+            attempts,
+          );
+        });
+      }
+      return await finish({ processed: true, state: nextState });
+    }
+
+    if (session.state === "collecting_dependent_profile") {
+      const continuation = {
+        serviceId: session.context.serviceId,
+        serviceName: session.context.serviceName,
+      };
+      const draft: PatientProfileDraft = {
+        ...(session.context.dependentDraft ?? {}),
+      };
+      const expectedField = session.context.expectedProfileField ?? null;
+      if (expectedField === "coverage" && isOtherCoverageReply(inputValue)) {
+        await askForMissingDependentProfile(draft, continuation);
+        return await finish({
+          processed: true,
+          state: "collecting_dependent_profile",
+          reason: "UNSUPPORTED_COVERAGE",
+        });
+      }
+      const parsed = parsePatientProfileReply(inputValue, {
+        expectedField,
+        primaryPhoneE164:
+          typeof contact.phone_e164 === "string" ? contact.phone_e164 : null,
+      }).values;
+      const next: PatientProfileDraft = { ...draft };
+      if (parsed.name) next.name = parsed.name;
+      if (typeof parsed.isExistingPatient === "boolean") {
+        next.isExistingPatient = parsed.isExistingPatient;
+      }
+      if (parsed.contactPhoneConfirmed) {
+        next.contactPhoneConfirmed = true;
+        // Este mismo WhatsApp no se copia: esa persona se alcanza por este chat.
+        if (parsed.alternatePhoneE164) {
+          next.alternatePhoneE164 = parsed.alternatePhoneE164;
+        } else {
+          delete next.alternatePhoneE164;
+        }
+      }
+      if (parsed.coverage) next.coverage = parsed.coverage;
+      const progressed =
+        Boolean(parsed.name) ||
+        typeof parsed.isExistingPatient === "boolean" ||
+        parsed.contactPhoneConfirmed === true ||
+        Boolean(parsed.coverage);
+      let nextState = "collecting_dependent_profile";
+      if (!progressed) {
+        await invalid(async (attempts) => {
+          await askForMissingDependentProfile(draft, continuation, attempts);
+        });
+      } else if (!(await askForMissingDependentProfile(next, continuation))) {
+        bookingFor = {
+          name: next.name as string,
+          coverage: next.coverage as PatientCoverage,
+          isExistingPatient: next.isExistingPatient === true,
+          ...(next.alternatePhoneE164
+            ? { alternatePhoneE164: next.alternatePhoneE164 }
+            : {}),
+        };
+        nextState = await continueBooking(continuation.serviceId);
+      }
+      return await finish({ processed: true, state: nextState });
     }
 
     if (!replyId && (await persistProfileInput(null, true))) {
@@ -3302,20 +3833,28 @@ Deno.serve(async (request) => {
             reason: "CALENDAR_AVAILABILITY_UNAVAILABLE",
           });
         }
-        const { data: createdAppointment, error } = await client.rpc(
-          "create_whatsapp_automation_appointment",
-          {
-            p_message_id: lease.messageId,
-            p_lease_token: lease.leaseToken,
-            p_contact_id: contact.id,
-            p_professional_id: slot.professionalId,
-            p_service_id: slot.serviceId,
-            p_starts_at: slot.startsAt,
-            p_orthodontic_visit_type: orthodonticVisitType(
-              slot.orthodonticVisitType,
-            ),
-          },
-        );
+        const bookingArgs = {
+          p_message_id: lease.messageId,
+          p_lease_token: lease.leaseToken,
+          p_contact_id: contact.id,
+          p_professional_id: slot.professionalId,
+          p_service_id: slot.serviceId,
+          p_starts_at: slot.startsAt,
+          p_orthodontic_visit_type: orthodonticVisitType(
+            slot.orthodonticVisitType,
+          ),
+        };
+        // El turno de otra persona sigue siendo de este WhatsApp; la ficha de
+        // quien se atiende viaja aparte y la valida Postgres.
+        const { data: createdAppointment, error } = bookingFor
+          ? await client.rpc("create_whatsapp_automation_patient_appointment", {
+              ...bookingArgs,
+              p_patient: dependentPatientPayload(bookingFor),
+            })
+          : await client.rpc(
+              "create_whatsapp_automation_appointment",
+              bookingArgs,
+            );
         const appointment = Array.isArray(createdAppointment)
           ? createdAppointment[0]
           : createdAppointment;
@@ -3422,6 +3961,8 @@ Deno.serve(async (request) => {
                 deposit_amount: formatDepositAmountArs(amount),
                 deposit_alias: alias,
                 deposit_holder: holder,
+                date: formatDate(appointment.starts_at),
+                time: formatTime(appointment.starts_at),
               });
               if (
                 !message ||
@@ -3492,16 +4033,23 @@ Deno.serve(async (request) => {
             appointment.deposit_status === "not_required"
           ) {
             const message =
-              `¡Listo! Tu turno quedó confirmado.\n\n📅 ${formatDate(
-                appointment.starts_at,
-              )}\n` +
+              `${
+                bookingFor
+                  ? `¡Listo! El turno de ${bookingFor.name} quedó confirmado.`
+                  : "¡Listo! Tu turno quedó confirmado."
+              }\n\n📅 ${formatDate(appointment.starts_at)}\n` +
               `🕐 ${formatTime(appointment.starts_at)}\n${slot.serviceName}` +
               (appointment.orthodontic_visit_type === "in_treatment"
                 ? "\n\nEn tratamiento con Gisela. No tenés que abonar seña."
                 : "\n\nEste turno no requiere seña.");
-            await send(
-              textPayload(message),
+            const confirmedMessage = appendArrivalNotice(
               message,
+              appointment.starts_at,
+              businessTimezone,
+            );
+            await send(
+              textPayload(confirmedMessage),
+              confirmedMessage,
               {
                 appointment_id: appointmentId,
                 appointment_starts_at: appointment.starts_at,
@@ -3551,7 +4099,10 @@ Deno.serve(async (request) => {
             appointment.serviceId,
             appointment.serviceName,
             "selecting_new_slot",
-            { appointmentId: appointment.id },
+            {
+              appointmentId: appointment.id,
+              slotCoverage: appointment.patientCoverage,
+            },
           );
         }
       } else {
@@ -3581,7 +4132,10 @@ Deno.serve(async (request) => {
               session.context.serviceId ?? "",
               session.context.serviceName ?? "Consulta",
               "selecting_new_slot",
-              { appointmentId: session.context.appointmentId },
+              {
+                appointmentId: session.context.appointmentId,
+                slotCoverage: session.context.slotCoverage,
+              },
               attempts,
             );
           });
@@ -3604,7 +4158,10 @@ Deno.serve(async (request) => {
           session.context.serviceId ?? "",
           session.context.serviceName ?? "Consulta",
           "selecting_new_slot",
-          { appointmentId: session.context.appointmentId },
+          {
+            appointmentId: session.context.appointmentId,
+            slotCoverage: session.context.slotCoverage,
+          },
         );
       } else if (action === "confirm") {
         const slot = session.context.slots?.[0];
@@ -3663,7 +4220,7 @@ Deno.serve(async (request) => {
               session.context.serviceId ?? "",
               session.context.serviceName ?? "Consulta",
               "selecting_new_slot",
-              { appointmentId },
+              { appointmentId, slotCoverage: session.context.slotCoverage },
             );
           } else if (
             effectError === "CALENDAR_AVAILABILITY_UNAVAILABLE" ||

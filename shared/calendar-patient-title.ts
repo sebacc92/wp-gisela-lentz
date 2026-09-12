@@ -147,10 +147,16 @@ export function parseCalendarPatientTitle(
     );
 
   const coverages = new Set<"ioma" | "particular">();
-  remaining = remaining.replace(/\b(?:ioma|particular)\b/gi, (coverage) => {
-    coverages.add(coverage.toLowerCase() as "ioma" | "particular");
-    return " ";
-  });
+  // Gisela abrevia la cobertura en la agenda: "PART", "partic", "particular".
+  remaining = remaining.replace(
+    /\b(?:ioma|partic(?:ular)?|part)\b/gi,
+    (coverage) => {
+      coverages.add(
+        /^ioma$/i.test(coverage) ? "ioma" : ("particular" as const),
+      );
+      return " ";
+    },
+  );
   if (coverages.size === 1) hints.coverage = [...coverages][0];
   if (coverages.size > 1)
     hints.uncertainties.push(
@@ -232,8 +238,14 @@ export function parseCalendarPatientTitle(
       return " ";
     },
   );
+  // Anotaciones de cobro: no dicen nada del paciente y el título completo
+  // queda igual en la nota interna del turno.
   remaining = remaining.replace(
-    /\b(?:rx|tto|tc|cx|endo|orto|control|urgencia|urgente|revisar|conducto|implante|implantes|pr[oó]tesis|corona)\b/gi,
+    /\b(?:dio (?:la )?se[nñ]a|se[nñ][oó]|no cobrar|no cobra|sin cargo)\b/gi,
+    " ",
+  );
+  remaining = remaining.replace(
+    /\b(?:rx|tto|tc|cx|iv|endo|orto|control|urgencia|urgente|revisar|conducto|implante|implantes|pr[oó]tesis|corona)\b/gi,
     (notation) => {
       hints.uncertainties.push(
         `Confirmá qué significa “${notation}” antes de elegir el servicio.`,
@@ -247,11 +259,15 @@ export function parseCalendarPatientTitle(
     " ",
   );
   hints.rawName = remaining.trim() || null;
+  // Un número corto suelto —un precio, una pieza— no forma parte del nombre.
+  // Uno más largo puede ser un teléfono incompleto: queda y fuerza revisión.
   const name = remaining
+    .replace(/(?<![\p{L}\p{N}])\d{1,4}(?![\p{L}\p{N}])/gu, " ")
     .replace(/[.,;:|·/()[\]{}]+/g, " ")
-    .replace(/\s+[-–—]\s+|^[-–—]+|[-–—]+$/g, " ")
+    .replace(/\s+[-–—]\s+/g, " ")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .replace(/^[-–—\s]+|[-–—\s]+$/g, "");
   const words = name.match(/[\p{L}\p{M}]+(?:['’\-][\p{L}\p{M}]+)*/gu) ?? [];
   const meaningfulWords = words.filter(
     (word) => !/^(?:de|del|la|las|los|y|da|do|dos|di|van|von)$/i.test(word),

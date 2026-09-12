@@ -6,14 +6,20 @@ Las migraciones versionadas están en `supabase/migrations/`.
 
 - `profiles`: usuario, rol, estado y capacidad opcional de observador de inbox.
 - `contacts`: nombre, teléfono E.164, email opcional, cobertura IOMA/Particular,
-  condición de paciente anterior y notas administrativas.
+  condición de paciente anterior y notas administrativas. Una ficha puede estar
+  a cargo de otro contacto (`responsible_contact_id`): así una persona sin
+  WhatsApp propio —un hijo, una pareja— tiene su ficha y su historia clínica sin
+  mezclarse con las de quien escribe. Un teléfono propio se guarda como
+  `alternate_phone_e164`, que nunca se usa para enviar mensajes.
 - `conversations`: asignación, modo automático/manual, prioridad, atención y no leídos.
 - `messages`: mensajes entrantes/salientes y estados de Meta.
 - `professionals`: conserva la estructura existente, con Gisela Lentz como única profesional activa.
 - `services`: motivos de turno editables. Su duración histórica se conserva por
   compatibilidad, pero no decide la duración de las reservas de Gisela.
 - `availability_rules`, `availability_exceptions`: franjas semanales y bloqueos/aperturas excepcionales.
-- `appointments`: turnos con snapshot de cobertura, duración y datos de seña
+- `appointments`: `patient_contact_id` indica a quién se atiende cuando no es el
+  contacto que gestiona el turno; seña, recordatorios y avisos siguen yendo a
+  `contact_id`. Además, turnos con snapshot de cobertura, duración y datos de seña
   informados (monto, alias y titular), vencimiento de la pre-reserva y
   estado/auditoría de la seña, incluido el actor y la versión de política cuando
   la confirmación es automática.

@@ -71,6 +71,7 @@ interface AppointmentRow {
   deposit_confirmation_policy_version: string | null;
   professionals: { name: string } | Array<{ name: string }> | null;
   services: { name: string } | Array<{ name: string }> | null;
+  patient?: { name: string } | Array<{ name: string }> | null;
 }
 
 export interface AppointmentListItem {
@@ -86,6 +87,9 @@ export interface AppointmentListItem {
   contactName: string;
   contactPhone: string;
   contactCoverage: PatientCoverage | null;
+  /** Ficha de quien se atiende cuando el turno lo gestiona otro contacto. */
+  patientContactId?: string | null;
+  managedByName?: string | null;
   professionalName: string;
   serviceId: string | null;
   serviceName: string;
@@ -172,6 +176,7 @@ function mapAppointment(row: AppointmentRow): AppointmentSummary {
     depositConfirmationActor: row.deposit_confirmation_actor ?? undefined,
     depositConfirmationPolicyVersion:
       row.deposit_confirmation_policy_version ?? undefined,
+    patientName: single(row.patient ?? null)?.name ?? undefined,
   };
 }
 
@@ -204,7 +209,7 @@ export async function loadInboxData(client: SupabaseClient): Promise<{
       ? client
           .from("appointments")
           .select(
-            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,google_calendar_imported,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+            "id,contact_id,professional_id,service_id,starts_at,ends_at,status,google_calendar_imported,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name),patient:contacts!appointments_patient_contact_id_fkey(name)",
           )
           .in("contact_id", contactIds)
           .order("starts_at", { ascending: true })
@@ -378,7 +383,7 @@ export async function loadAppointments(
   let query = client
     .from("appointments")
     .select(
-      "id,contact_id,professional_id,service_id,starts_at,ends_at,status,source,google_calendar_imported,internal_note,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
+      "id,contact_id,patient_contact_id,professional_id,service_id,starts_at,ends_at,status,source,google_calendar_imported,internal_note,coverage,duration_minutes,deposit_status,orthodontic_visit_type,hold_expires_at,deposit_proof_message_id,deposit_confirmation_actor,deposit_confirmation_policy_version,contacts!appointments_contact_id_fkey(name,phone_e164,coverage),patient:contacts!appointments_patient_contact_id_fkey(name,coverage),professionals!appointments_professional_id_fkey(name),services!appointments_service_id_fkey(name)",
     )
     .gte("starts_at", fromIso);
   if (toIso) query = query.lt("starts_at", toIso);
@@ -406,6 +411,7 @@ export async function loadAppointments(
       deposit_proof_message_id: string | null;
       deposit_confirmation_actor: "automatic_system" | null;
       deposit_confirmation_policy_version: string | null;
+      patient_contact_id: string | null;
       contacts:
         | {
             name: string;
@@ -418,10 +424,15 @@ export async function loadAppointments(
             coverage: PatientCoverage | null;
           }>
         | null;
+      patient:
+        | { name: string; coverage: PatientCoverage | null }
+        | Array<{ name: string; coverage: PatientCoverage | null }>
+        | null;
       professionals: { name: string } | Array<{ name: string }> | null;
       services: { name: string } | Array<{ name: string }> | null;
     };
     const contact = single(row.contacts);
+    const patient = single(row.patient);
     const professional = single(row.professionals);
     const service = single(row.services);
     const depositStatus = effectiveDepositStatus(
@@ -439,9 +450,13 @@ export async function loadAppointments(
       source: row.source,
       googleCalendarImported: row.google_calendar_imported === true,
       internalNote: row.internal_note,
-      contactName: contact?.name ?? "Paciente",
+      // La agenda nombra a quien se atiende; el teléfono sigue siendo el de
+      // quien gestiona el turno, que es con quien se habla por WhatsApp.
+      contactName: patient?.name ?? contact?.name ?? "Paciente",
       contactPhone: contact?.phone_e164 ?? "",
-      contactCoverage: contact?.coverage ?? null,
+      contactCoverage: (patient ? patient.coverage : contact?.coverage) ?? null,
+      patientContactId: row.patient_contact_id,
+      managedByName: patient ? (contact?.name ?? null) : null,
       professionalName: professional?.name ?? "Gisela Lentz",
       serviceId: row.service_id,
       serviceName: service?.name ?? "Consulta",

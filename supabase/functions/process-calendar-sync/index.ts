@@ -284,12 +284,14 @@ async function calendarAppointmentWithPatientDetails(
   client: SupabaseClient,
   job: CalendarSyncJob,
 ): Promise<CalendarSyncAppointment> {
-  // La cobertura corresponde al turno; nombre, ficha y celular al contacto.
+  // La cobertura corresponde al turno; nombre, ficha y celular al paciente.
+  // Un turno para otra persona lleva su nombre y, si no dejó un teléfono
+  // propio, el de quien lo gestiona por WhatsApp.
   // Leer sólo estos campos evita exportar notas o información clínica.
   const { data, error } = await client
     .from("appointments")
     .select(
-      "coverage,contact:contacts!appointments_contact_id_fkey(name,phone_e164,alternate_phone_e164,is_existing_patient)",
+      "coverage,contact:contacts!appointments_contact_id_fkey(name,phone_e164,alternate_phone_e164,is_existing_patient),patient:contacts!appointments_patient_contact_id_fkey(name,alternate_phone_e164,is_existing_patient)",
     )
     .eq("id", job.appointment_id)
     .maybeSingle<{
@@ -300,15 +302,27 @@ async function calendarAppointmentWithPatientDetails(
         alternate_phone_e164: string | null;
         is_existing_patient: boolean | null;
       } | null;
+      patient: {
+        name: string;
+        alternate_phone_e164: string | null;
+        is_existing_patient: boolean | null;
+      } | null;
     }>();
   if (error || !data?.contact || typeof data.contact.name !== "string") {
     throw calendarWorkerFailure("CALENDAR_PATIENT_DETAILS_UNAVAILABLE");
   }
+  const patient = typeof data.patient?.name === "string" ? data.patient : null;
+  const contactPhone =
+    data.contact.phone_e164 ?? data.contact.alternate_phone_e164;
   return {
     ...job,
-    patient_name: data.contact.name,
-    patient_phone: data.contact.phone_e164 ?? data.contact.alternate_phone_e164,
-    is_existing_patient: data.contact.is_existing_patient,
+    patient_name: patient?.name ?? data.contact.name,
+    patient_phone: patient
+      ? (patient.alternate_phone_e164 ?? contactPhone)
+      : contactPhone,
+    is_existing_patient: patient
+      ? patient.is_existing_patient
+      : data.contact.is_existing_patient,
     coverage: data.coverage,
   };
 }

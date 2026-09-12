@@ -8844,6 +8844,13 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+/* El bloqueo que parece un turno escrito a mano en Google. */
+.agenda-block-patient {
+  color: var(--brand-700, var(--ink-700));
+  font-style: normal;
+  font-size: var(--app-text-small, 12px);
+}
+
 .agenda-blocks small {
   color: var(--ink-500);
   font-size: var(--app-text-small, 12px);

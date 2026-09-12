@@ -29,6 +29,10 @@ import {
   parseSlotIndex,
   parseSlotSelection,
   requestsMultipleAppointments,
+  requestsThirdPartyAppointment,
+  appointmentPatientFromText,
+  parseAppointmentPatientChoice,
+  DEPENDENT_PROFILE_PROMPTS,
   resolveAppointmentConfirmation,
   resolveCancellationConfirmation,
   resolveMainMenuIntent,
@@ -42,7 +46,7 @@ import {
 test("la bienvenida habla como el consultorio y no adelanta la lista", () => {
   assert.equal(
     APPOINTMENT_WELCOME_MESSAGE,
-    "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.",
+    "👋 ¡Hola! Gracias por comunicarte con el consultorio de la Odontóloga Gisela Lentz. Estoy para ayudarte con turnos y consultas.",
   );
   assert.doesNotMatch(
     APPOINTMENT_WELCOME_MESSAGE,
@@ -170,24 +174,30 @@ test("detecta consultas explícitas de precio sin confundir la seña", () => {
   }
 });
 
-test("detecta varios turnos o un turno para un tercero de forma acotada", () => {
+test("varios turnos en un mismo pedido siguen yendo a una persona", () => {
   for (const multipleRequest of [
     "Necesito dos turnos",
     "Quiero turnos para 2 personas",
     "Un turno para mí y otro para mi hija",
     "También necesito uno para mi marido",
-    "Necesito un turno para mi hijo",
-    "Mi hija necesita un turno",
-    "Quiero un turno para un acompañante",
+    "Necesito turno para mis hijos",
+    "Mi hija necesita otro turno",
   ]) {
     assert.equal(
       requestsMultipleAppointments(multipleRequest),
       true,
       multipleRequest,
     );
+    assert.equal(
+      requestsThirdPartyAppointment(multipleRequest),
+      false,
+      multipleRequest,
+    );
   }
   for (const singleRequest of [
     "Necesito un turno para mí",
+    "Necesito un turno para mi hijo",
+    "Mi hija necesita un turno",
     "Mi turno es el dos",
     "Quiero reprogramar mi segundo turno",
     "Voy con mi hija a mi turno",
@@ -199,6 +209,62 @@ test("detecta varios turnos o un turno para un tercero de forma acotada", () => 
       singleRequest,
     );
   }
+});
+
+test("distingue un turno propio de uno para otra persona, y si no está claro pregunta", () => {
+  const cases: Array<[string, "self" | "third_party" | null]> = [
+    ["Hola! Quería pedir un turno para mi hijo", "third_party"],
+    ["Mi hija necesita un turno", "third_party"],
+    ["Quiero un turno para un acompañante", "third_party"],
+    ["¿Puedo sacar turno para mi mamá?", "third_party"],
+    ["Necesito un turno para mí", "self"],
+    ["Quiero un turno para mí por IOMA", "self"],
+    ["Es para mí", "self"],
+    ["Quiero un turno", null],
+    ["Necesito turno para una limpieza", null],
+    ["Quiero un turno para mi ahijado", null],
+    ["Voy con mi hija a mi turno", null],
+    ["Necesito dos turnos", null],
+  ];
+  for (const [message, expected] of cases) {
+    assert.equal(appointmentPatientFromText(message), expected, message);
+  }
+});
+
+test("interpreta la respuesta sobre para quién es el turno", () => {
+  assert.equal(parseAppointmentPatientChoice("patient:self"), "self");
+  assert.equal(parseAppointmentPatientChoice("patient:other"), "third_party");
+  assert.equal(parseAppointmentPatientChoice("patient:dep:sin-uuid"), null);
+  for (const reply of ["Para mí", "Es para mi", "yo", "Soy yo"]) {
+    assert.equal(parseAppointmentPatientChoice(reply), "self", reply);
+  }
+  for (const reply of [
+    "Otra persona",
+    "Para otra persona",
+    "para mi hijo",
+    "Es para mi mamá",
+    "mi hija",
+  ]) {
+    assert.equal(parseAppointmentPatientChoice(reply), "third_party", reply);
+  }
+  for (const reply of ["No sé", "Mañana", "IOMA"]) {
+    assert.equal(parseAppointmentPatientChoice(reply), null, reply);
+  }
+});
+
+test("el alta de otra persona pide los mismos datos, pero sobre ella", () => {
+  assert.deepEqual(
+    Object.keys(DEPENDENT_PROFILE_PROMPTS).sort(),
+    Object.keys(PATIENT_PROFILE_PROMPTS).sort(),
+  );
+  assert.match(DEPENDENT_PROFILE_PROMPTS.name, /persona que se va a atender/);
+  assert.match(DEPENDENT_PROFILE_PROMPTS.contact_phone, /este WhatsApp/);
+  assert.match(DEPENDENT_PROFILE_PROMPTS.coverage, /esa persona/);
+  // Las respuestas sobre un tercero se dan en tercera persona.
+  assert.equal(parseExistingPatientReply("Sí, ya se atendió"), true);
+  assert.equal(parseExistingPatientReply("Ya es paciente"), true);
+  assert.equal(parseExistingPatientReply("Nunca se atendió"), false);
+  assert.equal(parseExistingPatientReply("Es la primera vez"), false);
 });
 
 test("deriva a recepción después de dos respuestas inválidas consecutivas", () => {

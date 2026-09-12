@@ -3,6 +3,14 @@ import {
   verifyAppointmentCalendar,
   type CalendarProjectionState,
 } from "./calendar-projection.ts";
+import { BUSINESS_CONFIG } from "../config/business.ts";
+
+function formatPart(date: Date, options: Intl.DateTimeFormatOptions): string {
+  return new Intl.DateTimeFormat("es-AR", {
+    ...options,
+    timeZone: BUSINESS_CONFIG.timezone,
+  }).format(date);
+}
 
 export interface CreatedAppointmentResult {
   id: string;
@@ -104,11 +112,38 @@ export async function requestDepositAndNotify(
     }
     if (!conversationId) return { required: true, notified: false };
 
+    // El pedido nombra el día y la hora que se están reservando, así que se
+    // leen del turno recién creado.
+    const { data: appointment } = await client
+      .from("appointments")
+      .select("starts_at")
+      .eq("id", input.appointmentId)
+      .maybeSingle();
+    const startsAt = String(appointment?.starts_at ?? "");
+    const scheduled = startsAt ? new Date(startsAt) : null;
     const body = renderRequest(template, {
       deposit_amount: formatDepositAmountArs(amount),
       deposit_alias: alias,
       deposit_holder: holder,
+      ...(scheduled && Number.isFinite(scheduled.getTime())
+        ? {
+            date: formatPart(scheduled, {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            }),
+            time: formatPart(scheduled, {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            }),
+          }
+        : {}),
     });
+    // Una llave sin resolver viajaría literal al paciente: mejor no mandarlo.
+    if (!body || body.length > 4096 || /\{[a-z][a-z0-9_]*\}/.test(body)) {
+      return { required: true, notified: false };
+    }
     const { data, error } = await client.functions.invoke("whatsapp-send", {
       body: {
         conversationId,

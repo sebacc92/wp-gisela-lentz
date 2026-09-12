@@ -67,7 +67,7 @@ export async function runGlobalSearch(
       ? client
           .from("appointments")
           .select(
-            "id,starts_at,status,contacts!appointments_contact_id_fkey(name)",
+            "id,starts_at,status,contacts!appointments_contact_id_fkey(name),patient:contacts!appointments_patient_contact_id_fkey(name)",
           )
           .filter("contacts.name", "imatch", namePattern)
           .not("contacts", "is", null)
@@ -138,14 +138,17 @@ export async function runGlobalSearch(
         starts_at: string;
         status: string;
         contacts: { name: string } | Array<{ name: string }> | null;
+        patient?: { name: string } | Array<{ name: string }> | null;
       };
       const contact = relation(row.contacts);
       if (!contact) continue;
+      const patient = relation(row.patient);
       const date = new Date(row.starts_at);
       mapped.push({
         kind: "appointment",
         id: row.id,
-        title: contact.name,
+        // El turno se busca y se muestra por quien se atiende.
+        title: patient?.name ?? contact.name,
         subtitle: formatBusinessDate(date, {
           dateStyle: "medium",
           timeStyle: "short",

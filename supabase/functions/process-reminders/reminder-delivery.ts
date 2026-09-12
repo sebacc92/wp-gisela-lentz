@@ -75,12 +75,25 @@ export function classifyReminderWhatsAppFailure(
   };
 }
 
+/**
+ * El recordatorio siempre llega al WhatsApp que gestiona el turno. Si el turno
+ * es de otra persona, el saludo aclara de quién es.
+ */
+export function reminderGreetingName(
+  contactName: string,
+  patientName?: string | null,
+): string {
+  const patient = patientName?.trim();
+  return patient ? `${contactName} (turno de ${patient})` : contactName;
+}
+
 export async function deliverAppointmentReminder(input: {
   client: SupabaseClient;
   reminder: { id: string; type: ReminderType };
   appointment: { id: string; starts_at: string };
   conversation: WhatsAppConversation;
   contact: WhatsAppContact;
+  patientName?: string | null;
   template: {
     key: string;
     meta_name: string;
@@ -91,7 +104,7 @@ export async function deliverAppointmentReminder(input: {
   fetchImpl?: typeof fetch;
 }): Promise<RecordedMessage> {
   const params = [
-    input.contact.name,
+    reminderGreetingName(input.contact.name, input.patientName),
     formatAppointmentDate(input.appointment.starts_at, input.businessTimezone),
     formatAppointmentTime(input.appointment.starts_at, input.businessTimezone),
   ];

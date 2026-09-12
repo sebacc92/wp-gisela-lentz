@@ -4,6 +4,7 @@ import {
   type CalendarProjectionState,
 } from "./calendar-projection.ts";
 import { BUSINESS_CONFIG } from "../config/business.ts";
+import { appendArrivalNotice } from "./arrival-notice.ts";
 
 function formatPart(startsAt: string, options: Intl.DateTimeFormatOptions) {
   return new Intl.DateTimeFormat("es-AR", {
@@ -16,17 +17,52 @@ export function renderDepositConfirmationMessage(
   template: string,
   date: string,
   time: string,
+  address = "",
 ): string {
   const fallback = `¡Listo! Tu turno quedó confirmado para el ${date} a las ${time}.`;
   const rendered = template
     .replaceAll("{date}", date)
     .replaceAll("{time}", time)
+    .replaceAll("{address}", address)
     .trim();
   return rendered &&
     rendered.length <= 4096 &&
     !/\{[A-Za-z][A-Za-z0-9_]*\}/.test(rendered)
     ? rendered
     : fallback;
+}
+
+/**
+ * Cuerpo completo del aviso de seña confirmada: la plantilla configurada con
+ * fecha, hora y dirección, más el aviso de la puerta si el turno cae en la
+ * franja sin atención administrativa. Lo comparten la bandeja y la cola de
+ * revisión para que las dos manden exactamente el mismo mensaje.
+ */
+export function depositConfirmationBody(input: {
+  template: string;
+  startsAt: string;
+  address?: string;
+}): string {
+  const date = formatPart(input.startsAt, {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+  const time = formatPart(input.startsAt, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  return appendArrivalNotice(
+    renderDepositConfirmationMessage(
+      input.template,
+      date,
+      time,
+      input.address ?? "",
+    ),
+    input.startsAt,
+    BUSINESS_CONFIG.timezone,
+  );
 }
 
 export async function confirmDepositAndNotify(
@@ -70,23 +106,16 @@ export async function confirmDepositAndNotify(
 
     const { data: settings } = await client
       .from("app_settings")
-      .select("deposit_confirmed_message_template")
+      .select("deposit_confirmed_message_template,business_address")
       .eq("id", true)
       .single();
-    const template = String(
-      settings?.deposit_confirmed_message_template ?? "",
-    ).trim();
-    const date = formatPart(input.startsAt, {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
+    const body = depositConfirmationBody({
+      template: String(
+        settings?.deposit_confirmed_message_template ?? "",
+      ).trim(),
+      startsAt: input.startsAt,
+      address: String(settings?.business_address ?? "").trim(),
     });
-    const time = formatPart(input.startsAt, {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-    const body = renderDepositConfirmationMessage(template, date, time);
     const { data, error: sendError } = await client.functions.invoke(
       "whatsapp-send",
       {

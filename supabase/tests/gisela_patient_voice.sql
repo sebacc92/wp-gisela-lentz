@@ -242,7 +242,7 @@ select ok(
 
 select is(
   (select automation_welcome_message from public.app_settings where id = true),
-  '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.',
+  '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Odontóloga Gisela Lentz. Estoy para ayudarte con turnos y consultas.',
   'la bienvenida identifica al consultorio sin hacerse pasar por Gisela'
 );
 select is(
@@ -262,8 +262,10 @@ select is(
 );
 select ok(
   (select deposit_request_message_template from public.app_settings where id = true)
-    like '%Para confirmar tu turno necesitamos una seña de {deposit_amount}.%',
-  'el pedido de seña usa voz institucional'
+    like '%confirmar tu turno%'
+  and (select deposit_request_message_template from public.app_settings where id = true)
+    like '%{deposit_amount}%',
+  'el pedido de seña usa voz institucional y nombra el monto configurado'
 );
 select is(
   (select deposit_proof_received_message_template from public.app_settings where id = true),
@@ -272,7 +274,7 @@ select is(
 );
 select ok(
   (select deposit_confirmed_message_template from public.app_settings where id = true)
-    like '%Tu turno quedó confirmado.%',
+    like '%Tu turno quedó confirmado%',
   'la confirmación del turno es neutral'
 );
 select ok(

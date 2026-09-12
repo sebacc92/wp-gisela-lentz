@@ -57,6 +57,7 @@ interface AppointmentRow {
   deposit_expected_amount_ars?: number | null;
   contact_id: string;
   contacts: RelatedName | RelatedName[] | null;
+  patient?: RelatedName | RelatedName[] | null;
   services?: RelatedName | RelatedName[] | null;
 }
 
@@ -75,7 +76,7 @@ interface DashboardAppointment {
 }
 
 const baseAppointmentSelect =
-  "id,contact_id,starts_at,status,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,contacts!appointments_contact_id_fkey(name)";
+  "id,contact_id,starts_at,status,coverage,duration_minutes,deposit_status,hold_expires_at,deposit_proof_message_id,contacts!appointments_contact_id_fkey(name),patient:contacts!appointments_patient_contact_id_fkey(name)";
 
 function singleRelation<T>(value: T | T[] | null | undefined): T | null {
   if (!value) return null;
@@ -93,7 +94,10 @@ function mapAppointments(rows: AppointmentRow[]): DashboardAppointment[] {
       id: row.id,
       startsAt: row.starts_at,
       status: row.status,
-      patientName: singleRelation(row.contacts)?.name ?? "Paciente",
+      patientName:
+        singleRelation(row.patient)?.name ??
+        singleRelation(row.contacts)?.name ??
+        "Paciente",
       serviceName:
         singleRelation(row.services)?.name ?? "Sin servicio asignado",
       coverage: row.coverage,

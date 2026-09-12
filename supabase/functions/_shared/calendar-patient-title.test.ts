@@ -196,6 +196,57 @@ test("admite el teléfono alternativo pero no nombres parciales ni similitud dif
   );
 });
 
+test("lee la notación real de la agenda: cobertura abreviada y anotaciones de cobro", () => {
+  // Títulos tal cual están escritos en el calendario de Gisela.
+  const cases: Array<[string, { name: string; coverage: string | null }]> = [
+    [
+      "IRIART MARIA DEL MAR - PART - TF",
+      { name: "IRIART MARIA DEL MAR", coverage: "particular" },
+    ],
+    ["GAMBOA LEANDRO -TF-IOMA-", { name: "GAMBOA LEANDRO", coverage: "ioma" }],
+    [
+      "Tomas Benavidez Medina Tf Particular dio seña",
+      { name: "Tomas Benavidez Medina", coverage: "particular" },
+    ],
+    [
+      "maria de los angeles salmeron tf no cobrar",
+      { name: "maria de los angeles salmeron", coverage: null },
+    ],
+    [
+      "Estela francisco particular 40. Tf",
+      { name: "Estela francisco", coverage: "particular" },
+    ],
+  ];
+
+  for (const [summary, expected] of cases) {
+    const hints = parseCalendarPatientTitle(summary);
+    assert.equal(hints.name, expected.name, summary);
+    assert.equal(hints.coverage, expected.coverage, summary);
+    assert.equal(hints.isExistingPatient, true, summary);
+    assert.deepEqual(hints.uncertainties, [], summary);
+  }
+});
+
+test("un título completo de la agenda entra sin revisión y uno incompleto no", () => {
+  const complete = parseCalendarPatientTitle(
+    "Ibarra Rodríguez Bautista Tf 2291463877 Ioma",
+  );
+  assert.equal(complete.name, "Ibarra Rodríguez Bautista");
+  assert.equal(complete.phoneE164, "+5492291463877");
+  assert.equal(complete.coverage, "ioma");
+  assert.equal(complete.isExistingPatient, true);
+  assert.deepEqual(complete.uncertainties, []);
+
+  // El número de más dígitos no es un teléfono válido: queda para revisar.
+  const brokenPhone = parseCalendarPatientTitle(
+    "guajardo isidro -tf partic-22914571914",
+  );
+  assert.equal(brokenPhone.name, "guajardo isidro");
+  assert.equal(brokenPhone.coverage, "particular");
+  assert.equal(brokenPhone.phoneE164, null);
+  assert.ok(brokenPhone.uncertainties.length > 0);
+});
+
 test("datos contradictorios y anotaciones desconocidas requieren revisión", () => {
   for (const summary of [
     "Ana Pérez TF IOMA Particular",

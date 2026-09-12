@@ -235,6 +235,11 @@ export const ContactDrawer = component$<ContactDrawerProps>((props) => {
                     <Icon name="clock" size={15} /> {appointment.time} hs
                   </span>
                 </div>
+                {appointment.patientName && (
+                  <p class="appointment-proof-notice">
+                    Turno de {appointment.patientName}
+                  </p>
+                )}
                 <div class="appointment-doctor">
                   <span>
                     {appointment.service ?? "Consulta"} ·{" "}

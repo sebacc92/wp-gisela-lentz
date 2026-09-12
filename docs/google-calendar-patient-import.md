@@ -8,6 +8,16 @@ La sincronización reconoce títulos con nombre completo, `TF` (tiene ficha) o
 - `Perez Ana 1ra vez 2235550126 IOMA`: permite crear el paciente junto con el turno.
 - `Miércoles 9:30 a 12 hs` o `Evento sin título`: siguen siendo bloqueos, no pacientes.
 
+También se leen las abreviaturas que usa la agenda a mano: `PART` o `partic` por
+Particular, y las anotaciones de cobro —`dio seña`, `no cobrar`— o un número
+suelto de pocos dígitos, que se descartan del nombre en vez de ensuciarlo. El
+título completo queda igual en la nota interna del turno. Un número largo que no
+sea un teléfono válido sigue pidiendo revisión, porque puede ser uno cortado.
+
+En la pantalla de Turnos, los bloqueos que parecen un turno escrito a mano se
+listan primero y muestran el nombre reconocido, para no buscarlos entre los
+bloqueos reales. Convertirlos no modifica nada en Google.
+
 `TF` no identifica un tratamiento ni una visita de ortodoncia. Si no hay un
 servicio escrito, se utiliza únicamente una opción activa inequívoca de Consulta.
 Tratamientos ambiguos, nombres incompletos, homónimos, datos contradictorios,

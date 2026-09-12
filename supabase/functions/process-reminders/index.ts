@@ -251,7 +251,7 @@ Deno.serve(async (request) => {
       const { data: appointment, error: appointmentError } = await client
         .from("appointments")
         .select(
-          "id,contact_id,starts_at,status,contacts!appointments_contact_id_fkey(id,phone_e164,whatsapp_id,whatsapp_user_id,name,whatsapp_opt_in_at,whatsapp_opt_out_at,whatsapp_consent_status)",
+          "id,contact_id,starts_at,status,contacts!appointments_contact_id_fkey(id,phone_e164,whatsapp_id,whatsapp_user_id,name,whatsapp_opt_in_at,whatsapp_opt_out_at,whatsapp_consent_status),patient:contacts!appointments_patient_contact_id_fkey(name)",
         )
         .eq("id", reminder.appointment_id)
         .single();
@@ -343,10 +343,18 @@ Deno.serve(async (request) => {
       const conversation = Array.isArray(conversationResult)
         ? conversationResult[0]
         : conversationResult;
+      const patientRelation = appointment.patient as
+        | { name?: string }
+        | Array<{ name?: string }>
+        | null;
+      const patient = Array.isArray(patientRelation)
+        ? patientRelation[0]
+        : patientRelation;
       const message = await deliverAppointmentReminder({
         client,
         conversation: conversation as WhatsAppConversation,
         contact,
+        patientName: patient?.name ?? null,
         reminder,
         appointment: {
           id: appointment.id as string,

@@ -38,11 +38,13 @@ interface PatientRow {
   coverage: PatientCoverage | null;
   is_existing_patient: boolean | null;
   alternate_phone_e164: string | null;
+  responsible_contact_id: string | null;
 }
 
 interface AppointmentRow {
   id: string;
   contact_id: string;
+  patient_contact_id: string | null;
   starts_at: string;
   status: "scheduled" | "confirmed" | "cancelled" | "completed" | "no_show";
   deposit_status: DepositStatus;
@@ -94,7 +96,12 @@ function depositLabel(appointment: AppointmentRow): string {
 }
 
 function whatsappIdentityLabel(patient: PatientRow): string {
-  return patient.phone_e164 ?? "Identidad privada de WhatsApp";
+  if (patient.phone_e164) return patient.phone_e164;
+  // Una ficha a cargo de otro contacto no necesita WhatsApp propio.
+  if (!patient.whatsapp_user_id && patient.responsible_contact_id) {
+    return "Sin WhatsApp propio";
+  }
+  return "Identidad privada de WhatsApp";
 }
 
 export default component$(() => {
@@ -139,7 +146,7 @@ export default component$(() => {
           client
             .from("contacts")
             .select(
-              "id,name,phone_e164,whatsapp_user_id,email,administrative_notes,created_at,coverage,is_existing_patient,alternate_phone_e164",
+              "id,name,phone_e164,whatsapp_user_id,email,administrative_notes,created_at,coverage,is_existing_patient,alternate_phone_e164,responsible_contact_id",
             )
             // Una ficha fusionada sigue existiendo para que las referencias
             // históricas resuelvan, pero no se ofrece: su paciente es la principal.
@@ -148,7 +155,7 @@ export default component$(() => {
           client
             .from("appointments")
             .select(
-              "id,contact_id,starts_at,status,deposit_status,hold_expires_at,services!appointments_service_id_fkey(name)",
+              "id,contact_id,patient_contact_id,starts_at,status,deposit_status,hold_expires_at,services!appointments_service_id_fkey(name)",
             )
             .order("starts_at"),
           client.from("conversations").select("id,contact_id,status"),
@@ -164,8 +171,12 @@ export default component$(() => {
         []) as ConversationRow[];
       state.patients = ((contactsResult.data ?? []) as PatientRow[]).map(
         (patient) => {
+          // El turno figura en la ficha de quien se atiende, no en la de quien
+          // lo gestiona por WhatsApp.
           const patientAppointments = appointments.filter(
-            (appointment) => appointment.contact_id === patient.id,
+            (appointment) =>
+              (appointment.patient_contact_id ?? appointment.contact_id) ===
+              patient.id,
           );
           const past = patientAppointments.filter(
             (appointment) => new Date(appointment.starts_at).getTime() < now,
@@ -185,7 +196,10 @@ export default component$(() => {
             );
           });
           const conversation = conversations.find(
-            (item) => item.contact_id === patient.id && item.status === "open",
+            (item) =>
+              item.contact_id ===
+                (patient.responsible_contact_id ?? patient.id) &&
+              item.status === "open",
           );
           return {
             ...patient,
@@ -446,6 +460,33 @@ export default component$(() => {
                     <dt>WhatsApp</dt>
                     <dd>{whatsappIdentityLabel(selected)}</dd>
                   </div>
+                  {selected.responsible_contact_id && (
+                    <div>
+                      <dt>A cargo de</dt>
+                      <dd>
+                        {state.patients.find(
+                          (patient) =>
+                            patient.id === selected.responsible_contact_id,
+                        )?.name ?? "Otro contacto de WhatsApp"}
+                      </dd>
+                    </div>
+                  )}
+                  {state.patients.some(
+                    (patient) => patient.responsible_contact_id === selected.id,
+                  ) && (
+                    <div>
+                      <dt>Personas a cargo</dt>
+                      <dd>
+                        {state.patients
+                          .filter(
+                            (patient) =>
+                              patient.responsible_contact_id === selected.id,
+                          )
+                          .map((patient) => patient.name)
+                          .join(", ")}
+                      </dd>
+                    </div>
+                  )}
                   <div>
                     <dt>Otro teléfono</dt>
                     <dd>{selected.alternate_phone_e164 || "No informado"}</dd>

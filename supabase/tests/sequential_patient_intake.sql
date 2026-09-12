@@ -8,7 +8,7 @@ select plan(2);
 
 select is(
   (select automation_welcome_message from public.app_settings where id = true),
-  '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Dra. Gisela Lentz. Estoy para ayudarte con turnos y consultas.',
+  '👋 ¡Hola! Gracias por comunicarte con el consultorio de la Odontóloga Gisela Lentz. Estoy para ayudarte con turnos y consultas.',
   'the configured welcome identifies the consultorio assistant'
 );
 

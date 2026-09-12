@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.112.2";
 
-import { updateClaimedReminder } from "./reminder-delivery.ts";
+import {
+  reminderGreetingName,
+  updateClaimedReminder,
+} from "./reminder-delivery.ts";
 
 const REMINDER_ID = "66666666-6666-4666-8666-666666666666";
 const CLAIMED_AT = "2026-08-26T18:00:00.000Z";
@@ -59,6 +62,15 @@ test("finaliza sólo el reminder y la generación de claim exactos", async () =>
     ["status", "processing"],
     ["processing_started_at", CLAIMED_AT],
   ]);
+});
+
+test("el recordatorio de un turno para otra persona aclara de quién es", () => {
+  assert.equal(reminderGreetingName("Paula Dozo"), "Paula Dozo");
+  assert.equal(reminderGreetingName("Paula Dozo", "  "), "Paula Dozo");
+  assert.equal(
+    reminderGreetingName("Paula Dozo", "Juan Dozo"),
+    "Paula Dozo (turno de Juan Dozo)",
+  );
 });
 
 test("un worker stale no reabre un reminder cancelado por offboarding", async () => {

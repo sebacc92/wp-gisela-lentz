@@ -54,6 +54,7 @@ import {
   reviewDepositProof,
   type DepositReviewDecision,
 } from "~/lib/deposit-review";
+import { parseCalendarPatientTitle } from "~/lib/calendar-patient-title";
 import { getSupabaseClient } from "~/lib/supabase/client";
 import {
   calendarBookingError,
@@ -665,6 +666,21 @@ export default component$(() => {
   const convertingBlock = state.blocks.find(
     (block) => block.googleEventId === convertingBlockId.value,
   );
+  // Los eventos que Gisela escribe a mano en Google llegan como bloqueos. Los
+  // que parecen un paciente van primero: son los que falta pasar a la agenda.
+  const blocksByPriority = state.blocks
+    .map((block) => ({
+      block,
+      hints: parseCalendarPatientTitle(block.summary),
+    }))
+    .sort(
+      (first, second) =>
+        Number(second.hints.isPatientCandidate) -
+        Number(first.hints.isPatientCandidate),
+    );
+  const importableBlockCount = blocksByPriority.filter(
+    ({ hints }) => hints.isPatientCandidate,
+  ).length;
   const detailBusy =
     Boolean(savingStatus.value) ||
     confirmingDeposit.value ||
@@ -1472,6 +1488,7 @@ export default component$(() => {
               <details
                 class="agenda-blocks"
                 aria-label="Bloqueos de Google Calendar"
+                open={importableBlockCount > 0}
               >
                 <summary>
                   <h2>
@@ -1479,10 +1496,19 @@ export default component$(() => {
                     {state.blocks.length === 1
                       ? "horario ocupado"
                       : "horarios ocupados"}
+                    {importableBlockCount > 0 && (
+                      <>
+                        {" · "}
+                        {importableBlockCount}{" "}
+                        {importableBlockCount === 1
+                          ? "parece un turno"
+                          : "parecen turnos"}
+                      </>
+                    )}
                   </h2>
                 </summary>
                 <ul>
-                  {state.blocks.map((block) => (
+                  {blocksByPriority.map(({ block, hints }) => (
                     <li key={block.googleEventId}>
                       <strong>
                         {futureDepositMode.value && (
@@ -1509,6 +1535,11 @@ export default component$(() => {
                         )}
                       </strong>
                       <span>{block.summary || "Evento sin título"}</span>
+                      {hints.isPatientCandidate && (
+                        <em class="agenda-block-patient">
+                          Parece el turno de {hints.name ?? "un paciente"}
+                        </em>
+                      )}
                       {state.isAdmin && (
                         <button
                           class="secondary-button agenda-block-action"
@@ -1525,7 +1556,8 @@ export default component$(() => {
                 </ul>
                 <small>
                   Vienen de un evento creado a mano en Google Calendar. Ocupan
-                  el horario, pero no son turnos de pacientes.
+                  el horario, pero no son turnos de pacientes hasta que se
+                  convierten. Convertirlos no modifica nada en Google.
                 </small>
               </details>
             )}
@@ -1725,8 +1757,18 @@ export default component$(() => {
                     <dt>Nombre</dt>
                     <dd>{selectedAppointment.contactName}</dd>
                   </div>
+                  {selectedAppointment.managedByName && (
+                    <div>
+                      <dt>Turno gestionado por</dt>
+                      <dd>{selectedAppointment.managedByName}</dd>
+                    </div>
+                  )}
                   <div>
-                    <dt>Teléfono</dt>
+                    <dt>
+                      {selectedAppointment.managedByName
+                        ? "Teléfono de contacto"
+                        : "Teléfono"}
+                    </dt>
                     <dd>{selectedAppointment.contactPhone || "—"}</dd>
                   </div>
                 </dl>
