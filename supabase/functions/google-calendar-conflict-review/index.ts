@@ -285,16 +285,23 @@ export function titleReviewBlockReason(
   }
   const baseline = parseCalendarPatientTitle(identityTitle(source.summary));
   const remote = parseCalendarPatientTitle(identityTitle(title));
+  // The importer reads the name from the text before the first known marker, so
+  // a trailing work note never reaches it. Accepting a title is stricter: every
+  // word has to be either a recognized marker or the patient's name. Whatever is
+  // left over is an annotation we did not understand, and a deposit note that
+  // this review does not strip verbatim is exactly that.
+  const identifiesContact = (hints: typeof remote): boolean =>
+    Boolean(hints.name) &&
+    calendarPatientNameKey(hints.name) ===
+      calendarPatientNameKey(contact.name) &&
+    calendarPatientNameKey(hints.rawName) ===
+      calendarPatientNameKey(contact.name);
   if (
     !remote.isPatientCandidate ||
-    !remote.name ||
     remote.uncertainties.length ||
-    !baseline.name ||
     baseline.uncertainties.length ||
-    calendarPatientNameKey(remote.name) !==
-      calendarPatientNameKey(contact.name) ||
-    calendarPatientNameKey(baseline.name) !==
-      calendarPatientNameKey(contact.name)
+    !identifiesContact(remote) ||
+    !identifiesContact(baseline)
   ) {
     return "El texto no identifica con seguridad al mismo paciente. No vamos a cambiar el paciente ni descartar esta diferencia automáticamente.";
   }
