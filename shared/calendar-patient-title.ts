@@ -119,12 +119,43 @@ function titlePhoneE164(value: string): string | null {
  * Hints only: unknown or conflicting notation is retained as a review warning.
  * TF means "tiene ficha"; neither TF nor 1ra vez implies a dental service.
  */
+/**
+ * En la agenda el nombre va primero y después los datos: `Nombre Apellido TF
+ * Particular dio seña de 10 restan 30 (tel lili)`. Todo lo que sigue al primer
+ * dato reconocido es una nota de trabajo, no parte del nombre.
+ */
+const TITLE_MARKERS: readonly RegExp[] = [
+  /(?<![\p{L}\p{N}])(?:\+|00)?\d[\d ()\t.-]{7,}\d(?![\p{L}\p{N}])/u,
+  /\b(?:ioma|partic(?:ular)?|part)\b/i,
+  /\b(?:tf|tiene ficha|paciente existente)\b|\bt\.\s*f(?:\.|\b)/i,
+  /\b(?:1(?:ra|era)\s+vez|primera\s+vez|paciente\s+nuevo|nuevo\s+paciente)\b/i,
+  /\ben\s+tratamiento(?:\s+con\s+gisela)?\b/i,
+  /\b(?:consulta|extracci[oó]n|extracciones|limpieza|ortodoncia|ortopedia|restauraci[oó]n|restauraciones|arreglos|blanqueamiento)\b/i,
+  /\b(?:dio (?:la )?se[nñ]a|se[nñ][oó]|no cobrar|no cobra|sin cargo)\b/i,
+  /\b(?:pendiente de se[nñ]a|ficha sin confirmar|celular sin confirmar|cobertura sin confirmar)\b/i,
+  /\b(?:rx|tto|tc|cx|iv|endo|orto|control|urgencia|urgente|revisar|conducto|implante|implantes|pr[oó]tesis|corona)\b/i,
+  /[(]/,
+];
+
+function nameSourceFromTitle(summary: string): string | null {
+  let firstMarker: number | null = null;
+  for (const marker of TITLE_MARKERS) {
+    const match = marker.exec(summary);
+    if (!match) continue;
+    if (firstMarker === null || match.index < firstMarker) {
+      firstMarker = match.index;
+    }
+  }
+  return firstMarker === null ? null : summary.slice(0, firstMarker);
+}
+
 export function parseCalendarPatientTitle(
   summary: string | null | undefined,
 ): CalendarPatientTitleHints {
   const hints = emptyHints();
   if (!summary?.trim() || isNonPatientEvent(summary)) return hints;
   let remaining = summary.trim();
+  const nameSource = nameSourceFromTitle(remaining);
   const phones = new Set<string>();
   let invalidPhone = false;
   remaining = remaining.replace(
@@ -141,7 +172,9 @@ export function parseCalendarPatientTitle(
     hints.uncertainties.push(
       "El título contiene más de un teléfono; elegí cuál corresponde al paciente.",
     );
-  if (invalidPhone)
+  // Un número largo que no llegó a ser teléfono puede ser uno cortado: se
+  // avisa aunque haya quedado fuera del nombre.
+  if (invalidPhone || /(?<![\p{L}\p{N}])\d{5,}/u.test(remaining))
     hints.uncertainties.push(
       "Hay un número que no pudimos reconocer como teléfono completo.",
     );
@@ -261,7 +294,8 @@ export function parseCalendarPatientTitle(
   hints.rawName = remaining.trim() || null;
   // Un número corto suelto —un precio, una pieza— no forma parte del nombre.
   // Uno más largo puede ser un teléfono incompleto: queda y fuerza revisión.
-  const name = remaining
+  const name = (nameSource ?? remaining)
+    .replace(/\b(?:paciente|tel[eé]fono|celular|cel|tel)\b\s*:?/gi, " ")
     .replace(/(?<![\p{L}\p{N}])\d{1,4}(?![\p{L}\p{N}])/gu, " ")
     .replace(/[.,;:|·/()[\]{}]+/g, " ")
     .replace(/\s+[-–—]\s+/g, " ")

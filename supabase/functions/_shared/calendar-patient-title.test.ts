@@ -227,6 +227,30 @@ test("lee la notación real de la agenda: cobertura abreviada y anotaciones de c
   }
 });
 
+test("las notas de trabajo que siguen a los datos no entran en el nombre", () => {
+  const withNotes = parseCalendarPatientTitle(
+    "Tomas Benavidez Medina Tf Particular dio seña de 10 restan 30 ( tel lili amo)",
+  );
+  assert.equal(withNotes.name, "Tomas Benavidez Medina");
+  assert.equal(withNotes.coverage, "particular");
+  assert.equal(withNotes.isExistingPatient, true);
+  assert.deepEqual(withNotes.uncertainties, []);
+
+  const ortho = parseCalendarPatientTitle(
+    "Yanina favuto ortodoncia 35 armado inferior.",
+  );
+  assert.equal(ortho.name, "Yanina favuto");
+  assert.equal(ortho.serviceHint, "ortodoncia");
+
+  // Un número de más de cuatro dígitos que no es teléfono sigue pidiendo
+  // revisión aunque haya quedado fuera del nombre.
+  const shortNumber = parseCalendarPatientTitle(
+    "Ana Pérez TF 12345678 particular",
+  );
+  assert.equal(shortNumber.name, "Ana Pérez");
+  assert.ok(shortNumber.uncertainties.length > 0);
+});
+
 test("un título completo de la agenda entra sin revisión y uno incompleto no", () => {
   const complete = parseCalendarPatientTitle(
     "Ibarra Rodríguez Bautista Tf 2291463877 Ioma",
