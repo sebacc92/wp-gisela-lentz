@@ -20,6 +20,8 @@ import {
   isRetryableGoogleStatus,
   listGoogleCalendarEvents,
   listOwnedGoogleCalendars,
+  managedGoogleCalendarAdoptableTitle,
+  managedGoogleCalendarEventFingerprintIsValid,
   refreshGoogleAccessToken,
   retryDelaySeconds,
   sha256Base64Url,
@@ -193,6 +195,96 @@ test("el título incluye ficha, celular y cobertura sin notas ni servicio", asyn
     pendingPayload.extendedProperties.private.projection_stage,
     "pre_reservation",
   );
+});
+
+test("el texto que escribió una persona en Google reemplaza al generado", async () => {
+  const payload = await googleCalendarEventPayload(
+    {
+      ...appointment,
+      google_calendar_summary_override: "Ana Pérez TF IOMA dio seña 10",
+    },
+    association,
+    true,
+  );
+  assert.equal(payload.summary, "Ana Pérez TF IOMA dio seña 10");
+  // La ficha no se toca: el texto es sólo el título del evento.
+  assert.equal(
+    payload.extendedProperties.private.appointment_id,
+    appointment.appointment_id,
+  );
+
+  for (const override of ["", "   ", "x".repeat(256), "dos\nrenglones"]) {
+    const ignored = await googleCalendarEventPayload(
+      { ...appointment, google_calendar_summary_override: override },
+      association,
+    );
+    assert.equal(ignored.summary, "Ana Pérez TF 2291550001 IOMA");
+  }
+});
+
+test("sólo se adopta el título cuando el título es lo único que cambió", async () => {
+  const payload = await googleCalendarEventPayload(
+    appointment,
+    association,
+    true,
+  );
+  const event = {
+    ...payload,
+    etag: '"1"',
+    updated: "2026-08-19T10:00:00.000Z",
+  };
+  assert.equal(await managedGoogleCalendarEventFingerprintIsValid(event), true);
+  // Un evento intacto no tiene nada para adoptar, pero se reconoce igual.
+  assert.equal(
+    managedGoogleCalendarAdoptableTitle(event),
+    "Ana Pérez TF 2291550001 IOMA",
+  );
+
+  const retitled = { ...event, summary: "Ana Pérez TF IOMA dio seña 10" };
+  assert.equal(
+    await managedGoogleCalendarEventFingerprintIsValid(retitled),
+    false,
+  );
+  assert.equal(
+    managedGoogleCalendarAdoptableTitle(retitled),
+    "Ana Pérez TF IOMA dio seña 10",
+  );
+
+  // Cualquier otra diferencia deja de ser una anotación: no se adopta y el
+  // conflicto queda para que lo mire una persona.
+  const tampered: Array<Record<string, unknown>> = [
+    { description: "Otra cosa" },
+    { visibility: "public" },
+    { status: "cancelled" },
+    { location: "Otra dirección" },
+    { colorId: "5" },
+    { attendees: [{ email: "alguien@example.com" }] },
+    { transparency: "transparent" },
+    { reminders: { useDefault: true } },
+    { summary: "" },
+    { summary: "x".repeat(256) },
+    {
+      extendedProperties: {
+        private: {
+          ...payload.extendedProperties.private,
+          projection_stage: "otra",
+        },
+      },
+    },
+    {
+      extendedProperties: {
+        private: payload.extendedProperties.private,
+        shared: { quien: "sea" },
+      },
+    },
+  ];
+  for (const change of tampered) {
+    assert.equal(
+      managedGoogleCalendarAdoptableTitle({ ...retitled, ...change }),
+      null,
+      JSON.stringify(change),
+    );
+  }
 });
 
 test("primera vez y Particular usan la condición y cobertura informadas", async () => {

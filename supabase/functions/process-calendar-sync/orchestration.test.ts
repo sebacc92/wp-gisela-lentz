@@ -829,6 +829,102 @@ Deno.test(
 );
 
 Deno.test(
+  "A: el texto que una persona escribe en Google se adopta sin escribirle nada",
+  async () => {
+    const managedPayload = await googleCalendarEventPayload(
+      {
+        appointment_id: APPOINTMENT_ID,
+        starts_at: APP_START,
+        ends_at: APP_END,
+        patient_name: "Paciente ficticio",
+        patient_phone: "+5492291550001",
+        is_existing_patient: true,
+        coverage: "ioma",
+        timezone: "America/Argentina/Buenos_Aires",
+      },
+      {
+        eventId: MANAGED_EVENT_ID,
+        automationEpoch: AUTOMATION_EPOCH,
+        projectionStage: "confirmed",
+        projectedStage: "confirmed",
+      },
+      true,
+    );
+    const anotada = "Paciente ficticio TF IOMA dio seña 10";
+
+    for (const remote of [
+      { summary: anotada, adopts: true },
+      // Cambió también la descripción: eso ya no es una anotación y sigue
+      // siendo una diferencia para que la mire una persona.
+      { summary: anotada, description: "Otra cosa", adopts: false },
+    ]) {
+      const { client, rpcCalls } = fakeSupabase(
+        baseHandlers({
+          adopt_google_calendar_managed_title: () => ({
+            data: true,
+            error: null,
+          }),
+          observe_google_calendar_managed_event: () => ({
+            data: remote.adopts ? "in_sync" : "conflict_recorded",
+            error: null,
+          }),
+          claim_google_calendar_sync_jobs: () => ({ data: [], error: null }),
+        }),
+      );
+      const { fetcher, calls } = fakeGoogle((call) =>
+        call.method === "GET" && call.url.includes("/events?")
+          ? eventsListResponse([
+              {
+                ...managedPayload,
+                ...(remote.description
+                  ? { description: remote.description }
+                  : {}),
+                summary: remote.summary,
+                etag: '"etag-remoto"',
+                updated: "2026-09-03T10:00:00.000Z",
+              },
+            ])
+          : null,
+      );
+
+      await handleCalendarSyncRequest(syncRequest(), {
+        createClient: () => client,
+        authorize: adminAuthorization(),
+        environment: (name) => ENVIRONMENT[name],
+        fetcher,
+      });
+
+      assert.equal(
+        calls.findIndex(
+          (call) => call.method !== "GET" && call.url.includes("/events"),
+        ),
+        -1,
+        "adoptar el texto no puede escribir en Google",
+      );
+      const adopt = rpcCalls.find(
+        (call) => call.name === "adopt_google_calendar_managed_title",
+      );
+      const observe = rpcCalls.find(
+        (call) => call.name === "observe_google_calendar_managed_event",
+      );
+      if (remote.adopts) {
+        assert.equal(adopt?.args.p_summary, anotada);
+        assert.equal(adopt?.args.p_appointment_id, APPOINTMENT_ID);
+        assert.equal(adopt?.args.p_automation_epoch, AUTOMATION_EPOCH);
+        assert.equal(adopt?.args.p_starts_at, APP_START);
+        assert.equal(adopt?.args.p_ends_at, APP_END);
+        assert.equal(adopt?.args.p_remote_projection_stage, "confirmed");
+        // Adoptado el texto, el evento remoto ya es la proyección deseada.
+        assert.equal(observe?.args.p_payload_fingerprint_valid, true);
+      } else {
+        assert.equal(adopt, undefined);
+        assert.equal(observe?.args.p_payload_fingerprint_valid, false);
+      }
+    }
+  },
+);
+
+Deno.test(
   "un turno manual agregado entre el pull y el push impide escribir en Google",
   async () => {
     const { client, rpcCalls } = fakeSupabase(

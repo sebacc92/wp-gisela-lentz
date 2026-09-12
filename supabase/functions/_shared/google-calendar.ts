@@ -58,6 +58,8 @@ export interface CalendarSyncAppointment {
   is_existing_patient: boolean | null;
   coverage: "ioma" | "particular" | null;
   timezone: string;
+  /** Texto que una persona escribió en el evento; reemplaza al generado. */
+  google_calendar_summary_override?: string | null;
 }
 
 export type GoogleCalendarProjectionStage = "pre_reservation" | "confirmed";
@@ -256,6 +258,12 @@ export function deterministicGoogleEventId(appointmentId: string): string {
   return `gl${hex}`;
 }
 
+const MANAGED_EVENT_DESCRIPTIONS = {
+  pre_reservation:
+    "Reserva pendiente administrada desde la agenda de Gisela Lentz.",
+  confirmed: "Turno confirmado administrado desde la agenda de Gisela Lentz.",
+} as const;
+
 function managedGoogleCalendarFingerprintSource(input: {
   eventId: string;
   summary: string;
@@ -384,6 +392,12 @@ export async function googleCalendarEventPayload(
         : "(cobertura sin confirmar)";
   const summary = [patientName, patientRecord, patientPhone, coverage];
   if (pending) summary.push("(pendiente de seña)");
+  // Si una persona ya reescribió el título en Google, ése es el texto del
+  // evento: la app no lo vuelve a generar ni se lo pisa.
+  const adoptedSummary = boundedGoogleString(
+    appointment.google_calendar_summary_override,
+    255,
+  );
 
   const privateProperties = {
     appointment_id: appointment.appointment_id.toLowerCase(),
@@ -393,10 +407,8 @@ export async function googleCalendarEventPayload(
   };
   const payloadWithoutFingerprint = {
     ...(includeId ? { id: eventId } : {}),
-    summary: summary.join(" "),
-    description: pending
-      ? "Reserva pendiente administrada desde la agenda de Gisela Lentz."
-      : "Turno confirmado administrado desde la agenda de Gisela Lentz.",
+    summary: adoptedSummary ?? summary.join(" "),
+    description: MANAGED_EVENT_DESCRIPTIONS[association.projectionStage],
     visibility: "private" as const,
     status: "confirmed" as const,
     reminders: { useDefault: false as const },
@@ -960,9 +972,12 @@ export async function upsertGoogleCalendarEvent(input: {
   };
 }
 
-export async function managedGoogleCalendarEventFingerprintIsValid(
+/** Todo lo que cubre la huella menos el texto: los marcadores que atan el
+ * evento a su turno y los campos que la app fija siempre igual. Un evento que
+ * pasa esta forma pero cuya huella no valida sólo puede diferir en el título. */
+function managedGoogleCalendarEventShapeIsIntact(
   event: GoogleCalendarEvent,
-): Promise<boolean> {
+): boolean {
   const privateProperties = event.extendedProperties?.private ?? {};
   const sharedProperties = event.extendedProperties?.shared ?? {};
   const privateKeys = Object.keys(privateProperties).sort();
@@ -983,7 +998,7 @@ export async function managedGoogleCalendarEventFingerprintIsValid(
     event.reminders.useDefault === false &&
     (event.reminders.overrides?.length ?? 0) === 0 &&
     reminderKeys.every((key) => key === "overrides" || key === "useDefault");
-  if (
+  return !(
     privateKeys.length !== expectedKeys.length ||
     !privateKeys.every((key, index) => key === expectedKeys[index]) ||
     !/^[0-9a-f]{64}$/.test(privateProperties.payload_fingerprint ?? "") ||
@@ -999,9 +1014,14 @@ export async function managedGoogleCalendarEventFingerprintIsValid(
     event.hangoutLink !== undefined ||
     (event.eventType !== undefined && event.eventType !== "default") ||
     !remindersAreDisabled
-  ) {
-    return false;
-  }
+  );
+}
+
+export async function managedGoogleCalendarEventFingerprintIsValid(
+  event: GoogleCalendarEvent,
+): Promise<boolean> {
+  if (!managedGoogleCalendarEventShapeIsIntact(event)) return false;
+  const privateProperties = event.extendedProperties?.private ?? {};
   const source = managedGoogleCalendarFingerprintSource({
     eventId: event.id ?? "",
     summary: event.summary ?? "",
@@ -1022,6 +1042,33 @@ export async function managedGoogleCalendarEventFingerprintIsValid(
     source !== null &&
     (await sha256Hex(source)) === privateProperties.payload_fingerprint
   );
+}
+
+/**
+ * El título de un evento gestionado lo escribe la app, pero la fuente de verdad
+ * del texto es Google: si Gisela lo edita a mano —para anotar una seña, por
+ * ejemplo— se adopta lo que ella escribió en vez de restaurarle el nuestro.
+ *
+ * Devuelve ese texto sólo cuando es lo único que pudo haber cambiado. Todo lo
+ * demás que cubre la huella se verifica campo por campo, así que una diferencia
+ * en la descripción, la visibilidad, el estado o los marcadores no se adopta:
+ * ésa sigue siendo una diferencia para que la mire una persona. El horario lo
+ * compara la base contra el turno antes de guardar nada.
+ */
+export function managedGoogleCalendarAdoptableTitle(
+  event: GoogleCalendarEvent,
+): string | null {
+  if (!managedGoogleCalendarEventShapeIsIntact(event)) return null;
+  const stage = event.extendedProperties?.private?.projection_stage ?? "";
+  if (stage !== "pre_reservation" && stage !== "confirmed") return null;
+  if (
+    event.description !== MANAGED_EVENT_DESCRIPTIONS[stage] ||
+    event.visibility !== "private" ||
+    event.status !== "confirmed"
+  ) {
+    return null;
+  }
+  return boundedGoogleString(event.summary, 255);
 }
 
 async function googleCalendarEventMatchesPayload(

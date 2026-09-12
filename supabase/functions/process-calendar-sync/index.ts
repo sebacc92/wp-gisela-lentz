@@ -7,9 +7,11 @@ import {
   deleteManagedGoogleCalendarEvent,
   deterministicGoogleEventId,
   getGoogleCalendarEvent,
+  type GoogleCalendarEvent,
   GoogleIntegrationError,
   googleOAuthConfiguration,
   listGoogleCalendarEvents,
+  managedGoogleCalendarAdoptableTitle,
   managedGoogleCalendarEventFingerprintIsValid,
   refreshGoogleAccessToken,
   safeGoogleErrorCode,
@@ -291,11 +293,12 @@ async function calendarAppointmentWithPatientDetails(
   const { data, error } = await client
     .from("appointments")
     .select(
-      "coverage,contact:contacts!appointments_contact_id_fkey(name,phone_e164,alternate_phone_e164,is_existing_patient),patient:contacts!appointments_patient_contact_id_fkey(name,alternate_phone_e164,is_existing_patient)",
+      "coverage,google_calendar_summary_override,contact:contacts!appointments_contact_id_fkey(name,phone_e164,alternate_phone_e164,is_existing_patient),patient:contacts!appointments_patient_contact_id_fkey(name,alternate_phone_e164,is_existing_patient)",
     )
     .eq("id", job.appointment_id)
     .maybeSingle<{
       coverage: CalendarSyncAppointment["coverage"];
+      google_calendar_summary_override: string | null;
       contact: {
         name: string;
         phone_e164: string | null;
@@ -324,6 +327,7 @@ async function calendarAppointmentWithPatientDetails(
       ? patient.is_existing_patient
       : data.contact.is_existing_patient,
     coverage: data.coverage,
+    google_calendar_summary_override: data.google_calendar_summary_override,
   };
 }
 
@@ -1423,6 +1427,41 @@ async function pullGoogleCalendar(input: {
   let nextSyncToken: string | null = null;
   let pages = 0;
 
+  /** Google es la fuente de verdad del texto del evento. Esto no escribe nada
+   * en Google: sólo guarda de este lado lo que la persona dejó escrito. */
+  const adoptManagedTitle = async (
+    managed: {
+      eventId: string;
+      appointmentId: string;
+      automationEpoch: string;
+      projectionStage: "pre_reservation" | "confirmed" | null;
+      startsAt: string | null;
+      endsAt: string | null;
+    },
+    event: GoogleCalendarEvent,
+  ): Promise<boolean> => {
+    const summary = managedGoogleCalendarAdoptableTitle(event);
+    if (!summary) return false;
+    const { data, error } = await client.rpc(
+      "adopt_google_calendar_managed_title",
+      {
+        p_expected_generation: generation,
+        p_lease_token: leaseToken,
+        p_appointment_id: managed.appointmentId,
+        p_google_event_id: managed.eventId,
+        p_automation_epoch: managed.automationEpoch,
+        p_summary: summary,
+        p_starts_at: managed.startsAt,
+        p_ends_at: managed.endsAt,
+        p_remote_projection_stage: managed.projectionStage,
+      },
+    );
+    if (error !== null) {
+      throw calendarWorkerFailure("CALENDAR_INBOUND_TITLE_ADOPT_FAILED");
+    }
+    return data === true;
+  };
+
   const observeManaged = async (managed: {
     eventId: string;
     appointmentId: string;
@@ -1619,10 +1658,18 @@ async function pullGoogleCalendar(input: {
       seenEventIds.add(classified.eventId);
 
       if (classified.kind === "managed") {
+        const payloadFingerprintValid =
+          await managedGoogleCalendarEventFingerprintIsValid(item);
+        // La huella no valida porque alguien reescribió el título en Google.
+        // Adoptado ese texto como propio, el evento remoto ya es la proyección
+        // que queremos: no hay diferencia que revisar ni nada que empujar.
+        const adoptedTitle =
+          payloadFingerprintValid || classified.cancelled
+            ? false
+            : await adoptManagedTitle(classified, item);
         const outcome = await observeManaged({
           ...classified,
-          payloadFingerprintValid:
-            await managedGoogleCalendarEventFingerprintIsValid(item),
+          payloadFingerprintValid: payloadFingerprintValid || adoptedTitle,
         });
         if (outcome === "ignored_unknown_appointment") {
           await applyExternal(

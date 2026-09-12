@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(38);
+select plan(45);
 
 -- ---------------------------------------------------------------------------
 -- Permisos
@@ -396,6 +396,98 @@ select is(
    where status in ('pending', 'processing')),
   0,
   'una observación en sincronía no encola trabajo saliente'
+);
+
+-- Alguien editó el texto del evento en Google: mismo horario, huella rota.
+select lives_ok(
+  $$
+    select public.observe_google_calendar_managed_event(
+      calendar_generation.generation, calendar_lease.lease_token,
+      'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
+      '95000000-0000-4000-8000-000000000004', false,
+      appointment.starts_at, appointment.ends_at, clock_timestamp(),
+      '"etag-managed-retitled"', automation.epoch, 'confirmed', false
+    )
+    from calendar_generation, calendar_lease, calendar_automation automation,
+      public.appointments appointment
+    where appointment.id = '95000000-0000-4000-8000-000000000004'
+  $$,
+  'editar sólo el texto en Google abre una diferencia de metadatos'
+);
+
+select is(
+  (
+    select public.adopt_google_calendar_managed_title(
+      calendar_generation.generation, calendar_lease.lease_token,
+      '95000000-0000-4000-8000-000000000004',
+      'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
+      automation.epoch, 'Paciente Prueba TF IOMA dio seña 10',
+      appointment.starts_at, appointment.ends_at, 'confirmed'
+    )
+    from calendar_generation, calendar_lease, calendar_automation automation,
+      public.appointments appointment
+    where appointment.id = '95000000-0000-4000-8000-000000000004'
+  ),
+  true,
+  'el texto que escribió una persona en Google se adopta'
+);
+
+select ok(
+  (select google_calendar_summary_override = 'Paciente Prueba TF IOMA dio seña 10'
+   from public.appointments
+   where id = '95000000-0000-4000-8000-000000000004'),
+  'el turno guarda ese texto y deja de regenerar el suyo'
+);
+
+select is(
+  (select count(*)::integer from public.google_calendar_sync_conflicts
+   where appointment_id = '95000000-0000-4000-8000-000000000004'
+     and status = 'pending'),
+  0,
+  'adoptar el texto resuelve la diferencia sin restaurar nada en Google'
+);
+
+-- Si además cambió el horario, ya no es una anotación: no se adopta nada.
+select is(
+  (
+    select public.adopt_google_calendar_managed_title(
+      calendar_generation.generation, calendar_lease.lease_token,
+      '95000000-0000-4000-8000-000000000004',
+      'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
+      automation.epoch, 'Otro Texto TF IOMA',
+      appointment.starts_at + interval '2 hours',
+      appointment.ends_at + interval '2 hours', 'confirmed'
+    )
+    from calendar_generation, calendar_lease, calendar_automation automation,
+      public.appointments appointment
+    where appointment.id = '95000000-0000-4000-8000-000000000004'
+  ),
+  false,
+  'un evento movido no se resuelve adoptando su texto'
+);
+
+select ok(
+  (select google_calendar_summary_override = 'Paciente Prueba TF IOMA dio seña 10'
+   from public.appointments
+   where id = '95000000-0000-4000-8000-000000000004'),
+  'el texto anterior queda intacto cuando la adopción no corresponde'
+);
+
+select throws_ok(
+  $$
+    select public.adopt_google_calendar_managed_title(
+      calendar_generation.generation, gen_random_uuid(),
+      '95000000-0000-4000-8000-000000000004',
+      'gl' || replace('95000000-0000-4000-8000-000000000004', '-', ''),
+      automation.epoch, 'Texto Sin Lease TF IOMA',
+      appointment.starts_at, appointment.ends_at, 'confirmed'
+    )
+    from calendar_generation, calendar_automation automation,
+      public.appointments appointment
+    where appointment.id = '95000000-0000-4000-8000-000000000004'
+  $$,
+  '42501', 'GOOGLE_CALENDAR_INBOUND_LEASE_LOST',
+  'sólo el pull que observó el evento puede adoptar su texto'
 );
 
 select is(

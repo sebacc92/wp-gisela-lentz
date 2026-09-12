@@ -44,6 +44,15 @@ pendientes de revisión en lugar de sobreescribir silenciosamente un turno.
 - cambiar el formato del título no requiere migrar nada: el reconciliador
   vuelve a encolar cada turno futuro ya proyectado hace más de una hora, y el
   worker actualiza ese mismo evento con el título nuevo;
+- **el texto lo manda Google**: si una persona reescribe el título del evento
+  —para anotar una seña, por ejemplo— el pull siguiente lo adopta como el
+  título de ese turno y la aplicación deja de regenerarlo. Se adopta sólo
+  cuando el texto es lo único que cambió: si también cambió el horario, la
+  descripción, la visibilidad o los marcadores, queda como una diferencia
+  pendiente de revisión. Adoptar no escribe nada en Google y **no cambia la
+  ficha del paciente**: un evento puede reutilizarse para otra persona, y
+  renombrar a una paciente desde el texto de un evento haría que el bot le
+  escriba a la equivocada;
 - cancelación desde la aplicación: elimina el evento administrado; el turno se
   conserva como historial y no se borra físicamente;
 - cada turno conserva un ID determinista, así los reintentos no duplican
